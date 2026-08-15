@@ -181,6 +181,7 @@ function App() {
   async function handleLogin(userId) {
     const session = await api.login(userId);
     setActor(session.actor);
+    setActiveView('conversation');
     setRequestError('');
     await loadRoleSessions();
   }
@@ -195,6 +196,7 @@ function App() {
     setMessages([]);
     setClarificationPolicy(null);
     setProfileMenuOpen(false);
+    setActiveView('conversation');
   }
 
   function chooseRole(roleId) {
@@ -476,7 +478,7 @@ function App() {
 
         {requestError && <div className="workspace-error"><AlertTriangle size={14} />{requestError}<button onClick={() => setRequestError('')}><X size={13} /></button></div>}
 
-        {activeView === 'admin-trace' ? (
+        {activeView === 'admin-trace' && actor.role === 'ADMIN' ? (
           <AdminTraceConsole />
         ) : activeView === 'conversation' ? (
           <ConversationView
