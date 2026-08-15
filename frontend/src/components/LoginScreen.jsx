@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ShieldCheck, Users } from 'lucide-react';
+import { Activity, ShieldCheck, Users } from 'lucide-react';
 
 export default function LoginScreen({ onLogin }) {
   const [pending, setPending] = useState(null);
@@ -22,7 +22,7 @@ export default function LoginScreen({ onLogin }) {
         <div className="login-mark"><ShieldCheck size={24} /></div>
         <span className="login-kicker">ROLE CLARIFIER MVP</span>
         <h1>岗位画像澄清 Agent</h1>
-        <p>测试环境使用两个真实后端账号。权限由 HttpOnly Session 决定，前端不能自行切换角色。</p>
+        <p>测试环境使用三个真实后端账号。权限由 HttpOnly Session 决定，前端不能自行切换角色。</p>
         <div className="login-options">
           <button disabled={Boolean(pending)} onClick={() => login('manager-demo')}>
             <span><Users size={18} /></span>
@@ -33,6 +33,11 @@ export default function LoginScreen({ onLogin }) {
             <span><ShieldCheck size={18} /></span>
             <div><strong>HR · 林夏</strong><small>内部招聘画像、候选人证据与校准审核</small></div>
             <em>{pending === 'hr-demo' ? '登录中…' : '进入工作台'}</em>
+          </button>
+          <button disabled={Boolean(pending)} onClick={() => login('admin-demo')}>
+            <span><Activity size={18} /></span>
+            <div><strong>企业管理员 · 周宁</strong><small>最高权限、全岗位访问与脱敏 Trace 控制台</small></div>
+            <em>{pending === 'admin-demo' ? '登录中…' : '进入控制台'}</em>
           </button>
         </div>
         {error && <div className="login-error">{error}</div>}

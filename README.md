@@ -4,7 +4,9 @@
 
 ## 当前可以跑通
 
-- 用人经理和 HR 使用两个后端测试账号登录；权限来自签名 HttpOnly Cookie。
+- 用人经理、HR 和企业管理员使用三个后端测试账号登录；权限来自签名 HttpOnly Cookie。
+- 三种角色都能以真实身份和 Agent 对话，消息、回复与主动澄清轮次持久化保存；普通对话不限轮数。
+- 企业管理员拥有租户级最高权限，并可在脱敏 Trace 控制台查看全岗位运行、模型路由、工具调用和审计记录。
 - 创建岗位会话、同步 Mock HC/组织背景、多轮澄清并实时接收 SSE。
 - 生成、版本化和确认岗位画像、评分卡、四段式公开 JD、HR 内部招聘画像。
 - 导入 JSON/纯文本脱敏候选人；手机号、邮箱和显式姓名在进入模型前被拒绝。
@@ -25,6 +27,7 @@
 
 - manager-demo：用人经理
 - hr-demo：HR 招聘负责人
+- admin-demo：企业管理员
 
 在 `.env` 中填写 `DEEPSEEK_API_KEY` 后，`pnpm dev` 会同时启动 Web、API 和真实 Harness Sidecar。若暂时不配置 `DATABASE_URL`，API 会使用包含固定演示岗位的内存 Store。若只想运行不产生模型费用的确定性模式，可执行 `corepack pnpm dev:mock`。
 
@@ -91,5 +94,7 @@ Flash/Pro 分别映射到官方 `deepseek-v4-flash` 和 `deepseek-v4-pro`。Side
 
 - 外部请求里的 actor_role、actor_user_id 和 tenant_id 永远不参与授权。
 - 经理读取 HR 内部画像、候选人证据和信号时返回无该字段的对象，不能通过 URL 越权。
+- Agent 主动澄清默认 6 轮、每次由人类增加 2 轮；最多 10 次状态转换只是单次 Run 的内部安全阈值，不限制日常对话。
+- Trace API 仅企业管理员可访问，用户原文、候选人内容和隐藏推理不会进入 Trace 展示。
 - 模型只能写草稿或提出信号，不能确认、发布、审核或替人类作校准决定。
 - 首期没有真实 ATS、SSO、外部发布、PDF/DOCX 解析；发布最多进入 READY_TO_PUBLISH。

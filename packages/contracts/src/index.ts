@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-export const ActorRoleSchema = z.enum(['MANAGER', 'HR'])
+export const ActorRoleSchema = z.enum(['MANAGER', 'HR', 'ADMIN'])
 export type ActorRole = z.infer<typeof ActorRoleSchema>
 
 export const ActorContextSchema = z.object({
@@ -169,16 +169,23 @@ export const AgentRunSchema = z.object({
   started_at: z.string().datetime().nullable(),
   completed_at: z.string().datetime().nullable(),
   error_code: z.string().nullable(),
+  input_message_id: z.string().nullable().default(null),
+  output_message_id: z.string().nullable().default(null),
 })
 export type AgentRun = z.infer<typeof AgentRunSchema>
 
 export const AgentEventTypeSchema = z.enum([
   'run.started',
   'agent.status',
+  'message.accepted',
   'assistant.delta',
+  'assistant.completed',
   'tool.started',
   'tool.completed',
   'question.ready',
+  'clarification.round.opened',
+  'clarification.round.completed',
+  'clarification.limit.reached',
   'artifact.updated',
   'run.completed',
   'run.failed',
@@ -194,6 +201,61 @@ export const AgentEventSchema = z.object({
   created_at: z.string().datetime(),
 })
 export type AgentEvent = z.infer<typeof AgentEventSchema>
+
+export const ConversationMessageStatusSchema = z.enum([
+  'PENDING',
+  'STREAMING',
+  'COMPLETED',
+  'FAILED',
+  'CANCELLED',
+])
+export type ConversationMessageStatus = z.infer<typeof ConversationMessageStatusSchema>
+
+export const ConversationMessageSchema = z.object({
+  id: z.string(),
+  tenant_id: z.string(),
+  role_session_id: z.string(),
+  run_id: z.string().nullable(),
+  clarification_round_id: z.string().nullable(),
+  sender_type: z.enum(['HUMAN', 'AGENT', 'SYSTEM']),
+  sender_user_id: z.string().nullable(),
+  sender_role: ActorRoleSchema.nullable(),
+  sender_name: z.string().min(1),
+  content: z.string(),
+  structured_content: z.record(z.string(), z.unknown()).nullable(),
+  status: ConversationMessageStatusSchema,
+  sequence: z.number().int().positive(),
+  created_at: z.string().datetime(),
+  completed_at: z.string().datetime().nullable(),
+})
+export type ConversationMessage = z.infer<typeof ConversationMessageSchema>
+
+export const ClarificationPolicySchema = z.object({
+  role_session_id: z.string(),
+  initial_budget: z.number().int().positive(),
+  granted_rounds: z.number().int().nonnegative(),
+  extension_size: z.number().int().positive(),
+  completed_rounds: z.number().int().nonnegative(),
+  opened_rounds: z.number().int().nonnegative(),
+  open_round_id: z.string().nullable(),
+  status: z.enum(['ACTIVE', 'LIMIT_REACHED']),
+  updated_by: z.string().nullable(),
+  updated_at: z.string().datetime(),
+})
+export type ClarificationPolicy = z.infer<typeof ClarificationPolicySchema>
+
+export const ClarificationRoundSchema = z.object({
+  id: z.string(),
+  role_session_id: z.string(),
+  ordinal: z.number().int().positive(),
+  status: z.enum(['OPEN', 'COMPLETED', 'ABANDONED']),
+  question: z.string().min(1),
+  opened_by_run_id: z.string(),
+  resolved_by_message_id: z.string().nullable(),
+  created_at: z.string().datetime(),
+  completed_at: z.string().datetime().nullable(),
+})
+export type ClarificationRound = z.infer<typeof ClarificationRoundSchema>
 
 export const RoleStateSchema = z.object({
   id: z.string(),
@@ -233,10 +295,16 @@ export const ToolExecutionContextSchema = z.object({
 })
 export type ToolExecutionContext = z.infer<typeof ToolExecutionContextSchema>
 
-export const LoginRequestSchema = z.object({ user_id: z.enum(['manager-demo', 'hr-demo']) })
+export const LoginRequestSchema = z.object({
+  user_id: z.enum(['manager-demo', 'hr-demo', 'admin-demo']),
+})
 export const MessageRequestSchema = z.object({
   content: z.string().trim().min(1).max(8_000),
   expected_revision: z.number().int().nonnegative().optional(),
+})
+
+export const ClarificationExtendRequestSchema = z.object({
+  reason: z.string().trim().min(3).max(2_000),
 })
 export const CreateRoleSessionSchema = z.object({
   title: z.string().trim().min(1).max(120),

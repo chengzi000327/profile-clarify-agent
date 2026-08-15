@@ -4,6 +4,9 @@ import type {
   AgentRun,
   ArtifactEnvelope,
   CandidateEvidence,
+  ClarificationPolicy,
+  ClarificationRound,
+  ConversationMessage,
   RoleState,
 } from '@role-clarifier/contracts'
 
@@ -60,6 +63,22 @@ export interface RunRecord {
   cancel_requested: boolean
 }
 
+export interface AdminRunRecord extends RunRecord {
+  role_title: string
+  actor_display_name: string
+  actor_role: ActorContext['role']
+}
+
+export interface TraceAccessAuditRecord {
+  id: string
+  tenant_id: string
+  actor_user_id: string
+  run_id: string
+  action: 'VIEW' | 'EXPORT'
+  reason: string | null
+  created_at: string
+}
+
 export type EventSubscriber = (event: AgentEvent) => void
 
 export interface ApplicationStore {
@@ -90,4 +109,15 @@ export interface ApplicationStore {
   appendRunEvent(event: AgentEvent): Promise<void>
   listRunEvents(runId: string, afterSequence?: number): Promise<AgentEvent[]>
   subscribeToRun(runId: string, subscriber: EventSubscriber): () => void
+  listConversationMessages(roleSessionId: string, afterSequence?: number): Promise<ConversationMessage[]>
+  appendConversationMessage(message: ConversationMessage): Promise<void>
+  updateConversationMessage(message: ConversationMessage): Promise<void>
+  getClarificationPolicy(roleSessionId: string): Promise<ClarificationPolicy>
+  saveClarificationPolicy(policy: ClarificationPolicy): Promise<void>
+  getOpenClarificationRound(roleSessionId: string): Promise<ClarificationRound | null>
+  insertClarificationRound(round: ClarificationRound): Promise<void>
+  updateClarificationRound(round: ClarificationRound): Promise<void>
+  listRunsForTenant(tenantId: string): Promise<AdminRunRecord[]>
+  appendTraceAccessAudit(record: TraceAccessAuditRecord): Promise<void>
+  listTraceAccessAudits(tenantId: string): Promise<TraceAccessAuditRecord[]>
 }

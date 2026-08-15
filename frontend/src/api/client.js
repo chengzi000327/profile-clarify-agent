@@ -48,6 +48,9 @@ export const api = {
   getRoleSession(id) {
     return request(`/api/v1/role-sessions/${id}`);
   },
+  getMessages(id, afterSequence = 0) {
+    return request(`/api/v1/role-sessions/${id}/messages?after_sequence=${afterSequence}`);
+  },
   createRoleSession(input) {
     return request('/api/v1/role-sessions', {
       method: 'POST',
@@ -64,6 +67,30 @@ export const api = {
     return request(`/api/v1/role-sessions/${id}/messages`, {
       method: 'POST',
       body: JSON.stringify({ content, expected_revision: expectedRevision }),
+    });
+  },
+  extendClarification(id, reason) {
+    return request(`/api/v1/role-sessions/${id}/clarification:extend`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    });
+  },
+  listAdminRuns(filters = {}) {
+    const query = new URLSearchParams(
+      Object.entries(filters).filter(([, value]) => Boolean(value)),
+    );
+    return request(`/api/v1/admin/agent-runs${query.size ? `?${query}` : ''}`);
+  },
+  getAdminTrace(runId) {
+    return request(`/api/v1/admin/agent-runs/${runId}/trace`);
+  },
+  getTraceAudits() {
+    return request('/api/v1/admin/trace-audits');
+  },
+  updateAgentPolicy(initialBudget, extensionSize) {
+    return request('/api/v1/admin/agent-policy', {
+      method: 'PUT',
+      body: JSON.stringify({ initial_budget: initialBudget, extension_size: extensionSize }),
     });
   },
   generateArtifact(id, type) {
@@ -85,10 +112,15 @@ export const api = {
     const names = [
       'run.started',
       'agent.status',
+      'message.accepted',
       'assistant.delta',
+      'assistant.completed',
       'tool.started',
       'tool.completed',
       'question.ready',
+      'clarification.round.opened',
+      'clarification.round.completed',
+      'clarification.limit.reached',
       'artifact.updated',
       'run.completed',
       'run.failed',

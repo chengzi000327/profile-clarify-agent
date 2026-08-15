@@ -54,7 +54,7 @@ export class RoleService {
     actor: ActorContext,
     input: { title: string; department: string },
   ): Promise<RoleView> {
-    if (actor.role !== 'MANAGER') {
+    if (!['MANAGER', 'ADMIN'].includes(actor.role)) {
       throw new DomainError('FORBIDDEN', '仅用人经理可以创建岗位会话', 403)
     }
     const timestamp = nowIso()
@@ -93,7 +93,7 @@ export class RoleService {
     expectedRevision: number,
   ): Promise<RoleState> {
     const aggregate = await this.requireAggregate(roleSessionId, actor)
-    if (actor.role !== 'MANAGER') throw new DomainError('FORBIDDEN', '仅用人经理可同步岗位背景', 403)
+    if (!['MANAGER', 'ADMIN'].includes(actor.role)) throw new DomainError('FORBIDDEN', '仅用人经理或企业管理员可同步岗位背景', 403)
     assertRevision(aggregate.state.revision, expectedRevision)
     if (!['CREATED', 'CONTEXT_SYNCING'].includes(aggregate.state.stage)) {
       throw new DomainError('INVALID_STAGE', '当前阶段不能再次同步背景', 409)
@@ -178,7 +178,7 @@ export class RoleService {
     expectedRevision: number,
   ): Promise<RoleState> {
     const aggregate = await this.requireAggregate(roleSessionId, actor)
-    if (actor.role !== 'MANAGER') throw new DomainError('FORBIDDEN', '仅用人经理可确认岗位事实', 403)
+    if (!['MANAGER', 'ADMIN'].includes(actor.role)) throw new DomainError('FORBIDDEN', '仅用人经理或企业管理员可确认岗位事实', 403)
     assertRevision(aggregate.state.revision, expectedRevision)
     const ids = new Set(factIds)
     const timestamp = nowIso()
@@ -277,10 +277,10 @@ export class RoleService {
     const artifact = aggregate.artifacts.find((item) => item.id === artifactId)
     if (!artifact) throw new DomainError('ARTIFACT_NOT_FOUND', '产物不存在', 404)
     assertArtifactAccess(actor, artifact.type)
-    if (artifact.type === 'HR_RECRUITING_BRIEF' && actor.role !== 'HR') {
+    if (artifact.type === 'HR_RECRUITING_BRIEF' && !['HR', 'ADMIN'].includes(actor.role)) {
       throw new DomainError('FORBIDDEN', '仅 HR 可以确认内部招聘画像', 403)
     }
-    if (artifact.type !== 'HR_RECRUITING_BRIEF' && actor.role !== 'MANAGER') {
+    if (artifact.type !== 'HR_RECRUITING_BRIEF' && !['MANAGER', 'ADMIN'].includes(actor.role)) {
       throw new DomainError('FORBIDDEN', '该产物需要用人经理确认', 403)
     }
     const confirmed = confirmArtifact(artifact, actor, submittedHash)
@@ -321,7 +321,7 @@ export class RoleService {
     expectedRevision: number,
   ): Promise<RoleState> {
     const aggregate = await this.requireAggregate(roleSessionId, actor)
-    if (actor.role !== 'HR') throw new DomainError('FORBIDDEN', '仅 HR 可以执行发布准备', 403)
+    if (!['HR', 'ADMIN'].includes(actor.role)) throw new DomainError('FORBIDDEN', '仅 HR 或企业管理员可以执行发布准备', 403)
     assertRevision(aggregate.state.revision, expectedRevision)
     const required: ArtifactType[] = ['ROLE_PROFILE', 'ASSESSMENT_SCORECARD', 'PUBLIC_JD']
     const missing = required.filter(
@@ -346,7 +346,7 @@ export class RoleService {
     actor: ActorContext,
     candidates: CandidateEvidence[],
   ): Promise<{ state: RoleState; evaluation: ReturnType<typeof evaluateCalibrationBoundary> }> {
-    if (actor.role !== 'HR') throw new DomainError('FORBIDDEN', '仅 HR 可以导入候选人证据', 403)
+    if (!['HR', 'ADMIN'].includes(actor.role)) throw new DomainError('FORBIDDEN', '仅 HR 或企业管理员可以导入候选人证据', 403)
     const aggregate = await this.requireAggregate(roleSessionId, actor)
     for (const candidate of candidates) CandidateEvidenceSchema.parse(candidate)
     await this.store.insertCandidates(roleSessionId, candidates, actor.user_id)
@@ -405,7 +405,7 @@ export class RoleService {
     reason: string,
     expectedRevision: number,
   ): Promise<{ signal: CalibrationSignalRecord; task: ManagerTaskRecord | null }> {
-    if (actor.role !== 'HR') throw new DomainError('FORBIDDEN', '仅 HR 可以审核校准信号', 403)
+    if (!['HR', 'ADMIN'].includes(actor.role)) throw new DomainError('FORBIDDEN', '仅 HR 或企业管理员可以审核校准信号', 403)
     const aggregate = await this.requireAggregate(roleSessionId, actor)
     assertRevision(aggregate.state.revision, expectedRevision)
     const current = aggregate.calibration_signals.find((item) => item.id === signalId)
@@ -458,7 +458,7 @@ export class RoleService {
     proposedChange: Record<string, unknown>,
     evidenceSummary: Record<string, unknown>,
   ): Promise<CalibrationSignalRecord> {
-    if (actor.role !== 'HR') {
+    if (!['HR', 'ADMIN'].includes(actor.role)) {
       throw new DomainError('FORBIDDEN', '仅 HR 运行上下文可以保存校准信号草稿', 403)
     }
     const aggregate = await this.requireAggregate(roleSessionId, actor)
@@ -552,7 +552,7 @@ export class RoleService {
     reason: string,
     expectedRevision: number,
   ): Promise<ManagerTaskRecord> {
-    if (actor.role !== 'MANAGER') throw new DomainError('FORBIDDEN', '仅用人经理可以处理校准任务', 403)
+    if (!['MANAGER', 'ADMIN'].includes(actor.role)) throw new DomainError('FORBIDDEN', '仅用人经理或企业管理员可以处理校准任务', 403)
     const aggregate = await this.requireAggregate(roleSessionId, actor)
     assertRevision(aggregate.state.revision, expectedRevision)
     const current = aggregate.manager_tasks.find(
@@ -620,7 +620,7 @@ export class RoleService {
   }
 
   private filterState(state: RoleState, actor: ActorContext): RoleState {
-    if (actor.role === 'HR') return structuredClone(state)
+    if (actor.role === 'HR' || actor.role === 'ADMIN') return structuredClone(state)
     const latest = { ...state.latest_artifacts }
     delete latest.HR_RECRUITING_BRIEF
     return {
@@ -632,9 +632,9 @@ export class RoleService {
 
   private toView(aggregate: RoleAggregate, actor: ActorContext): RoleView {
     const artifacts = aggregate.artifacts.filter(
-      (artifact) => ARTIFACT_VISIBILITY[artifact.type] !== 'HR_ONLY' || actor.role === 'HR',
+      (artifact) => ARTIFACT_VISIBILITY[artifact.type] !== 'HR_ONLY' || actor.role === 'HR' || actor.role === 'ADMIN',
     )
-    if (actor.role === 'HR') {
+    if (actor.role === 'HR' || actor.role === 'ADMIN') {
       return {
         state: this.filterState(aggregate.state, actor),
         artifacts,

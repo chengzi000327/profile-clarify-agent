@@ -12,6 +12,9 @@ import {
   CandidateImportSchema,
   CandidateEvidenceSchema,
   CreateRoleSessionSchema,
+  ClarificationExtendRequestSchema,
+  ClarificationPolicySchema,
+  ConversationMessageSchema,
   HumanDecisionSchema,
   LoginRequestSchema,
   MessageRequestSchema,
@@ -103,6 +106,51 @@ export const buildApp = async (
   await app.register(sensible)
 
   app.decorateRequest('actor', undefined as unknown as ActorContext)
+
+  const requireAdmin = (actor: ActorContext): void => {
+    if (actor.role !== 'ADMIN') {
+      throw new DomainError('FORBIDDEN', '仅企业管理员可以访问该功能', 403)
+    }
+  }
+
+  const sanitizedTrace = async (runId: string, actor: ActorContext) => {
+    requireAdmin(actor)
+    const record = await store.getRun(runId)
+    if (!record) throw new DomainError('AGENT_RUN_NOT_FOUND', 'Agent Run 不存在', 404)
+    const view = await roleService.get(record.run.role_session_id, actor)
+    if (view.state.tenant_id !== actor.tenant_id) {
+      throw new DomainError('AGENT_RUN_NOT_FOUND', 'Agent Run 不存在', 404)
+    }
+    const events = await store.listRunEvents(runId)
+    await store.appendTraceAccessAudit({
+      id: randomUUID(),
+      tenant_id: actor.tenant_id,
+      actor_user_id: actor.user_id,
+      run_id: runId,
+      action: 'VIEW',
+      reason: null,
+      created_at: new Date().toISOString(),
+    })
+    return {
+      run: record.run,
+      events: events.map((event) =>
+        event.type === 'assistant.delta'
+          ? {
+              ...event,
+              payload: {
+                redacted: true,
+                character_count: String(event.payload.delta ?? '').length,
+              },
+            }
+          : event,
+      ),
+      privacy: {
+        raw_user_message_logged: false,
+        candidate_content_logged: false,
+        hidden_reasoning_exposed: false,
+      },
+    }
+  }
 
   app.addHook('onRequest', async (request) => {
     if (
@@ -325,6 +373,18 @@ export const buildApp = async (
     return roleService.get(id, request.actor)
   })
 
+  app.get('/api/v1/role-sessions/:id/messages', async (request) => {
+    const { id } = IdParamsSchema.parse(request.params)
+    await roleService.get(id, request.actor)
+    const query = z
+      .object({ after_sequence: z.coerce.number().int().nonnegative().default(0) })
+      .parse(request.query)
+    return {
+      items: await store.listConversationMessages(id, query.after_sequence),
+      policy: await store.getClarificationPolicy(id),
+    }
+  })
+
   app.post('/api/v1/role-sessions/:id/context:sync', async (request) => {
     const { id } = IdParamsSchema.parse(request.params)
     const { expected_revision } = RevisionSchema.parse(request.body)
@@ -355,11 +415,38 @@ export const buildApp = async (
   app.post('/api/v1/role-sessions/:id/messages', async (request, reply) => {
     const { id } = IdParamsSchema.parse(request.params)
     const body = MessageRequestSchema.parse(request.body)
-    const run = await runner.submitMessage(id, request.actor, body.content)
+    const result = await runner.submitMessage(id, request.actor, body.content)
     return reply.status(202).send({
-      run_id: run.id,
-      stream_url: `/api/v1/agent-runs/${run.id}/events`,
+      run_id: result.run.id,
+      message: result.message,
+      stream_url: `/api/v1/agent-runs/${result.run.id}/events`,
     })
+  })
+
+  app.post('/api/v1/role-sessions/:id/clarification:extend', async (request) => {
+    const { id } = IdParamsSchema.parse(request.params)
+    const body = ClarificationExtendRequestSchema.parse(request.body)
+    await roleService.get(id, request.actor)
+    const policy = await store.getClarificationPolicy(id)
+    const updated = {
+      ...policy,
+      granted_rounds: policy.granted_rounds + policy.extension_size,
+      status: 'ACTIVE' as const,
+      updated_by: request.actor.user_id,
+      updated_at: new Date().toISOString(),
+    }
+    await store.saveClarificationPolicy(updated)
+    await store.appendDecision({
+      id: randomUUID(),
+      role_session_id: id,
+      actor_user_id: request.actor.user_id,
+      action: 'EXTEND_CLARIFICATION',
+      target_type: 'CLARIFICATION_POLICY',
+      target_id: id,
+      metadata: { reason: body.reason, added_rounds: policy.extension_size },
+      created_at: new Date().toISOString(),
+    })
+    return { policy: updated }
   })
 
   app.post('/api/v1/role-sessions/:id/artifacts/:type/generate', async (request, reply) => {
@@ -473,27 +560,23 @@ export const buildApp = async (
     return { ok: true }
   })
 
-  app.get('/api/v1/agent-runs/:run_id/trace', async (request) => {
+  app.get('/api/v1/agent-runs/:run_id', async (request) => {
     const { run_id } = RunParamsSchema.parse(request.params)
     const record = await store.getRun(run_id)
     if (!record) throw new DomainError('AGENT_RUN_NOT_FOUND', 'Agent Run 不存在', 404)
     await roleService.get(record.run.role_session_id, request.actor)
-    if (record.run.actor_user_id !== request.actor.user_id && request.actor.role !== 'HR') {
+    if (
+      record.run.actor_user_id !== request.actor.user_id &&
+      !['HR', 'ADMIN'].includes(request.actor.role)
+    ) {
       throw new DomainError('AGENT_RUN_NOT_FOUND', 'Agent Run 不存在', 404)
     }
-    const events = await store.listRunEvents(run_id)
-    return {
-      run: record.run,
-      events: events.map((event) =>
-        event.type === 'assistant.delta'
-          ? { ...event, payload: { redacted: true, character_count: String(event.payload.delta ?? '').length } }
-          : event,
-      ),
-      privacy: {
-        raw_user_message_logged: false,
-        candidate_content_logged: false,
-      },
-    }
+    return { run: record.run }
+  })
+
+  app.get('/api/v1/agent-runs/:run_id/trace', async (request) => {
+    const { run_id } = RunParamsSchema.parse(request.params)
+    return sanitizedTrace(run_id, request.actor)
   })
 
   app.get('/api/v1/agent-runs/:run_id/events', async (request, reply) => {
@@ -501,7 +584,10 @@ export const buildApp = async (
     const record = await store.getRun(run_id)
     if (!record) throw new DomainError('AGENT_RUN_NOT_FOUND', 'Agent Run 不存在', 404)
     await roleService.get(record.run.role_session_id, request.actor)
-    if (record.run.actor_user_id !== request.actor.user_id && request.actor.role !== 'HR') {
+    if (
+      record.run.actor_user_id !== request.actor.user_id &&
+      !['HR', 'ADMIN'].includes(request.actor.role)
+    ) {
       throw new DomainError('AGENT_RUN_NOT_FOUND', 'Agent Run 不存在', 404)
     }
     const rawLastId = request.headers['last-event-id']
@@ -538,12 +624,69 @@ export const buildApp = async (
     })
   })
 
+  app.get('/api/v1/admin/agent-runs', async (request) => {
+    requireAdmin(request.actor)
+    const query = z
+      .object({
+        status: z.enum(['QUEUED', 'RUNNING', 'COMPLETED', 'FAILED', 'CANCELLED']).optional(),
+        model_tier: z.enum(['FLASH', 'PRO']).optional(),
+        role_session_id: z.string().uuid().optional(),
+      })
+      .parse(request.query)
+    const records = await store.listRunsForTenant(request.actor.tenant_id)
+    return {
+      items: records.filter(
+        ({ run }) =>
+          (!query.status || run.status === query.status) &&
+          (!query.model_tier || run.model_tier === query.model_tier) &&
+          (!query.role_session_id || run.role_session_id === query.role_session_id),
+      ),
+    }
+  })
+
+  app.get('/api/v1/admin/agent-runs/:run_id/trace', async (request) => {
+    const { run_id } = RunParamsSchema.parse(request.params)
+    return sanitizedTrace(run_id, request.actor)
+  })
+
+  app.get('/api/v1/admin/trace-audits', async (request) => {
+    requireAdmin(request.actor)
+    return { items: await store.listTraceAccessAudits(request.actor.tenant_id) }
+  })
+
+  app.put('/api/v1/admin/agent-policy', async (request) => {
+    requireAdmin(request.actor)
+    const body = z
+      .object({
+        initial_budget: z.number().int().min(1).max(30),
+        extension_size: z.number().int().min(1).max(10),
+      })
+      .parse(request.body)
+    const roles = await roleService.list(request.actor)
+    for (const role of roles) {
+      const current = await store.getClarificationPolicy(role.id)
+      await store.saveClarificationPolicy({
+        ...current,
+        initial_budget: body.initial_budget,
+        extension_size: body.extension_size,
+        status:
+          current.opened_rounds < body.initial_budget + current.granted_rounds
+            ? 'ACTIVE'
+            : current.status,
+        updated_by: request.actor.user_id,
+        updated_at: new Date().toISOString(),
+      })
+    }
+    return { initial_budget: body.initial_budget, extension_size: body.extension_size }
+  })
+
   app.get('/api/v1/openapi.json', async () => ({
     openapi: '3.1.0',
     info: { title: 'Role Clarifier Agent API', version: '0.1.0' },
     paths: {
       '/api/v1/role-sessions/{id}/messages': {
-        post: { summary: '创建异步 Agent Run，返回 SSE 地址' },
+        get: { summary: '读取持久化多角色对话和澄清策略' },
+        post: { summary: '保存人类消息并创建异步 Agent Run' },
       },
       '/api/v1/agent-runs/{run_id}/events': {
         get: { summary: '支持 Last-Event-ID 续传的 Agent 事件流' },
@@ -552,7 +695,10 @@ export const buildApp = async (
         post: { summary: '取消 Agent Run' },
       },
       '/api/v1/agent-runs/{run_id}/trace': {
-        get: { summary: '读取脱敏 Trace' },
+        get: { summary: '企业管理员读取脱敏 Trace' },
+      },
+      '/api/v1/admin/agent-runs': {
+        get: { summary: '企业管理员读取租户内 Agent Run' },
       },
     },
     components: {
@@ -561,6 +707,8 @@ export const buildApp = async (
         RoleState: z.toJSONSchema(RoleStateSchema),
         AgentRun: z.toJSONSchema(AgentRunSchema),
         AgentEvent: z.toJSONSchema(AgentEventSchema),
+        ConversationMessage: z.toJSONSchema(ConversationMessageSchema),
+        ClarificationPolicy: z.toJSONSchema(ClarificationPolicySchema),
         PublicJD: z.toJSONSchema(PublicJDSchema),
         CandidateEvidence: z.toJSONSchema(CandidateEvidenceSchema),
       },

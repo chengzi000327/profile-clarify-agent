@@ -14,10 +14,14 @@ import type {
   AgentRun,
   ArtifactEnvelope,
   CandidateEvidence,
+  ClarificationPolicy,
+  ClarificationRound,
+  ConversationMessage,
   RoleState,
 } from '@role-clarifier/contracts'
 import * as schema from '../db/schema.js'
 import type {
+  AdminRunRecord,
   ApplicationStore,
   CalibrationSignalRecord,
   DecisionRecord,
@@ -26,6 +30,7 @@ import type {
   RoleAggregate,
   RunRecord,
   StoredUser,
+  TraceAccessAuditRecord,
 } from './types.js'
 import { createDemoAggregate, demoUsers } from './seed.js'
 
@@ -69,6 +74,15 @@ export class PostgresStore implements ApplicationStore {
       .from(schema.roleSessions)
       .limit(1)
     if (!existing) await this.createRoleAggregate(createDemoAggregate())
+
+    const roleRows = await this.db.select({ id: schema.roleSessions.id }).from(schema.roleSessions)
+    for (const role of roleRows) {
+      const policy = this.makeDefaultPolicy(role.id)
+      await this.db
+        .insert(schema.clarificationPolicies)
+        .values(this.toPolicyRow(policy))
+        .onConflictDoNothing()
+    }
   }
 
   async close(): Promise<void> {
@@ -88,6 +102,14 @@ export class PostgresStore implements ApplicationStore {
   }
 
   async listRoleStates(actor: ActorContext): Promise<RoleState[]> {
+    if (actor.role === 'ADMIN') {
+      const rows = await this.db
+        .select({ state: schema.roleSessions.state })
+        .from(schema.roleSessions)
+        .where(eq(schema.roleSessions.tenantId, actor.tenant_id))
+        .orderBy(desc(schema.roleSessions.updatedAt))
+      return rows.map((row) => row.state)
+    }
     const rows = await this.db
       .select({ state: schema.roleSessions.state })
       .from(schema.roleSessions)
@@ -106,21 +128,32 @@ export class PostgresStore implements ApplicationStore {
   }
 
   async getRoleAggregate(roleSessionId: string, actor: ActorContext): Promise<RoleAggregate | null> {
-    const [access] = await this.db
-      .select({ state: schema.roleSessions.state })
-      .from(schema.roleSessions)
-      .innerJoin(
-        schema.roleMembers,
-        eq(schema.roleSessions.id, schema.roleMembers.roleSessionId),
-      )
-      .where(
-        and(
-          eq(schema.roleSessions.id, roleSessionId),
-          eq(schema.roleSessions.tenantId, actor.tenant_id),
-          eq(schema.roleMembers.userId, actor.user_id),
-        ),
-      )
-      .limit(1)
+    const [access] = actor.role === 'ADMIN'
+      ? await this.db
+          .select({ state: schema.roleSessions.state })
+          .from(schema.roleSessions)
+          .where(
+            and(
+              eq(schema.roleSessions.id, roleSessionId),
+              eq(schema.roleSessions.tenantId, actor.tenant_id),
+            ),
+          )
+          .limit(1)
+      : await this.db
+          .select({ state: schema.roleSessions.state })
+          .from(schema.roleSessions)
+          .innerJoin(
+            schema.roleMembers,
+            eq(schema.roleSessions.id, schema.roleMembers.roleSessionId),
+          )
+          .where(
+            and(
+              eq(schema.roleSessions.id, roleSessionId),
+              eq(schema.roleSessions.tenantId, actor.tenant_id),
+              eq(schema.roleMembers.userId, actor.user_id),
+            ),
+          )
+          .limit(1)
     if (!access) return null
 
     const [memberRows, artifactRows, candidateRows, signalRows, taskRows] = await Promise.all([
@@ -192,6 +225,8 @@ export class PostgresStore implements ApplicationStore {
         createdAt: new Date(aggregate.state.created_at),
         updatedAt: new Date(aggregate.state.updated_at),
       })
+      const policy = this.makeDefaultPolicy(aggregate.state.id)
+      await tx.insert(schema.clarificationPolicies).values(this.toPolicyRow(policy))
       if (aggregate.member_ids.length > 0) {
         await tx.insert(schema.roleMembers).values(
           aggregate.member_ids.map((userId) => ({
@@ -432,6 +467,202 @@ export class PostgresStore implements ApplicationStore {
     return () => {
       subscribers.delete(subscriber)
       if (subscribers.size === 0) this.subscribers.delete(runId)
+    }
+  }
+
+  async listConversationMessages(
+    roleSessionId: string,
+    afterSequence = 0,
+  ): Promise<ConversationMessage[]> {
+    const rows = await this.db
+      .select({ message: schema.conversationMessages.message })
+      .from(schema.conversationMessages)
+      .where(
+        and(
+          eq(schema.conversationMessages.roleSessionId, roleSessionId),
+          gt(schema.conversationMessages.sequence, afterSequence),
+        ),
+      )
+      .orderBy(asc(schema.conversationMessages.sequence))
+    return rows.map((row) => row.message)
+  }
+
+  async appendConversationMessage(message: ConversationMessage): Promise<void> {
+    await this.db.insert(schema.conversationMessages).values({
+      id: message.id,
+      tenantId: message.tenant_id,
+      roleSessionId: message.role_session_id,
+      runId: message.run_id,
+      clarificationRoundId: message.clarification_round_id,
+      senderType: message.sender_type,
+      senderUserId: message.sender_user_id,
+      senderRole: message.sender_role,
+      senderName: message.sender_name,
+      content: message.content,
+      structuredContent: message.structured_content,
+      status: message.status,
+      sequence: message.sequence,
+      message,
+      createdAt: new Date(message.created_at),
+      completedAt: message.completed_at ? new Date(message.completed_at) : null,
+    })
+  }
+
+  async updateConversationMessage(message: ConversationMessage): Promise<void> {
+    await this.db
+      .update(schema.conversationMessages)
+      .set({
+        runId: message.run_id,
+        clarificationRoundId: message.clarification_round_id,
+        content: message.content,
+        structuredContent: message.structured_content,
+        status: message.status,
+        message,
+        completedAt: message.completed_at ? new Date(message.completed_at) : null,
+      })
+      .where(eq(schema.conversationMessages.id, message.id))
+  }
+
+  async getClarificationPolicy(roleSessionId: string): Promise<ClarificationPolicy> {
+    const row = await this.db.query.clarificationPolicies.findFirst({
+      where: eq(schema.clarificationPolicies.roleSessionId, roleSessionId),
+    })
+    if (row) return row.policy
+    const policy = this.makeDefaultPolicy(roleSessionId)
+    await this.db.insert(schema.clarificationPolicies).values(this.toPolicyRow(policy))
+    return policy
+  }
+
+  async saveClarificationPolicy(policy: ClarificationPolicy): Promise<void> {
+    await this.db
+      .insert(schema.clarificationPolicies)
+      .values(this.toPolicyRow(policy))
+      .onConflictDoUpdate({
+        target: schema.clarificationPolicies.roleSessionId,
+        set: this.toPolicyRow(policy),
+      })
+  }
+
+  async getOpenClarificationRound(roleSessionId: string): Promise<ClarificationRound | null> {
+    const row = await this.db.query.clarificationRounds.findFirst({
+      where: and(
+        eq(schema.clarificationRounds.roleSessionId, roleSessionId),
+        eq(schema.clarificationRounds.status, 'OPEN'),
+      ),
+    })
+    return row?.round ?? null
+  }
+
+  async insertClarificationRound(round: ClarificationRound): Promise<void> {
+    await this.db.insert(schema.clarificationRounds).values({
+      id: round.id,
+      roleSessionId: round.role_session_id,
+      ordinal: round.ordinal,
+      status: round.status,
+      question: round.question,
+      openedByRunId: round.opened_by_run_id,
+      resolvedByMessageId: round.resolved_by_message_id,
+      round,
+      createdAt: new Date(round.created_at),
+      completedAt: round.completed_at ? new Date(round.completed_at) : null,
+    })
+  }
+
+  async updateClarificationRound(round: ClarificationRound): Promise<void> {
+    await this.db
+      .update(schema.clarificationRounds)
+      .set({
+        status: round.status,
+        question: round.question,
+        resolvedByMessageId: round.resolved_by_message_id,
+        round,
+        completedAt: round.completed_at ? new Date(round.completed_at) : null,
+      })
+      .where(eq(schema.clarificationRounds.id, round.id))
+  }
+
+  async listRunsForTenant(tenantId: string): Promise<AdminRunRecord[]> {
+    const rows = await this.db
+      .select({
+        run: schema.agentRuns.run,
+        cancelRequested: schema.agentRuns.cancelRequested,
+        roleTitle: schema.roleSessions.title,
+        actorDisplayName: schema.users.displayName,
+        actorRole: schema.users.role,
+      })
+      .from(schema.agentRuns)
+      .innerJoin(schema.roleSessions, eq(schema.agentRuns.roleSessionId, schema.roleSessions.id))
+      .innerJoin(schema.users, eq(schema.agentRuns.actorUserId, schema.users.id))
+      .where(eq(schema.roleSessions.tenantId, tenantId))
+      .orderBy(desc(schema.agentRuns.createdAt))
+      .limit(200)
+    return rows.map((row) => ({
+      run: row.run,
+      cancel_requested: row.cancelRequested,
+      role_title: row.roleTitle,
+      actor_display_name: row.actorDisplayName,
+      actor_role: row.actorRole,
+    }))
+  }
+
+  async appendTraceAccessAudit(record: TraceAccessAuditRecord): Promise<void> {
+    await this.db.insert(schema.traceAccessAudits).values({
+      id: record.id,
+      tenantId: record.tenant_id,
+      actorUserId: record.actor_user_id,
+      runId: record.run_id,
+      action: record.action,
+      reason: record.reason,
+      createdAt: new Date(record.created_at),
+    })
+  }
+
+  async listTraceAccessAudits(tenantId: string): Promise<TraceAccessAuditRecord[]> {
+    const rows = await this.db
+      .select()
+      .from(schema.traceAccessAudits)
+      .where(eq(schema.traceAccessAudits.tenantId, tenantId))
+      .orderBy(desc(schema.traceAccessAudits.createdAt))
+      .limit(200)
+    return rows.map((row) => ({
+      id: row.id,
+      tenant_id: row.tenantId,
+      actor_user_id: row.actorUserId,
+      run_id: row.runId,
+      action: row.action as TraceAccessAuditRecord['action'],
+      reason: row.reason,
+      created_at: iso(row.createdAt),
+    }))
+  }
+
+  private makeDefaultPolicy(roleSessionId: string): ClarificationPolicy {
+    return {
+      role_session_id: roleSessionId,
+      initial_budget: 6,
+      granted_rounds: 0,
+      extension_size: 2,
+      completed_rounds: 0,
+      opened_rounds: 0,
+      open_round_id: null,
+      status: 'ACTIVE',
+      updated_by: null,
+      updated_at: new Date().toISOString(),
+    }
+  }
+
+  private toPolicyRow(policy: ClarificationPolicy) {
+    return {
+      roleSessionId: policy.role_session_id,
+      initialBudget: policy.initial_budget,
+      grantedRounds: policy.granted_rounds,
+      extensionSize: policy.extension_size,
+      completedRounds: policy.completed_rounds,
+      openedRounds: policy.opened_rounds,
+      openRoundId: policy.open_round_id,
+      status: policy.status,
+      updatedBy: policy.updated_by,
+      policy,
+      updatedAt: new Date(policy.updated_at),
     }
   }
 }

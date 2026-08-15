@@ -30,7 +30,7 @@ export function LiveAgentRun({ events, status }) {
   );
 }
 
-export function Composer({ onSend, pending = false }) {
+export function Composer({ onSend, onExtend, pending = false, policy }) {
   const [text, setText] = useState('');
 
   async function submit() {
@@ -62,11 +62,23 @@ export function Composer({ onSend, pending = false }) {
           </div>
           <div>
             <button className="composer-setting">Flash / Pro 自动路由<ChevronDown size={13} /></button>
-            <button className="composer-setting">最多 10 步<ChevronDown size={13} /></button>
+            {policy && (
+              <span className={`composer-rounds ${policy.status === 'LIMIT_REACHED' ? 'limit' : ''}`}>
+                主动澄清 {Math.min(policy.opened_rounds, policy.initial_budget + policy.granted_rounds)} / {policy.initial_budget + policy.granted_rounds} 轮
+              </span>
+            )}
             <button className="send-button" aria-label="发送" onClick={submit} disabled={!text.trim() || pending}><ArrowUp size={17} /></button>
           </div>
         </div>
       </div>
+      {policy?.status === 'LIMIT_REACHED' && (
+        <div className="clarification-limit-bar">
+          <span>Agent 已停止主动追问，正常聊天仍然可用。</span>
+          <button type="button" onClick={() => onExtend?.('需要继续确认尚未解决的岗位关键问题')}>
+            增加 {policy.extension_size} 轮
+          </button>
+        </div>
+      )}
       <p className="composer-caption">画像结论保留证据和推断状态，仅在用人经理确认后生效。</p>
     </div>
   );

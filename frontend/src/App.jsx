@@ -40,6 +40,7 @@ import {
 import { api, ApiError } from './api/client.js';
 import LoginScreen from './components/LoginScreen.jsx';
 import { Composer, LiveAgentRun } from './components/AgentConversation.jsx';
+import AdminTraceConsole from './components/AdminTraceConsole.jsx';
 
 const sourceIcons = {
   org: Users,
@@ -114,9 +115,11 @@ function App() {
   const [outcomeConfirmed, setOutcomeConfirmed] = useState(false);
   const [agentEvents, setAgentEvents] = useState([]);
   const [agentStatus, setAgentStatus] = useState('idle');
+  const [messages, setMessages] = useState([]);
+  const [clarificationPolicy, setClarificationPolicy] = useState(null);
   const [requestError, setRequestError] = useState('');
   const streamStopRef = useRef(null);
-  const viewerRole = actor?.role === 'HR' ? 'hr' : 'manager';
+  const viewerRole = actor?.role === 'ADMIN' ? 'admin' : actor?.role === 'HR' ? 'hr' : 'manager';
 
   const activeRole = useMemo(
     () => roleSessions.find((role) => role.id === activeRoleId) ?? roleSessions[0],
@@ -148,9 +151,16 @@ function App() {
   useEffect(() => {
     if (!actor || !activeRoleId) return;
     let cancelled = false;
-    api.getRoleSession(activeRoleId)
-      .then((detail) => {
-        if (!cancelled) setRoleDetail(detail);
+    Promise.all([
+      api.getRoleSession(activeRoleId),
+      api.getMessages(activeRoleId),
+    ])
+      .then(([detail, conversation]) => {
+        if (!cancelled) {
+          setRoleDetail(detail);
+          setMessages(conversation.items);
+          setClarificationPolicy(conversation.policy);
+        }
       })
       .catch((error) => {
         if (!cancelled) setRequestError(error.message);
@@ -182,6 +192,8 @@ function App() {
     setRoleSessions([]);
     setActiveRoleId(null);
     setRoleDetail(null);
+    setMessages([]);
+    setClarificationPolicy(null);
     setProfileMenuOpen(false);
   }
 
@@ -189,6 +201,10 @@ function App() {
     setActiveRoleId(roleId);
     setActiveView('conversation');
     setEvidenceId(null);
+    setMessages([]);
+    setClarificationPolicy(null);
+    setAgentEvents([]);
+    setAgentStatus('idle');
     setOutcomeConfirmed(false);
   }
 
@@ -219,8 +235,16 @@ function App() {
     setRoleDetail(detail);
   }
 
+  async function refreshConversation() {
+    if (!activeRoleId) return;
+    const conversation = await api.getMessages(activeRoleId);
+    setMessages(conversation.items);
+    setClarificationPolicy(conversation.policy);
+  }
+
   function connectRun(runInfo) {
     streamStopRef.current?.();
+    setAgentEvents([]);
     setAgentStatus('running');
     streamStopRef.current = api.streamAgentRun(
       runInfo.stream_url,
@@ -229,11 +253,16 @@ function App() {
         if (event.type === 'agent.status') setAgentStatus(event.payload.status);
         if (event.type === 'run.completed') {
           setAgentStatus('completed');
-          refreshActiveRole().catch((error) => setRequestError(error.message));
+          Promise.all([refreshActiveRole(), refreshConversation()])
+            .catch((error) => setRequestError(error.message));
+        }
+        if (event.type === 'assistant.completed' || event.type === 'clarification.limit.reached') {
+          refreshConversation().catch((error) => setRequestError(error.message));
         }
         if (event.type === 'run.failed') {
           setAgentStatus('failed');
           setRequestError(event.payload.message ?? 'Agent Run 失败');
+          refreshConversation().catch(() => {});
         }
       },
       () => setAgentStatus((current) => current === 'running' ? 'reconnecting' : current),
@@ -243,19 +272,25 @@ function App() {
   async function sendMessage(content) {
     if (!activeRoleId) return;
     setRequestError('');
-    setAgentEvents((current) => [
-      ...current,
-      {
-        id: `local-${Date.now()}`,
-        type: 'user.message',
-        payload: { content },
-      },
-    ]);
     try {
       const run = await api.sendMessage(activeRoleId, content, roleDetail?.state.revision);
+      setMessages((current) => current.some((item) => item.id === run.message.id)
+        ? current
+        : [...current, run.message]);
       connectRun(run);
     } catch (error) {
       setAgentStatus('failed');
+      setRequestError(error.message);
+    }
+  }
+
+  async function extendClarification(reason) {
+    if (!activeRoleId) return;
+    try {
+      const result = await api.extendClarification(activeRoleId, reason);
+      setClarificationPolicy(result.policy);
+      setRequestError('');
+    } catch (error) {
       setRequestError(error.message);
     }
   }
@@ -320,10 +355,10 @@ function App() {
           </button>
         </div>
 
-        <button className="new-project-button" onClick={() => setCreateOpen(true)}>
+        {actor.role !== 'HR' && <button className="new-project-button" onClick={() => setCreateOpen(true)}>
           <Plus size={17} />
           {!sidebarCollapsed && <span>新建岗位澄清</span>}
-        </button>
+        </button>}
 
         {!sidebarCollapsed && (
           <div className="sidebar-section-title">
@@ -366,16 +401,22 @@ function App() {
         </nav>
 
         <div className="sidebar-footer">
+          {actor.role === 'ADMIN' && (
+            <button className={`sidebar-utility ${activeView === 'admin-trace' ? 'active' : ''}`} title="Agent Trace 控制台" onClick={() => setActiveView('admin-trace')}>
+              <BarChart3 size={17} />
+              {!sidebarCollapsed && <span>Agent Trace 控制台</span>}
+            </button>
+          )}
           <button className="sidebar-utility" title="资料与权限">
             <Settings size={17} />
             {!sidebarCollapsed && <span>资料与权限</span>}
           </button>
           <button className="user-chip" onClick={() => setProfileMenuOpen((value) => !value)}>
-            <span className={`avatar ${viewerRole === 'manager' ? 'avatar-manager' : 'avatar-hr'}`}>{viewerRole === 'manager' ? '陈' : 'HR'}</span>
+            <span className={`avatar avatar-${viewerRole}`}>{viewerRole === 'manager' ? '陈' : viewerRole === 'hr' ? 'HR' : '管'}</span>
             {!sidebarCollapsed && (
               <span className="user-copy">
                 <strong>{actor.display_name}</strong>
-                <small>{viewerRole === 'manager' ? '用人经理' : 'HR 招聘负责人'}</small>
+                <small>{viewerRole === 'manager' ? '用人经理' : viewerRole === 'hr' ? 'HR 招聘负责人' : '企业管理员 · 最高权限'}</small>
               </span>
             )}
             {!sidebarCollapsed && <MoreHorizontal size={16} />}
@@ -385,7 +426,7 @@ function App() {
               <strong>后端身份已验证</strong>
               <span>权限来自签名 HttpOnly Session，不能通过前端参数切换。</span>
               <div className="role-preview-switch">
-                <button className="active" type="button">{viewerRole === 'manager' ? '用人经理' : 'HR 招聘负责人'}</button>
+                <button className="active" type="button">{viewerRole === 'manager' ? '用人经理' : viewerRole === 'hr' ? 'HR 招聘负责人' : '企业管理员'}</button>
                 <button type="button" onClick={handleLogout}>退出并切换账号</button>
               </div>
             </div>
@@ -426,22 +467,29 @@ function App() {
           <button className={activeView === 'profile' ? 'active' : ''} onClick={() => setActiveView('profile')}>
             岗位画像 <span className="tab-state">{activeRole.version}</span>
           </button>
+          {actor.role === 'ADMIN' && (
+            <button className={activeView === 'admin-trace' ? 'active' : ''} onClick={() => setActiveView('admin-trace')}>
+              Trace 控制台 <span className="tab-state">ADMIN</span>
+            </button>
+          )}
         </div>
 
         {requestError && <div className="workspace-error"><AlertTriangle size={14} />{requestError}<button onClick={() => setRequestError('')}><X size={13} /></button></div>}
 
-        {activeView === 'conversation' ? (
+        {activeView === 'admin-trace' ? (
+          <AdminTraceConsole />
+        ) : activeView === 'conversation' ? (
           <ConversationView
             activeRole={activeRole}
-            selectedOutcome={selectedOutcome}
-            setSelectedOutcome={setSelectedOutcome}
-            outcomeConfirmed={outcomeConfirmed}
-            setOutcomeConfirmed={setOutcomeConfirmed}
             onOpenEvidence={setEvidenceId}
             onOpenProfile={() => setActiveView('profile')}
             onSend={sendMessage}
+            onExtend={extendClarification}
             agentEvents={agentEvents}
             agentStatus={agentStatus}
+            actor={actor}
+            messages={messages}
+            policy={clarificationPolicy}
           />
         ) : (
           <ProfileView
@@ -462,6 +510,104 @@ function App() {
 }
 
 function ConversationView({
+  activeRole,
+  onOpenProfile,
+  onSend,
+  onExtend,
+  agentEvents,
+  agentStatus,
+  actor,
+  messages,
+  policy,
+}) {
+  const scrollRef = useRef(null);
+  const budget = policy ? policy.initial_budget + policy.granted_rounds : 6;
+
+  useEffect(() => {
+    const node = scrollRef.current;
+    if (node) node.scrollTop = node.scrollHeight;
+  }, [messages, agentEvents]);
+
+  return (
+    <section className="conversation-surface real-conversation">
+      <div className="conversation-scroll" ref={scrollRef}>
+        <div className="transcript">
+          <div className="session-intro">
+            <ClarifierMark size={40} plate />
+            <div>
+              <h1>{activeRole.name}岗位澄清</h1>
+              <p>用人经理、HR和企业管理员可以在同一会话中补充事实、追问Agent并持续生成岗位画像。每条消息都会保留真实身份。</p>
+            </div>
+            <button className="conversation-profile-link" onClick={onOpenProfile}>查看岗位画像<ChevronRight size={14} /></button>
+          </div>
+
+          <div className="conversation-policy-strip">
+            <span><CircleDot size={13} />主动澄清 <strong>{policy?.opened_rounds ?? 0} / {budget} 轮</strong></span>
+            <span>{policy?.status === 'LIMIT_REACHED' ? '已停止主动追问，正常对话仍可继续' : 'Agent会围绕尚未确认的岗位关键问题主动追问'}</span>
+          </div>
+
+          {messages.length === 0 && (
+            <div className="conversation-empty-state">
+              <ClarifierMark size={34} plate />
+              <strong>开始真实岗位对话</strong>
+              <p>{actor.display_name}，请补充招聘原因、成功标准或希望Agent协助判断的问题。消息发送后会立即保存。</p>
+            </div>
+          )}
+
+          {messages.map((message) => {
+            if (message.sender_type === 'HUMAN') {
+              const roleLabel = message.sender_role === 'MANAGER' ? '用人经理' : message.sender_role === 'HR' ? 'HR' : '企业管理员';
+              return (
+                <div className={`message message-user human-${message.sender_role?.toLowerCase()}`} key={message.id}>
+                  <div className="message-label">{message.sender_name} · {roleLabel}</div>
+                  <div className="user-bubble">{message.content}</div>
+                </div>
+              );
+            }
+            if (message.sender_type === 'SYSTEM') {
+              return <div className="conversation-system-message" key={message.id}><AlertTriangle size={13} />{message.content}</div>;
+            }
+            const structured = message.structured_content ?? {};
+            return (
+              <div className="message message-agent persisted-agent-message" key={message.id}>
+                <span className="agent-avatar"><ClarifierMark size={25} /></span>
+                <div className="message-body">
+                  <div className="message-label">画像澄清 Agent · 已保存</div>
+                  {message.content.split('\n').filter(Boolean).map((paragraph, index) => <p key={`${message.id}-${index}`}>{paragraph}</p>)}
+                  {structured.question && (
+                    <div className="persisted-question">
+                      <span><CircleDot size={13} />第 {structured.round_ordinal} / {structured.budget} 轮主动澄清</span>
+                      <strong>{structured.question}</strong>
+                      <small>经理、HR或企业管理员都可以直接在下方回答。</small>
+                    </div>
+                  )}
+                  {structured.kind === 'CLARIFICATION_LIMIT' && (
+                    <div className="persisted-limit-action">
+                      <span>主动澄清预算已用完</span>
+                      <button onClick={() => onExtend('当前岗位仍有关键问题需要继续澄清')}>增加 {policy?.extension_size ?? 2} 轮</button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+
+          {agentEvents.length > 0 && agentStatus !== 'completed' && (
+            <LiveAgentRun events={agentEvents} status={agentStatus} />
+          )}
+        </div>
+      </div>
+      <Composer
+        onSend={onSend}
+        onExtend={onExtend}
+        pending={agentStatus === 'running'}
+        policy={policy}
+      />
+    </section>
+  );
+}
+
+function LegacyConversationView({
   activeRole,
   selectedOutcome,
   setSelectedOutcome,
@@ -646,7 +792,7 @@ function OutcomeChoice({ code, value, selected, onSelect, title, detail }) {
 }
 
 function ProfileView({ viewerRole, onOpenEvidence, roleDetail, onArtifactAction, agentStatus }) {
-  const [section, setSection] = useState(viewerRole === 'hr' ? 'portrait' : 'basis');
+  const [section, setSection] = useState(viewerRole === 'hr' || viewerRole === 'admin' ? 'portrait' : 'basis');
   const [expandedScenario, setExpandedScenario] = useState('T-01');
   const [expandedRequirement, setExpandedRequirement] = useState('C-01');
   const [expandedScore, setExpandedScore] = useState('A-01');
@@ -658,7 +804,7 @@ function ProfileView({ viewerRole, onOpenEvidence, roleDetail, onArtifactAction,
     { id: 'assessment', label: '评估方案', meta: `${roleProfile.scorecard.length} 个维度` },
     { id: 'jd', label: '对外 JD', meta: '最终候选人发布物' },
   ];
-  const profileTabs = viewerRole === 'hr' ? allProfileTabs : allProfileTabs.filter((item) => item.id !== 'portrait');
+  const profileTabs = viewerRole === 'hr' || viewerRole === 'admin' ? allProfileTabs : allProfileTabs.filter((item) => item.id !== 'portrait');
   const primaryActionLabel = section === 'jd'
     ? '确认并交给 HR 发布'
     : section === 'assessment'
@@ -716,7 +862,7 @@ function ProfileView({ viewerRole, onOpenEvidence, roleDetail, onArtifactAction,
 
         <div className={`profile-permission-note ${viewerRole}`}>
           <ShieldCheck size={13} />
-          <span>{viewerRole === 'hr' ? 'HR 权限：可查看内部寻源策略、候选人判断规则和全部协作产物。' : '用人经理权限：可确认画像依据、评估方案和对外 JD；HR 内部寻源策略不可见。'}</span>
+          <span>{viewerRole === 'admin' ? '企业管理员最高权限：可查看和处理企业内全部岗位、内部画像、产物与审计记录。' : viewerRole === 'hr' ? 'HR 权限：可查看内部寻源策略、候选人判断规则和全部协作产物。' : '用人经理权限：可确认画像依据、评估方案和对外 JD；HR 内部寻源策略不可见。'}</span>
         </div>
 
         {section !== 'portrait' && (

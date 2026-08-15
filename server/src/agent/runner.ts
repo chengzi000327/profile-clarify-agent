@@ -5,6 +5,8 @@ import type {
   AgentEventType,
   AgentRun,
   ArtifactType,
+  ClarificationRound,
+  ConversationMessage,
   ToolExecutionContext,
 } from '@role-clarifier/contracts'
 import { DomainError } from '@role-clarifier/domain'
@@ -26,6 +28,8 @@ interface PendingRun {
   task: HarnessTask
   message?: string
   candidates?: CandidateImportItem[]
+  inputMessage?: ConversationMessage
+  answeredRound?: ClarificationRound
 }
 
 const taskModelTier = (task: HarnessTask): 'FLASH' | 'PRO' =>
@@ -55,8 +59,24 @@ export class AgentRunner {
     roleSessionId: string,
     actor: ActorContext,
     message: string,
-  ): Promise<AgentRun> {
-    return this.enqueue(roleSessionId, actor, 'CLARIFY_MESSAGE', { message })
+  ): Promise<{ run: AgentRun; message: ConversationMessage }> {
+    const policy = await this.store.getClarificationPolicy(roleSessionId)
+    const answeredRound = await this.store.getOpenClarificationRound(roleSessionId)
+    if (answeredRound && policy.status === 'LIMIT_REACHED') {
+      throw new DomainError(
+        'CLARIFICATION_LIMIT_REACHED',
+        '主动澄清预算已用完，请先增加轮数或生成当前岗位画像',
+        409,
+      )
+    }
+    const run = await this.enqueue(roleSessionId, actor, 'CLARIFY_MESSAGE', {
+      message,
+      ...(answeredRound ? { answeredRound } : {}),
+    })
+    const messages = await this.store.listConversationMessages(roleSessionId)
+    const stored = messages.find((item) => item.id === run.input_message_id)
+    if (!stored) throw new Error('Conversation input message was not persisted')
+    return { run, message: stored }
   }
 
   async submitArtifact(
@@ -64,7 +84,7 @@ export class AgentRunner {
     actor: ActorContext,
     artifactType: ArtifactType,
   ): Promise<AgentRun> {
-    if (artifactType === 'HR_RECRUITING_BRIEF' && actor.role !== 'HR') {
+    if (artifactType === 'HR_RECRUITING_BRIEF' && !['HR', 'ADMIN'].includes(actor.role)) {
       throw new DomainError('FORBIDDEN', '仅 HR 可以生成内部招聘画像', 403)
     }
     return this.enqueue(roleSessionId, actor, artifactTaskMap[artifactType])
@@ -75,14 +95,18 @@ export class AgentRunner {
     actor: ActorContext,
     candidates: CandidateImportItem[],
   ): Promise<AgentRun> {
-    if (actor.role !== 'HR') throw new DomainError('FORBIDDEN', '仅 HR 可以导入候选人', 403)
+    if (!['HR', 'ADMIN'].includes(actor.role)) throw new DomainError('FORBIDDEN', '仅 HR 或企业管理员可以导入候选人', 403)
     for (const candidate of candidates) this.roleService.rejectCandidatePII(candidate.content)
     return this.enqueue(roleSessionId, actor, 'EXTRACT_CANDIDATES', { candidates })
   }
 
   async cancel(runId: string, actor: ActorContext): Promise<void> {
     const record = await this.store.getRun(runId)
-    if (!record || record.run.actor_user_id !== actor.user_id) {
+    if (!record) {
+      throw new DomainError('AGENT_RUN_NOT_FOUND', 'Agent Run 不存在', 404)
+    }
+    await this.roleService.get(record.run.role_session_id, actor)
+    if (record.run.actor_user_id !== actor.user_id && actor.role !== 'ADMIN') {
       throw new DomainError('AGENT_RUN_NOT_FOUND', 'Agent Run 不存在', 404)
     }
     if (['COMPLETED', 'FAILED', 'CANCELLED'].includes(record.run.status)) return
@@ -107,7 +131,11 @@ export class AgentRunner {
     roleSessionId: string,
     actor: ActorContext,
     task: HarnessTask,
-    input: { message?: string; candidates?: CandidateImportItem[] } = {},
+    input: {
+      message?: string
+      candidates?: CandidateImportItem[]
+      answeredRound?: ClarificationRound
+    } = {},
   ): Promise<AgentRun> {
     await this.roleService.get(roleSessionId, actor)
     if (this.activeRoleRuns.has(roleSessionId)) {
@@ -118,6 +146,7 @@ export class AgentRunner {
       )
     }
     const modelTier = taskModelTier(task)
+    const inputMessageId = input.message !== undefined ? randomUUID() : null
     const run: AgentRun = {
       id: randomUUID(),
       role_session_id: roleSessionId,
@@ -137,8 +166,24 @@ export class AgentRunner {
       started_at: null,
       completed_at: null,
       error_code: null,
+      input_message_id: inputMessageId,
+      output_message_id: null,
     }
     await this.store.createRun(run)
+    let inputMessage: ConversationMessage | undefined
+    if (input.message !== undefined && inputMessageId) {
+      inputMessage = await this.createMessage({
+        id: inputMessageId,
+        roleSessionId,
+        actor,
+        runId: run.id,
+        clarificationRoundId: input.answeredRound?.id ?? null,
+        senderType: 'HUMAN',
+        content: input.message,
+        structuredContent: null,
+        status: 'COMPLETED',
+      })
+    }
     this.activeRoleRuns.set(roleSessionId, run.id)
     this.pending.push({
       run,
@@ -146,6 +191,8 @@ export class AgentRunner {
       task,
       ...(input.message !== undefined ? { message: input.message } : {}),
       ...(input.candidates !== undefined ? { candidates: input.candidates } : {}),
+      ...(inputMessage ? { inputMessage } : {}),
+      ...(input.answeredRound ? { answeredRound: input.answeredRound } : {}),
     })
     queueMicrotask(() => void this.drain())
     return run
@@ -199,6 +246,13 @@ export class AgentRunner {
       model_tier: run.model_tier,
       task: run.task,
     })
+    if (pending.inputMessage) {
+      await emit('message.accepted', {
+        message_id: pending.inputMessage.id,
+        sequence: pending.inputMessage.sequence,
+        sender_role: pending.inputMessage.sender_role,
+      })
+    }
 
     try {
       const view = await this.roleService.get(run.role_session_id, pending.actor)
@@ -237,7 +291,7 @@ export class AgentRunner {
           harnessTrace = trace
         },
       })
-      await this.persistHarnessResult(run, pending.actor, result, emit)
+      const outputMessage = await this.persistHarnessResult(run, pending, result, emit)
       run = {
         ...run,
         status: 'COMPLETED',
@@ -247,6 +301,7 @@ export class AgentRunner {
           harnessTrace?.input_tokens ?? Math.ceil((pending.message?.length ?? 0) / 2),
         output_tokens: harnessTrace?.output_tokens ?? Math.ceil(outputCharacters / 2),
         completed_at: new Date().toISOString(),
+        output_message_id: outputMessage?.id ?? null,
       }
       await this.store.updateRun(run)
       await emit('run.completed', {
@@ -281,6 +336,20 @@ export class AgentRunner {
           code: run.error_code,
           message: error instanceof Error ? error.message : 'Harness execution failed',
         })
+        const failedMessage = await this.createMessage({
+          roleSessionId: run.role_session_id,
+          actor: pending.actor,
+          runId: run.id,
+          clarificationRoundId: pending.answeredRound?.id ?? null,
+          senderType: 'SYSTEM',
+          content: '本次 Agent 运行失败，消息已经保留。你可以稍后重试。',
+          structuredContent: { error_code: run.error_code },
+          status: 'FAILED',
+        })
+        await emit('assistant.completed', {
+          message_id: failedMessage.id,
+          status: failedMessage.status,
+        })
       }
     } finally {
       this.controllers.delete(run.id)
@@ -289,10 +358,11 @@ export class AgentRunner {
 
   private async persistHarnessResult(
     run: AgentRun,
-    actor: ActorContext,
+    pending: PendingRun,
     result: HarnessResult,
     emit: (type: AgentEventType, payload: Record<string, unknown>) => Promise<void>,
-  ): Promise<void> {
+  ): Promise<ConversationMessage | null> {
+    const actor = pending.actor
     if (result.kind === 'CLARIFICATION') {
       if (result.persistence !== 'TOOL') {
         await this.roleService.saveFactDraft(
@@ -302,8 +372,98 @@ export class AgentRunner {
           result.fact_draft.category,
         )
       }
-      await emit('question.ready', { question: result.question })
-      return
+      const timestamp = new Date().toISOString()
+      const policy = await this.store.getClarificationPolicy(run.role_session_id)
+      if (pending.answeredRound) {
+        const completedRound: ClarificationRound = {
+          ...pending.answeredRound,
+          status: 'COMPLETED',
+          resolved_by_message_id: pending.inputMessage?.id ?? null,
+          completed_at: timestamp,
+        }
+        await this.store.updateClarificationRound(completedRound)
+        policy.completed_rounds += 1
+        policy.open_round_id = null
+        await emit('clarification.round.completed', {
+          round_id: completedRound.id,
+          ordinal: completedRound.ordinal,
+        })
+      }
+
+      const budget = policy.initial_budget + policy.granted_rounds
+      const canOpenRound = policy.opened_rounds < budget
+      let openedRound: ClarificationRound | null = null
+      let content = result.answer
+      let structuredContent: Record<string, unknown>
+      if (canOpenRound) {
+        openedRound = {
+          id: randomUUID(),
+          role_session_id: run.role_session_id,
+          ordinal: policy.opened_rounds + 1,
+          status: 'OPEN',
+          question: result.question,
+          opened_by_run_id: run.id,
+          resolved_by_message_id: null,
+          created_at: timestamp,
+          completed_at: null,
+        }
+        await this.store.insertClarificationRound(openedRound)
+        policy.opened_rounds = openedRound.ordinal
+        policy.open_round_id = openedRound.id
+        policy.status = 'ACTIVE'
+        structuredContent = {
+          kind: 'CLARIFICATION',
+          question: result.question,
+          round_ordinal: openedRound.ordinal,
+          budget,
+        }
+      } else {
+        policy.status = 'LIMIT_REACHED'
+        content = `${result.answer}\n\n本轮主动澄清预算已经用完。我已保留当前结论，请选择按现有信息生成岗位画像，或由经理、HR、企业管理员增加澄清轮数。`
+        structuredContent = {
+          kind: 'CLARIFICATION_LIMIT',
+          completed_rounds: policy.completed_rounds,
+          budget,
+        }
+      }
+      policy.updated_by = actor.user_id
+      policy.updated_at = timestamp
+      await this.store.saveClarificationPolicy(policy)
+
+      const message = await this.createMessage({
+        roleSessionId: run.role_session_id,
+        actor,
+        runId: run.id,
+        clarificationRoundId: openedRound?.id ?? null,
+        senderType: 'AGENT',
+        content,
+        structuredContent,
+        status: 'COMPLETED',
+      })
+      await emit('assistant.completed', {
+        message_id: message.id,
+        sequence: message.sequence,
+      })
+      if (openedRound) {
+        await emit('question.ready', {
+          question: result.question,
+          message_id: message.id,
+          round_id: openedRound.id,
+          ordinal: openedRound.ordinal,
+          budget,
+        })
+        await emit('clarification.round.opened', {
+          round_id: openedRound.id,
+          ordinal: openedRound.ordinal,
+          budget,
+        })
+      } else {
+        await emit('clarification.limit.reached', {
+          completed_rounds: policy.completed_rounds,
+          budget,
+        })
+      }
+      return message
     }
     if (result.kind === 'ARTIFACT') {
       if (result.persistence === 'TOOL') {
@@ -311,7 +471,12 @@ export class AgentRunner {
           artifact_type: result.artifact_type,
           source: 'harness-tool',
         })
-        return
+        const message = await this.createAgentSummary(run, actor, result.summary, {
+          kind: 'ARTIFACT',
+          artifact_type: result.artifact_type,
+        })
+        await emit('assistant.completed', { message_id: message.id, sequence: message.sequence })
+        return message
       }
       const artifact = await this.roleService.saveArtifactDraft(
         run.role_session_id,
@@ -325,7 +490,13 @@ export class AgentRunner {
         version: artifact.version,
         content_hash: artifact.content_hash,
       })
-      return
+      const message = await this.createAgentSummary(run, actor, result.summary, {
+        kind: 'ARTIFACT',
+        artifact_type: result.artifact_type,
+        version: artifact.version,
+      })
+      await emit('assistant.completed', { message_id: message.id, sequence: message.sequence })
+      return message
     }
     if (result.kind === 'CANDIDATE_EVIDENCE') {
       if (result.persistence === 'TOOL') {
@@ -334,7 +505,12 @@ export class AgentRunner {
           candidate_count: result.candidates.length,
           source: 'harness-tool',
         })
-        return
+        const message = await this.createAgentSummary(run, actor, result.summary, {
+          kind: 'CANDIDATE_EVIDENCE',
+          candidate_count: result.candidates.length,
+        })
+        await emit('assistant.completed', { message_id: message.id, sequence: message.sequence })
+        return message
       }
       const outcome = await this.roleService.importCandidateEvidence(
         run.role_session_id,
@@ -346,6 +522,76 @@ export class AgentRunner {
         candidate_count: outcome.state.candidate_count,
         calibration_status: outcome.evaluation.status,
       })
+      const message = await this.createAgentSummary(run, actor, result.summary, {
+        kind: 'CANDIDATE_EVIDENCE',
+        candidate_count: result.candidates.length,
+      })
+      await emit('assistant.completed', { message_id: message.id, sequence: message.sequence })
+      return message
     }
+    const message = await this.createAgentSummary(run, actor, result.summary, {
+      kind: 'CALIBRATION_ADVICE',
+    })
+    await emit('assistant.completed', { message_id: message.id, sequence: message.sequence })
+    return message
+  }
+
+  private async createAgentSummary(
+    run: AgentRun,
+    actor: ActorContext,
+    content: string,
+    structuredContent: Record<string, unknown>,
+  ): Promise<ConversationMessage> {
+    return this.createMessage({
+      roleSessionId: run.role_session_id,
+      actor,
+      runId: run.id,
+      clarificationRoundId: null,
+      senderType: 'AGENT',
+      content,
+      structuredContent,
+      status: 'COMPLETED',
+    })
+  }
+
+  private async createMessage(input: {
+    id?: string
+    roleSessionId: string
+    actor: ActorContext
+    runId: string | null
+    clarificationRoundId: string | null
+    senderType: 'HUMAN' | 'AGENT' | 'SYSTEM'
+    content: string
+    structuredContent: Record<string, unknown> | null
+    status: ConversationMessage['status']
+  }): Promise<ConversationMessage> {
+    const existing = await this.store.listConversationMessages(input.roleSessionId)
+    const timestamp = new Date().toISOString()
+    const senderName = input.senderType === 'AGENT'
+      ? '画像澄清 Agent'
+      : input.senderType === 'SYSTEM'
+        ? '系统'
+        : input.actor.display_name
+    const message: ConversationMessage = {
+      id: input.id ?? randomUUID(),
+      tenant_id: input.actor.tenant_id,
+      role_session_id: input.roleSessionId,
+      run_id: input.runId,
+      clarification_round_id: input.clarificationRoundId,
+      sender_type: input.senderType,
+      sender_user_id: input.senderType === 'HUMAN' ? input.actor.user_id : null,
+      sender_role: input.senderType === 'HUMAN' ? input.actor.role : null,
+      sender_name: senderName,
+      content: input.content,
+      structured_content: input.structuredContent,
+      status: input.status,
+      sequence: (existing.at(-1)?.sequence ?? 0) + 1,
+      created_at: timestamp,
+      completed_at: ['COMPLETED', 'FAILED', 'CANCELLED'].includes(input.status)
+        ? timestamp
+        : null,
+    }
+    await this.store.appendConversationMessage(message)
+    return message
   }
 }

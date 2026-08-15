@@ -20,6 +20,13 @@ export const demoUsers: StoredUser[] = [
     display_name: 'HR · 林夏',
     active: true,
   },
+  {
+    tenant_id: 'tenant-demo',
+    user_id: 'admin-demo',
+    role: 'ADMIN',
+    display_name: '企业管理员 · 周宁',
+    active: true,
+  },
 ]
 
 const facts: Fact[] = [

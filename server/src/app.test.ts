@@ -20,7 +20,10 @@ const cookieFrom = (response: {
   return String(value).split(';')[0] ?? ''
 }
 
-const login = async (app: FastifyInstance, userId: 'manager-demo' | 'hr-demo'): Promise<string> => {
+const login = async (
+  app: FastifyInstance,
+  userId: 'manager-demo' | 'hr-demo' | 'admin-demo',
+): Promise<string> => {
   const response = await app.inject({
     method: 'POST',
     url: '/api/v1/auth/login',
@@ -79,7 +82,7 @@ describe('Role Clarifier API', () => {
     ).toBe(true)
   })
 
-  it('消息接口立即返回 202，后台 Run 产生可追踪事件且不记录用户原文', async () => {
+  it('消息接口立即落库并返回 202，企业管理员可读取不含用户原文的 Trace', async () => {
     const cookie = await login(app, 'manager-demo')
     const response = await app.inject({
       method: 'POST',
@@ -89,12 +92,21 @@ describe('Role Clarifier API', () => {
     })
     expect(response.statusCode).toBe(202)
     const { run_id: runId } = response.json()
+    expect(response.json().message.content).toBe('半年内要建立一套可复用的商业化产品机制')
+    const managerTrace = await app.inject({
+      method: 'GET',
+      url: `/api/v1/agent-runs/${runId}/trace`,
+      headers: { cookie },
+    })
+    expect(managerTrace.statusCode).toBe(403)
+
+    const adminCookie = await login(app, 'admin-demo')
     let trace
     for (let attempt = 0; attempt < 30; attempt += 1) {
       const traceResponse = await app.inject({
         method: 'GET',
-        url: `/api/v1/agent-runs/${runId}/trace`,
-        headers: { cookie },
+        url: `/api/v1/admin/agent-runs/${runId}/trace`,
+        headers: { cookie: adminCookie },
       })
       trace = traceResponse.json()
       if (trace.run.status === 'COMPLETED') break
@@ -105,8 +117,124 @@ describe('Role Clarifier API', () => {
     expect(trace.privacy).toEqual({
       raw_user_message_logged: false,
       candidate_content_logged: false,
+      hidden_reasoning_exposed: false,
     })
     expect(JSON.stringify(trace)).not.toContain('半年内要建立')
+
+    const messages = await app.inject({
+      method: 'GET',
+      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/messages`,
+      headers: { cookie },
+    })
+    expect(messages.statusCode).toBe(200)
+    expect(messages.json().items.map((item: { sender_type: string }) => item.sender_type)).toEqual([
+      'HUMAN',
+      'AGENT',
+    ])
+    expect(messages.json().policy.opened_rounds).toBe(1)
+  })
+
+  it('经理、HR与企业管理员都能用真实身份和 Agent 对话', async () => {
+    for (const userId of ['manager-demo', 'hr-demo', 'admin-demo'] as const) {
+      const cookie = await login(app, userId)
+      const response = await app.inject({
+        method: 'POST',
+        url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/messages`,
+        headers: { cookie },
+        payload: { content: `${userId} 补充岗位信息` },
+      })
+      expect(response.statusCode, response.body).toBe(202)
+      const runId = response.json().run_id
+      for (let attempt = 0; attempt < 30; attempt += 1) {
+        const status = await app.inject({
+          method: 'GET',
+          url: `/api/v1/agent-runs/${runId}`,
+          headers: { cookie },
+        })
+        if (status.json().run.status === 'COMPLETED') break
+        await new Promise((resolve) => setTimeout(resolve, 10))
+      }
+    }
+    const adminCookie = await login(app, 'admin-demo')
+    const messages = (
+      await app.inject({
+        method: 'GET',
+        url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/messages`,
+        headers: { cookie: adminCookie },
+      })
+    ).json().items
+    expect(messages.filter((item: { sender_type: string }) => item.sender_type === 'HUMAN'))
+      .toMatchObject([
+        { sender_role: 'MANAGER' },
+        { sender_role: 'HR' },
+        { sender_role: 'ADMIN' },
+      ])
+  })
+
+  it('主动澄清预算由企业策略控制，达到上限后可审计地增加轮数', async () => {
+    const adminCookie = await login(app, 'admin-demo')
+    const policyUpdate = await app.inject({
+      method: 'PUT',
+      url: '/api/v1/admin/agent-policy',
+      headers: { cookie: adminCookie },
+      payload: { initial_budget: 1, extension_size: 2 },
+    })
+    expect(policyUpdate.statusCode).toBe(200)
+
+    const managerCookie = await login(app, 'manager-demo')
+    const first = await app.inject({
+      method: 'POST',
+      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/messages`,
+      headers: { cookie: managerCookie },
+      payload: { content: '先确认这个岗位的招聘原因' },
+    })
+    const firstRunId = first.json().run_id
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      const status = await app.inject({
+        method: 'GET',
+        url: `/api/v1/agent-runs/${firstRunId}`,
+        headers: { cookie: managerCookie },
+      })
+      if (status.json().run.status === 'COMPLETED') break
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    const second = await app.inject({
+      method: 'POST',
+      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/messages`,
+      headers: { cookie: managerCookie },
+      payload: { content: '半年内形成可复用的方法并完成一次验证' },
+    })
+    const secondRunId = second.json().run_id
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      const status = await app.inject({
+        method: 'GET',
+        url: `/api/v1/agent-runs/${secondRunId}`,
+        headers: { cookie: managerCookie },
+      })
+      if (status.json().run.status === 'COMPLETED') break
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    const beforeExtend = (
+      await app.inject({
+        method: 'GET',
+        url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/messages`,
+        headers: { cookie: managerCookie },
+      })
+    ).json().policy
+    expect(beforeExtend).toMatchObject({
+      initial_budget: 1,
+      completed_rounds: 1,
+      status: 'LIMIT_REACHED',
+    })
+
+    const extended = await app.inject({
+      method: 'POST',
+      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/clarification:extend`,
+      headers: { cookie: managerCookie },
+      payload: { reason: '仍需确认结果验收口径' },
+    })
+    expect(extended.statusCode).toBe(200)
+    expect(extended.json().policy).toMatchObject({ granted_rounds: 2, status: 'ACTIVE' })
   })
 
   it('候选人资料发现手机号时在进入模型前拒绝', async () => {
@@ -174,7 +302,7 @@ describe('Role Clarifier API', () => {
     for (let attempt = 0; attempt < 30; attempt += 1) {
       const traceResponse = await app.inject({
         method: 'GET',
-        url: `/api/v1/agent-runs/${runId}/trace`,
+        url: `/api/v1/agent-runs/${runId}`,
         headers: { cookie: hrCookie },
       })
       if (traceResponse.json().run.status === 'COMPLETED') break

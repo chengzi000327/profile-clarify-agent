@@ -81,7 +81,7 @@ export const assertRoleAccess = (actor: ActorContext, state: RoleState): void =>
 }
 
 export const assertArtifactAccess = (actor: ActorContext, type: ArtifactType): void => {
-  if (ARTIFACT_VISIBILITY[type] === 'HR_ONLY' && actor.role !== 'HR') {
+  if (ARTIFACT_VISIBILITY[type] === 'HR_ONLY' && !['HR', 'ADMIN'].includes(actor.role)) {
     throw new DomainError('ROLE_SESSION_NOT_FOUND', '产物不存在', 404)
   }
 }

@@ -4,9 +4,13 @@ import type {
   AgentRun,
   ArtifactEnvelope,
   CandidateEvidence,
+  ClarificationPolicy,
+  ClarificationRound,
+  ConversationMessage,
   RoleState,
 } from '@role-clarifier/contracts'
 import type {
+  AdminRunRecord,
   ApplicationStore,
   CalibrationSignalRecord,
   DecisionRecord,
@@ -15,6 +19,7 @@ import type {
   RoleAggregate,
   RunRecord,
   StoredUser,
+  TraceAccessAuditRecord,
 } from './types.js'
 import { createDemoAggregate, demoUsers } from './seed.js'
 
@@ -25,13 +30,18 @@ export class MemoryStore implements ApplicationStore {
   private readonly roles = new Map<string, RoleAggregate>()
   private readonly runs = new Map<string, RunRecord>()
   private readonly events = new Map<string, AgentEvent[]>()
+  private readonly messages = new Map<string, ConversationMessage[]>()
+  private readonly policies = new Map<string, ClarificationPolicy>()
+  private readonly rounds = new Map<string, ClarificationRound[]>()
   private readonly subscribers = new Map<string, Set<EventSubscriber>>()
   private readonly decisions: DecisionRecord[] = []
+  private readonly traceAudits: TraceAccessAuditRecord[] = []
 
   async initialize(): Promise<void> {
     for (const user of demoUsers) this.users.set(user.user_id, clone(user))
     const aggregate = createDemoAggregate()
     this.roles.set(aggregate.state.id, aggregate)
+    this.policies.set(aggregate.state.id, this.makeDefaultPolicy(aggregate.state.id))
   }
 
   async close(): Promise<void> {}
@@ -44,7 +54,8 @@ export class MemoryStore implements ApplicationStore {
     return [...this.roles.values()]
       .filter(
         ({ state, member_ids }) =>
-          state.tenant_id === actor.tenant_id && member_ids.includes(actor.user_id),
+          state.tenant_id === actor.tenant_id &&
+          (actor.role === 'ADMIN' || member_ids.includes(actor.user_id)),
       )
       .map(({ state }) => clone(state))
       .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
@@ -55,7 +66,7 @@ export class MemoryStore implements ApplicationStore {
     if (
       !aggregate ||
       aggregate.state.tenant_id !== actor.tenant_id ||
-      !aggregate.member_ids.includes(actor.user_id)
+      (actor.role !== 'ADMIN' && !aggregate.member_ids.includes(actor.user_id))
     ) {
       return null
     }
@@ -64,6 +75,7 @@ export class MemoryStore implements ApplicationStore {
 
   async createRoleAggregate(aggregate: RoleAggregate): Promise<void> {
     this.roles.set(aggregate.state.id, clone(aggregate))
+    this.policies.set(aggregate.state.id, this.makeDefaultPolicy(aggregate.state.id))
   }
 
   async saveRoleState(state: RoleState, expectedRevision: number): Promise<boolean> {
@@ -184,6 +196,104 @@ export class MemoryStore implements ApplicationStore {
     return () => {
       subscribers.delete(subscriber)
       if (subscribers.size === 0) this.subscribers.delete(runId)
+    }
+  }
+
+  async listConversationMessages(
+    roleSessionId: string,
+    afterSequence = 0,
+  ): Promise<ConversationMessage[]> {
+    return clone(
+      (this.messages.get(roleSessionId) ?? []).filter(
+        (message) => message.sequence > afterSequence,
+      ),
+    )
+  }
+
+  async appendConversationMessage(message: ConversationMessage): Promise<void> {
+    const messages = this.messages.get(message.role_session_id) ?? []
+    messages.push(clone(message))
+    messages.sort((left, right) => left.sequence - right.sequence)
+    this.messages.set(message.role_session_id, messages)
+  }
+
+  async updateConversationMessage(message: ConversationMessage): Promise<void> {
+    const messages = this.messages.get(message.role_session_id) ?? []
+    const index = messages.findIndex((item) => item.id === message.id)
+    if (index < 0) throw new Error('Missing conversation message')
+    messages[index] = clone(message)
+  }
+
+  async getClarificationPolicy(roleSessionId: string): Promise<ClarificationPolicy> {
+    const policy = this.policies.get(roleSessionId) ?? this.makeDefaultPolicy(roleSessionId)
+    this.policies.set(roleSessionId, clone(policy))
+    return clone(policy)
+  }
+
+  async saveClarificationPolicy(policy: ClarificationPolicy): Promise<void> {
+    this.policies.set(policy.role_session_id, clone(policy))
+  }
+
+  async getOpenClarificationRound(roleSessionId: string): Promise<ClarificationRound | null> {
+    const round = (this.rounds.get(roleSessionId) ?? []).find((item) => item.status === 'OPEN')
+    return clone(round ?? null)
+  }
+
+  async insertClarificationRound(round: ClarificationRound): Promise<void> {
+    const rounds = this.rounds.get(round.role_session_id) ?? []
+    rounds.push(clone(round))
+    this.rounds.set(round.role_session_id, rounds)
+  }
+
+  async updateClarificationRound(round: ClarificationRound): Promise<void> {
+    const rounds = this.rounds.get(round.role_session_id) ?? []
+    const index = rounds.findIndex((item) => item.id === round.id)
+    if (index < 0) throw new Error('Missing clarification round')
+    rounds[index] = clone(round)
+  }
+
+  async listRunsForTenant(tenantId: string): Promise<AdminRunRecord[]> {
+    return [...this.runs.values()]
+      .filter(({ run }) => this.roles.get(run.role_session_id)?.state.tenant_id === tenantId)
+      .map((record) => {
+        const actor = this.users.get(record.run.actor_user_id)
+        const role = this.roles.get(record.run.role_session_id)
+        return {
+          ...clone(record),
+          role_title: role?.state.title ?? '未知岗位',
+          actor_display_name: actor?.display_name ?? record.run.actor_user_id,
+          actor_role: actor?.role ?? 'MANAGER',
+        }
+      })
+      .sort((left, right) =>
+        (right.run.started_at ?? '').localeCompare(left.run.started_at ?? ''),
+      )
+  }
+
+  async appendTraceAccessAudit(record: TraceAccessAuditRecord): Promise<void> {
+    this.traceAudits.push(clone(record))
+  }
+
+  async listTraceAccessAudits(tenantId: string): Promise<TraceAccessAuditRecord[]> {
+    return clone(
+      this.traceAudits
+        .filter((record) => record.tenant_id === tenantId)
+        .sort((left, right) => right.created_at.localeCompare(left.created_at)),
+    )
+  }
+
+  private makeDefaultPolicy(roleSessionId: string): ClarificationPolicy {
+    return {
+      role_session_id: roleSessionId,
+      initial_budget: 6,
+      granted_rounds: 0,
+      extension_size: 2,
+      completed_rounds: 0,
+      opened_rounds: 0,
+      open_round_id: null,
+      status: 'ACTIVE',
+      updated_by: null,
+      updated_at: new Date().toISOString(),
     }
   }
 }
