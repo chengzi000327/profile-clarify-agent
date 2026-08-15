@@ -1,12 +1,14 @@
 {
-  "name": "role-profile-agent-workbench",
+  "name": "@role-clarifier/web",
   "private": true,
   "version": "0.1.0",
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
-    "preview": "vite preview --host 127.0.0.1"
+    "preview": "vite preview --host 127.0.0.1",
+    "typecheck": "vite build",
+    "test": "vite build"
   },
   "dependencies": {
     "@fontsource/ibm-plex-sans": "^5.2.7",

@@ -1,0 +1,78 @@
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: role_agent
+      POSTGRES_USER: role_agent
+      POSTGRES_PASSWORD: role_agent
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U role_agent -d role_agent"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - role_agent_db:/var/lib/postgresql/data
+
+  api:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    environment:
+      NODE_ENV: production
+      PORT: 4100
+      DATABASE_URL: postgres://role_agent:role_agent@db:5432/role_agent
+      SESSION_SECRET: test-environment-session-secret-change-before-shared-use
+      WEB_ORIGIN: http://localhost:8080
+      HARNESS_MODE: sidecar
+      HARNESS_BASE_URL: http://harness-sidecar:4110
+      HARNESS_SIDECAR_TOKEN: test-environment-sidecar-token
+      AGENT_CONCURRENCY: 4
+      TOOL_TIMEOUT_MS: 5000
+      ROLE_AGENT_TOOL_TOKEN: test-environment-harness-tool-token
+    depends_on:
+      db:
+        condition: service_healthy
+      harness-sidecar:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:4100/healthz').then(r=>{if(!r.ok)process.exit(1)})"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  harness-sidecar:
+    build:
+      context: .
+      dockerfile: harness-sidecar/Dockerfile
+    environment:
+      NODE_ENV: production
+      SIDECAR_PORT: 4110
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      DEEPSEEK_FLASH_MODEL: ${DEEPSEEK_FLASH_MODEL:-deepseek-v4-flash}
+      DEEPSEEK_PRO_MODEL: ${DEEPSEEK_PRO_MODEL:-deepseek-v4-pro}
+      HARNESS_SIDECAR_TOKEN: test-environment-sidecar-token
+      ROLE_AGENT_INTERNAL_URL: http://api:4100
+      ROLE_AGENT_TOOL_TOKEN: test-environment-harness-tool-token
+      SIDECAR_CONCURRENCY: 4
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:4110/healthz').then(r=>{if(!r.ok)process.exit(1)})"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  web:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    ports:
+      - "8080:80"
+    environment:
+      PORT: 80
+      API_UPSTREAM: http://api:4100
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  role_agent_db:

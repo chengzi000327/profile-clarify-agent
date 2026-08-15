@@ -1,0 +1,102 @@
+# Applied after dsh-base and dsh-headless. Every general-purpose coding or
+# discovery tool is disabled at the composition layer; only the six domain
+# tools registered by this bundle remain model-visible.
+- update:
+    - id: session-telemetry-otel
+      name: '@deepseek-ai/dsh-session-telemetry-otel'
+      disabled: true
+    - id: subprocess
+      name: '@deepseek-ai/dsh-subprocess-local'
+      disabled: true
+    - id: sandbox
+      name: '@deepseek-ai/dsh-sandbox-local'
+      disabled: true
+    - id: sandbox-policy
+      name: '@deepseek-ai/dsh-sandbox-policy'
+      disabled: true
+    - id: bash-sandbox
+      name: '@deepseek-ai/dsh-bash-sandbox'
+      disabled: true
+    - id: pwsh-sandbox
+      name: '@deepseek-ai/dsh-pwsh-sandbox'
+      disabled: true
+    - id: shell-env
+      name: '@deepseek-ai/dsh-shell-env'
+      disabled: true
+    - id: tool-bash
+      name: '@deepseek-ai/dsh-tool-bash'
+      disabled: true
+    - id: tool-pwsh
+      name: '@deepseek-ai/dsh-tool-pwsh'
+      disabled: true
+    - id: tool-fs
+      name: '@deepseek-ai/dsh-tool-fs'
+      disabled: true
+    - id: tool-fs-search
+      name: '@deepseek-ai/dsh-tool-fs-search'
+      disabled: true
+    - id: tool-jobs
+      name: '@deepseek-ai/dsh-tool-jobs'
+      disabled: true
+    - id: tool-skill
+      name: '@deepseek-ai/dsh-tool-skill'
+      disabled: true
+    - id: tool-subagent-control
+      name: '@deepseek-ai/dsh-tool-subagent-control'
+      disabled: true
+    - id: tool-subagent-list-agents
+      name: '@deepseek-ai/dsh-tool-subagent-control/list-agents'
+      disabled: true
+    - id: tool-subagent
+      name: '@deepseek-ai/dsh-tool-subagent'
+      disabled: true
+    - id: tool-subagent-fork
+      name: '@deepseek-ai/dsh-tool-subagent'
+      disabled: true
+    - id: tool-subagent-report
+      name: '@deepseek-ai/dsh-tool-subagent-report'
+      disabled: true
+    - id: tool-workflow
+      name: '@deepseek-ai/dsh-tool-workflow'
+      disabled: true
+    - id: tool-todo
+      name: '@deepseek-ai/dsh-tool-todo'
+      disabled: true
+    - id: tool-goal
+      name: '@deepseek-ai/dsh-tool-goal'
+      disabled: true
+    - id: tool-ralph
+      name: '@deepseek-ai/dsh-tool-ralph'
+      disabled: true
+    - id: tool-str-replace-editor
+      name: '@deepseek-ai/dsh-tool-str-replace-editor'
+      disabled: true
+    - id: tool-web
+      name: '@deepseek-ai/dsh-tool-web'
+      disabled: true
+    - id: tools
+      name: '@deepseek-ai/dsh-tools'
+      config:
+        mode: native
+    - id: system-prompt
+      name: '@deepseek-ai/dsh-system-prompt'
+      config:
+        includeHarnessIdentity: true
+        includeRuntimeContext: true
+        persona: ''
+        toolOrder:
+          - read_role_state
+          - save_fact_draft
+          - save_artifact_draft
+          - save_candidate_evidence
+          - propose_calibration_signal
+          - read_version_diff
+          - '<unlisted-tools>'
+
+- insert:
+    - id: role-clarifier-domain
+      name: '@role-clarifier/dsh-bundle'
+      config:
+        apiBaseUrl: !!js process.env.ROLE_AGENT_INTERNAL_URL ?? 'http://api:4100'
+        toolToken: !!js process.env.ROLE_AGENT_TOOL_TOKEN ?? ''
+        timeoutMs: 5000

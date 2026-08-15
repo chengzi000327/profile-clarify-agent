@@ -1,0 +1,30 @@
+{
+  "name": "role-clarifier-agent",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@10.15.1",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "pnpm -r --if-present build",
+    "predev": "pnpm --filter @role-clarifier/contracts build && pnpm --filter @role-clarifier/domain build && pnpm harness:prepare",
+    "dev": "pnpm --parallel --filter @role-clarifier/api --filter @role-clarifier/web --filter @role-clarifier/harness-sidecar dev",
+    "dev:mock": "HARNESS_MODE=mock pnpm --parallel --filter @role-clarifier/api --filter @role-clarifier/web dev",
+    "predev:api": "pnpm --filter @role-clarifier/contracts build && pnpm --filter @role-clarifier/domain build",
+    "dev:api": "pnpm --filter @role-clarifier/api dev",
+    "dev:web": "pnpm --filter @role-clarifier/web dev",
+    "test": "pnpm -r --if-present test",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "db:generate": "pnpm --filter @role-clarifier/api db:generate",
+    "db:migrate": "pnpm --filter @role-clarifier/api db:migrate",
+    "harness:verify": "node packages/dsh-role-clarifier/scripts/verify-profile.mjs",
+    "harness:prepare": "node scripts/prepare-harness-runtime.mjs",
+    "harness:smoke:runtime": "pnpm --filter @role-clarifier/harness-sidecar build && node scripts/smoke-harness-runtime.mjs",
+    "dev:sidecar": "pnpm --filter @role-clarifier/harness-sidecar dev"
+  },
+  "devDependencies": {
+    "typescript": "5.9.2",
+    "vitest": "3.2.4"
+  }
+}

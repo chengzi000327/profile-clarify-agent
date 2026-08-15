@@ -1,0 +1,23 @@
+{
+  "name": "@role-clarifier/dsh-profile",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dsh": {
+    "profile": {
+      "bundles": [
+        "@deepseek-ai/dsh-base",
+        "@deepseek-ai/dsh-headless",
+        "@role-clarifier/dsh-bundle"
+      ]
+    }
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh-base": "0.1.0-rc.5",
+    "@deepseek-ai/dsh-headless": "0.1.0-rc.5",
+    "@role-clarifier/dsh-bundle": "workspace:*"
+  },
+  "devDependencies": {
+    "@deepseek-ai/dsh": "0.1.0-rc.5"
+  }
+}

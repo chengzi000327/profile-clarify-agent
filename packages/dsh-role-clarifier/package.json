@@ -1,0 +1,39 @@
+{
+  "name": "@role-clarifier/dsh-bundle",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "cordis.patch.yml"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "verify-profile": "node scripts/verify-profile.mjs"
+  },
+  "dependencies": {
+    "@deepseek-ai/cordis": "4.0.1",
+    "@deepseek-ai/dsh-agent": "0.1.0-rc.5",
+    "@deepseek-ai/dsh-agent-spine-demo": "0.1.0-rc.5",
+    "@deepseek-ai/dsh-llm-deepseek": "0.1.0-rc.5",
+    "@deepseek-ai/dsh-sdk-jsonrpc-server": "0.1.0-rc.5",
+    "@deepseek-ai/dsh-session-checkpoint-policy": "0.1.0-rc.5",
+    "@deepseek-ai/dsh-session-persistence-jsonl": "0.1.0-rc.5",
+    "@deepseek-ai/dsh-system-prompt": "0.1.0-rc.5",
+    "@deepseek-ai/dsh-tools": "0.1.0-rc.5"
+  },
+  "devDependencies": {
+    "@types/node": "24.3.0",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

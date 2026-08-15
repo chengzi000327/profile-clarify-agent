@@ -1,0 +1,67 @@
+# Railway 部署说明
+
+## 服务拓扑
+
+```text
+Browser -> web (public HTTPS)
+              |-- /api, /healthz -> api (Railway private network)
+                                         |-- PostgreSQL
+                                         `-- harness-sidecar
+                                                   |-- DeepSeek API
+                                                   `-- api internal tools
+```
+
+浏览器不直接访问 API 或 Harness，因此登录 Cookie、REST 和 SSE 保持同源。API、Harness 和数据库只走 Railway 私网。
+
+## 服务变量
+
+### web
+
+- `RAILWAY_DOCKERFILE_PATH=frontend/Dockerfile`
+- `PORT=80`
+- `API_UPSTREAM=http://${{api.RAILWAY_PRIVATE_DOMAIN}}:${{api.PORT}}`
+
+### api
+
+- `RAILWAY_DOCKERFILE_PATH=server/Dockerfile`
+- `NODE_ENV=production`
+- `HOST=::`
+- `PORT=4100`
+- `DATABASE_URL=${{Postgres.DATABASE_URL}}`
+- `WEB_ORIGIN=https://${{web.RAILWAY_PUBLIC_DOMAIN}}`
+- `HARNESS_MODE=sidecar`
+- `HARNESS_BASE_URL=http://${{harness-sidecar.RAILWAY_PRIVATE_DOMAIN}}:${{harness-sidecar.SIDECAR_PORT}}`
+- `DEEPSEEK_FLASH_MODEL=deepseek-v4-flash`
+- `DEEPSEEK_PRO_MODEL=deepseek-v4-pro`
+- `AGENT_CONCURRENCY=4`
+- `TOOL_TIMEOUT_MS=5000`
+- `SESSION_SECRET=<secret>`
+- `HARNESS_SIDECAR_TOKEN=<shared secret>`
+- `ROLE_AGENT_TOOL_TOKEN=<shared secret>`
+
+### harness-sidecar
+
+- `RAILWAY_DOCKERFILE_PATH=harness-sidecar/Dockerfile`
+- `NODE_ENV=production`
+- `HOST=::`
+- `SIDECAR_PORT=4110`
+- `ROLE_AGENT_INTERNAL_URL=http://${{api.RAILWAY_PRIVATE_DOMAIN}}:${{api.PORT}}`
+- `DEEPSEEK_API_KEY=<secret>`
+- `DEEPSEEK_BASE_URL=https://api.deepseek.com`
+- `DEEPSEEK_FLASH_MODEL=deepseek-v4-flash`
+- `DEEPSEEK_PRO_MODEL=deepseek-v4-pro`
+- `DSH_MAX_TOKENS=16384`
+- `DSH_RUN_TIMEOUT_MS=90000`
+- `SIDECAR_CONCURRENCY=4`
+- `HARNESS_SIDECAR_TOKEN=<same shared secret as api>`
+- `ROLE_AGENT_TOOL_TOKEN=<same shared secret as api>`
+
+## 发布门禁
+
+1. 三个 Docker 镜像构建成功。
+2. `api` 和 `harness-sidecar` 的 `/healthz` 在私网可访问。
+3. `web` 的公开 `/healthz` 返回 200。
+4. 经理账号可登录、读取岗位、提交消息并收到完整 SSE。
+5. HR 账号看得到内部招聘画像，经理账号不可见。
+6. 真实 DeepSeek Flash 澄清和 Pro 产物各跑一次。
+7. Trace 不包含用户原文、候选人内容或密钥。

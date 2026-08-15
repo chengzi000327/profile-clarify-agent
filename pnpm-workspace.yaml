@@ -1,0 +1,16 @@
+packages:
+  - frontend
+  - server
+  - harness-sidecar
+  - packages/contracts
+  - packages/domain
+
+# The DeepSeek profile packages intentionally stay outside this install graph.
+# They are overlaid into the exact upstream source commit by
+# scripts/prepare-harness-runtime.mjs, where workspace:^ resolves only against
+# the verified 0.1.0-rc.5 source tree.
+
+catalog:
+  zod: 4.1.5
+  typescript: 5.9.2
+  vitest: 3.2.4

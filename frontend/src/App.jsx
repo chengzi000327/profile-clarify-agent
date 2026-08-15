@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   ArrowRight,
@@ -34,10 +34,12 @@ import {
   evidenceById,
   recruitingPortrait,
   roleProfile,
-  roleSessionsSeed,
   traceRows,
   versions,
 } from './data.js';
+import { api, ApiError } from './api/client.js';
+import LoginScreen from './components/LoginScreen.jsx';
+import { Composer, LiveAgentRun } from './components/AgentConversation.jsx';
 
 const sourceIcons = {
   org: Users,
@@ -45,6 +47,44 @@ const sourceIcons = {
   people: Users,
   database: Database,
 };
+
+const stagePresentation = {
+  CREATED: ['待同步背景', 'active'],
+  CONTEXT_SYNCING: ['正在同步背景', 'active'],
+  REASON_CLARIFYING: ['招聘原因澄清', 'active'],
+  SUCCESS_CLARIFYING: ['成功标准澄清', 'active'],
+  PROFILE_DRAFT: ['画像待确认', 'active'],
+  PROFILE_CONFIRMED: ['画像已确认', 'confirmed'],
+  ASSESSMENT_DRAFT: ['评估方案待确认', 'active'],
+  ASSESSMENT_CONFIRMED: ['评估方案已确认', 'confirmed'],
+  JD_DRAFT: ['JD 待确认', 'active'],
+  JD_CONFIRMED: ['JD 已确认', 'confirmed'],
+  HR_BRIEF_DRAFT: ['HR 画像待确认', 'active'],
+  HR_BRIEF_CONFIRMED: ['HR 画像已确认', 'confirmed'],
+  RECRUITING: ['招聘进行中', 'confirmed'],
+  CALIBRATION_OBSERVING: ['校准观察期', 'calibrating'],
+  CALIBRATION_HR_REVIEW: ['等待 HR 审核', 'calibrating'],
+  CALIBRATION_MANAGER_REVIEW: ['等待经理校准', 'calibrating'],
+  READY_TO_PUBLISH: ['发布准备完成', 'confirmed'],
+  ARCHIVED: ['已归档', 'confirmed'],
+};
+
+function toRoleCard(state) {
+  const [stage, stageTone] = stagePresentation[state.stage] ?? [state.stage, 'active'];
+  const latestProfile = state.latest_artifacts?.ROLE_PROFILE;
+  return {
+    id: state.id,
+    name: state.title,
+    team: state.department,
+    stage,
+    stageTone,
+    meta: state.hc_status === 'APPROVED' ? 'HC 已审批' : 'HC 待审批',
+    version: latestProfile ? `画像 v${latestProfile.version}` : '未生成画像',
+    updatedAt: new Date(state.updated_at).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' }),
+    unread: 0,
+    apiState: state,
+  };
+}
 
 function ClarifierMark({ size = 32, plate = false }) {
   return (
@@ -60,22 +100,90 @@ function ClarifierMark({ size = 32, plate = false }) {
 }
 
 function App() {
-  const [roleSessions, setRoleSessions] = useState(roleSessionsSeed);
-  const [activeRoleId, setActiveRoleId] = useState('role-enterprise-pm');
+  const [actor, setActor] = useState(null);
+  const [booting, setBooting] = useState(true);
+  const [roleSessions, setRoleSessions] = useState([]);
+  const [activeRoleId, setActiveRoleId] = useState(null);
+  const [roleDetail, setRoleDetail] = useState(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [activeView, setActiveView] = useState('conversation');
   const [evidenceId, setEvidenceId] = useState(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
-  const [viewerRole, setViewerRole] = useState('manager');
   const [selectedOutcome, setSelectedOutcome] = useState('diagnosis');
   const [outcomeConfirmed, setOutcomeConfirmed] = useState(false);
+  const [agentEvents, setAgentEvents] = useState([]);
+  const [agentStatus, setAgentStatus] = useState('idle');
+  const [requestError, setRequestError] = useState('');
+  const streamStopRef = useRef(null);
+  const viewerRole = actor?.role === 'HR' ? 'hr' : 'manager';
 
   const activeRole = useMemo(
     () => roleSessions.find((role) => role.id === activeRoleId) ?? roleSessions[0],
     [roleSessions, activeRoleId],
   );
   const evidence = evidenceId ? evidenceById[evidenceId] : null;
+
+  useEffect(() => {
+    let cancelled = false;
+    async function bootstrap() {
+      try {
+        const session = await api.me();
+        if (cancelled) return;
+        setActor(session.actor);
+        await loadRoleSessions(cancelled);
+      } catch (error) {
+        if (!(error instanceof ApiError) || error.status !== 401) setRequestError(error.message);
+      } finally {
+        if (!cancelled) setBooting(false);
+      }
+    }
+    bootstrap();
+    return () => {
+      cancelled = true;
+      streamStopRef.current?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!actor || !activeRoleId) return;
+    let cancelled = false;
+    api.getRoleSession(activeRoleId)
+      .then((detail) => {
+        if (!cancelled) setRoleDetail(detail);
+      })
+      .catch((error) => {
+        if (!cancelled) setRequestError(error.message);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [actor, activeRoleId]);
+
+  async function loadRoleSessions(cancelled = false) {
+    const result = await api.listRoleSessions();
+    if (cancelled) return;
+    const cards = result.items.map(toRoleCard);
+    setRoleSessions(cards);
+    setActiveRoleId((current) => cards.some((item) => item.id === current) ? current : cards[0]?.id ?? null);
+  }
+
+  async function handleLogin(userId) {
+    const session = await api.login(userId);
+    setActor(session.actor);
+    setRequestError('');
+    await loadRoleSessions();
+  }
+
+  async function handleLogout() {
+    streamStopRef.current?.();
+    await api.logout();
+    setActor(null);
+    setRoleSessions([]);
+    setActiveRoleId(null);
+    setRoleDetail(null);
+    setProfileMenuOpen(false);
+  }
 
   function chooseRole(roleId) {
     setActiveRoleId(roleId);
@@ -84,29 +192,110 @@ function App() {
     setOutcomeConfirmed(false);
   }
 
-  function createRoleSession(event) {
+  async function createRoleSession(event) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const roleName = form.get('roleName')?.toString().trim() || '未命名岗位';
     const team = form.get('team')?.toString().trim() || '待补充团队';
-    const id = `role-${Date.now()}`;
-    setRoleSessions((current) => [
-      {
-        id,
-        name: roleName,
-        team,
-        stage: '需求待澄清',
-        stageTone: 'active',
-        meta: '刚创建',
-        version: '未生成画像',
-        updatedAt: '刚刚',
-        unread: 1,
-      },
-      ...current,
+    try {
+      const created = await api.createRoleSession({ title: roleName, department: team });
+      const synced = await api.syncContext(created.state.id, created.state.revision);
+      setRoleDetail({ ...created, state: synced.state });
+      await loadRoleSessions();
+      setActiveRoleId(created.state.id);
+      setActiveView('conversation');
+      setCreateOpen(false);
+    } catch (error) {
+      setRequestError(error.message);
+    }
+  }
+
+  async function refreshActiveRole() {
+    if (!activeRoleId) return;
+    const [detail] = await Promise.all([
+      api.getRoleSession(activeRoleId),
+      loadRoleSessions(),
     ]);
-    setActiveRoleId(id);
-    setActiveView('conversation');
-    setCreateOpen(false);
+    setRoleDetail(detail);
+  }
+
+  function connectRun(runInfo) {
+    streamStopRef.current?.();
+    setAgentStatus('running');
+    streamStopRef.current = api.streamAgentRun(
+      runInfo.stream_url,
+      (event) => {
+        setAgentEvents((current) => [...current, event]);
+        if (event.type === 'agent.status') setAgentStatus(event.payload.status);
+        if (event.type === 'run.completed') {
+          setAgentStatus('completed');
+          refreshActiveRole().catch((error) => setRequestError(error.message));
+        }
+        if (event.type === 'run.failed') {
+          setAgentStatus('failed');
+          setRequestError(event.payload.message ?? 'Agent Run 失败');
+        }
+      },
+      () => setAgentStatus((current) => current === 'running' ? 'reconnecting' : current),
+    );
+  }
+
+  async function sendMessage(content) {
+    if (!activeRoleId) return;
+    setRequestError('');
+    setAgentEvents((current) => [
+      ...current,
+      {
+        id: `local-${Date.now()}`,
+        type: 'user.message',
+        payload: { content },
+      },
+    ]);
+    try {
+      const run = await api.sendMessage(activeRoleId, content, roleDetail?.state.revision);
+      connectRun(run);
+    } catch (error) {
+      setAgentStatus('failed');
+      setRequestError(error.message);
+    }
+  }
+
+  async function handleArtifactAction(type) {
+    if (!activeRoleId || !roleDetail) return;
+    const latest = roleDetail.state.latest_artifacts?.[type];
+    try {
+      if (latest?.status === 'DRAFT') {
+        await api.confirmArtifact(
+          activeRoleId,
+          latest.id,
+          latest.content_hash,
+          roleDetail.state.revision,
+        );
+        await refreshActiveRole();
+      } else {
+        const run = await api.generateArtifact(activeRoleId, type);
+        connectRun(run);
+      }
+    } catch (error) {
+      setRequestError(error.message);
+    }
+  }
+
+  if (booting) {
+    return <div className="app-loading"><ClarifierMark size={46} plate /><span>正在加载岗位工作台…</span></div>;
+  }
+
+  if (!actor) return <LoginScreen onLogin={handleLogin} />;
+
+  if (!activeRole) {
+    return (
+      <div className="app-loading">
+        <ClarifierMark size={46} plate />
+        <span>还没有岗位会话</span>
+        <button className="primary-action" onClick={() => setCreateOpen(true)}>新建岗位澄清</button>
+        {createOpen && <CreateRoleModal onClose={() => setCreateOpen(false)} onSubmit={createRoleSession} />}
+      </div>
+    );
   }
 
   return (
@@ -185,7 +374,7 @@ function App() {
             <span className={`avatar ${viewerRole === 'manager' ? 'avatar-manager' : 'avatar-hr'}`}>{viewerRole === 'manager' ? '陈' : 'HR'}</span>
             {!sidebarCollapsed && (
               <span className="user-copy">
-                <strong>{viewerRole === 'manager' ? '陈晓' : '林薇'}</strong>
+                <strong>{actor.display_name}</strong>
                 <small>{viewerRole === 'manager' ? '用人经理' : 'HR 招聘负责人'}</small>
               </span>
             )}
@@ -193,11 +382,11 @@ function App() {
           </button>
           {profileMenuOpen && !sidebarCollapsed && (
             <div className="profile-popover">
-              <strong>预览角色权限</strong>
-              <span>正式环境由企业身份和岗位协作关系自动授权。</span>
+              <strong>后端身份已验证</strong>
+              <span>权限来自签名 HttpOnly Session，不能通过前端参数切换。</span>
               <div className="role-preview-switch">
-                <button className={viewerRole === 'manager' ? 'active' : ''} onClick={() => { setViewerRole('manager'); setProfileMenuOpen(false); }}>用人经理</button>
-                <button className={viewerRole === 'hr' ? 'active' : ''} onClick={() => { setViewerRole('hr'); setProfileMenuOpen(false); }}>HR 招聘负责人</button>
+                <button className="active" type="button">{viewerRole === 'manager' ? '用人经理' : 'HR 招聘负责人'}</button>
+                <button type="button" onClick={handleLogout}>退出并切换账号</button>
               </div>
             </div>
           )}
@@ -239,6 +428,8 @@ function App() {
           </button>
         </div>
 
+        {requestError && <div className="workspace-error"><AlertTriangle size={14} />{requestError}<button onClick={() => setRequestError('')}><X size={13} /></button></div>}
+
         {activeView === 'conversation' ? (
           <ConversationView
             activeRole={activeRole}
@@ -248,9 +439,19 @@ function App() {
             setOutcomeConfirmed={setOutcomeConfirmed}
             onOpenEvidence={setEvidenceId}
             onOpenProfile={() => setActiveView('profile')}
+            onSend={sendMessage}
+            agentEvents={agentEvents}
+            agentStatus={agentStatus}
           />
         ) : (
-          <ProfileView key={viewerRole} viewerRole={viewerRole} onOpenEvidence={setEvidenceId} />
+          <ProfileView
+            key={viewerRole}
+            viewerRole={viewerRole}
+            onOpenEvidence={setEvidenceId}
+            roleDetail={roleDetail}
+            onArtifactAction={handleArtifactAction}
+            agentStatus={agentStatus}
+          />
         )}
       </main>
 
@@ -268,8 +469,11 @@ function ConversationView({
   setOutcomeConfirmed,
   onOpenEvidence,
   onOpenProfile,
+  onSend,
+  agentEvents,
+  agentStatus,
 }) {
-  const isPrimaryDemo = activeRole.id === 'role-enterprise-pm';
+  const isPrimaryDemo = activeRole.id === 'role-enterprise-pm' || Boolean(activeRole.apiState);
   const outcomeLabels = {
     diagnosis: '建立跨项目的产品化责任主体',
     pilot: '补充客户项目交付产能',
@@ -300,7 +504,7 @@ function ConversationView({
             </div>
           </div>
         </div>
-        <Composer />
+        <Composer onSend={onSend} pending={agentStatus === 'running'} />
       </section>
     );
   }
@@ -335,6 +539,10 @@ function ConversationView({
               })}
             </div>
           </div>
+
+          {agentEvents.length > 0 && (
+            <LiveAgentRun events={agentEvents} status={agentStatus} />
+          )}
 
           <div className="message message-user">
             <div className="message-label">你 · 用人经理</div>
@@ -421,7 +629,7 @@ function ConversationView({
           <div className="run-stats"><span>第 1 轮</span><span>3 个判断步骤</span><span>已引用 6 条证据</span></div>
         </div>
       </div>
-      <Composer />
+      <Composer onSend={onSend} pending={agentStatus === 'running'} />
     </section>
   );
 }
@@ -437,30 +645,7 @@ function OutcomeChoice({ code, value, selected, onSelect, title, detail }) {
   );
 }
 
-function Composer() {
-  const [text, setText] = useState('');
-  return (
-    <div className="composer-dock">
-      <div className="composer">
-        <textarea value={text} onChange={(event) => setText(event.target.value)} placeholder="补充业务背景，或直接回答 Agent 的问题…" rows={1} />
-        <div className="composer-toolbar">
-          <div>
-            <button className="icon-button tiny" aria-label="添加资料"><Plus size={17} /></button>
-            <button className="composer-setting"><ShieldCheck size={14} />会话资料可读</button>
-          </div>
-          <div>
-            <button className="composer-setting">DeepSeek V4 Pro<ChevronDown size={13} /></button>
-            <button className="composer-setting">High<ChevronDown size={13} /></button>
-            <button className="send-button" aria-label="发送" disabled={!text.trim()}><ArrowUp size={17} /></button>
-          </div>
-        </div>
-      </div>
-      <p className="composer-caption">画像结论保留证据和推断状态，仅在用人经理确认后生效。</p>
-    </div>
-  );
-}
-
-function ProfileView({ viewerRole, onOpenEvidence }) {
+function ProfileView({ viewerRole, onOpenEvidence, roleDetail, onArtifactAction, agentStatus }) {
   const [section, setSection] = useState(viewerRole === 'hr' ? 'portrait' : 'basis');
   const [expandedScenario, setExpandedScenario] = useState('T-01');
   const [expandedRequirement, setExpandedRequirement] = useState('C-01');
@@ -481,6 +666,19 @@ function ProfileView({ viewerRole, onOpenEvidence }) {
       : section === 'portrait'
         ? '保存 HR 招聘策略'
         : '确认画像依据';
+  const artifactType = section === 'jd'
+    ? 'PUBLIC_JD'
+    : section === 'assessment'
+      ? 'ASSESSMENT_SCORECARD'
+      : section === 'portrait'
+        ? 'HR_RECRUITING_BRIEF'
+        : 'ROLE_PROFILE';
+  const latestArtifact = roleDetail?.state?.latest_artifacts?.[artifactType];
+  const connectedActionLabel = latestArtifact?.status === 'DRAFT'
+    ? primaryActionLabel
+    : latestArtifact?.status === 'CONFIRMED'
+      ? '生成新版本'
+      : `生成${section === 'jd' ? ' JD' : '草稿'}`;
   const decisionSteps = ['招聘原因与成功标准', '岗位画像', '评估方案', '对外 JD'];
   const currentDecisionStep = section === 'assessment' ? 2 : section === 'jd' ? 3 : 1;
 
@@ -497,7 +695,13 @@ function ProfileView({ viewerRole, onOpenEvidence }) {
           </div>
           <div className="profile-heading-actions">
             <button className="quiet-button"><History size={15} />查看版本</button>
-            <button className="primary-action">{primaryActionLabel}<ChevronRight size={16} /></button>
+            <button
+              className="primary-action"
+              disabled={agentStatus === 'running'}
+              onClick={() => onArtifactAction?.(artifactType)}
+            >
+              {agentStatus === 'running' ? 'Agent 生成中…' : connectedActionLabel}<ChevronRight size={16} />
+            </button>
           </div>
         </div>
 
@@ -553,7 +757,7 @@ function ProfileView({ viewerRole, onOpenEvidence }) {
               setExpandedScore={setExpandedScore}
             />
           )}
-          {section === 'jd' && <JDPreview />}
+          {section === 'jd' && <JDPreview jd={roleDetail?.state?.latest_artifacts?.PUBLIC_JD} />}
         </div>
       </div>
     </section>
@@ -725,38 +929,64 @@ function HiringReasonDecision({ onOpenEvidence }) {
   );
 }
 
-function JDPreview() {
+function JDPreview({ jd }) {
+  const fallbackResponsibilities = [
+    '分析多个客户与业务场景，识别可复用的共性问题，定义清晰的产品边界与路线。',
+    '定义标准能力的核心用户、使用场景、MVP 范围和验证方式，推动方案落地。',
+    '协同销售、交付、解决方案与研发，对客户承诺、短期收入和长期产品价值做出可解释的取舍。',
+    '设计并跟踪产品采用、复用与交付效率指标，把客户验证结果转化为产品迭代决策。',
+  ];
+
+  const fallbackCapabilities = [
+    {
+      title: '复杂 B 端问题抽象与产品化',
+      description: '能够从多个客户或业务场景中识别共性，并说清产品选择与边界。',
+    },
+    {
+      title: '从机会判断到 MVP 验证的闭环能力',
+      description: '不只停留在方案或上线，能用真实用户和结果完成验证与复盘。',
+    },
+    {
+      title: '跨角色的复杂决策推动',
+      description: '能够在没有直接汇报关系的情况下，用事实、取舍和清晰责任推动共识。',
+    },
+    {
+      title: '用指标验证产品价值',
+      description: '能定义有意义的观察指标，理解数据限制，并让数据真正改变产品决策。',
+    },
+  ];
+  const content = jd?.content;
+  const responsibilities = content?.what_you_will_do ?? fallbackResponsibilities;
+  const capabilities = content?.what_we_look_for?.map((item) => ({
+    title: item,
+    description: '',
+  })) ?? fallbackCapabilities;
+  const basics = content?.title_and_basics;
+
   return (
     <div className="jd-preview-shell">
       <div className="jd-toolbar">
-        <div><span className="jd-output-badge"><FileText size={12} />核心发布物</span><strong>对外 JD · 待用人经理确认</strong><span>由招聘原因、岗位画像和评估方案生成</span></div>
+        <div><span className="jd-output-badge"><FileText size={12} />候选人版</span><strong>对外 JD · {jd?.status === 'CONFIRMED' ? '已确认' : '待用人经理确认'}</strong><span>严格保持候选人四段结构</span></div>
         <div className="jd-toolbar-actions"><button className="quiet-button"><FileText size={14} />复制 JD</button></div>
       </div>
       <article className="jd-document">
         <header>
-          <span>企业服务产品部 · 北京 / 上海</span>
-          <h1>企业产品经理</h1>
-          <p>一起把复杂客户需求沉淀为真正可复用的标准产品。</p>
-          <div className="jd-facts"><span>正式编制 · 1 人</span><span>3-2 至 4-1</span><span>汇报给产品负责人</span></div>
+          <span>{roleProfile.meta.team} · {basics?.location ?? roleProfile.meta.location}</span>
+          <h1>{basics?.title ?? roleProfile.meta.title}</h1>
+          <p>一起把复杂问题转化为真正可验证的业务结果。</p>
+          <div className="jd-facts"><span>{basics?.employment_type ?? '全职'}</span><span>{roleProfile.meta.level}</span><span>汇报给{basics?.reporting_line ?? roleProfile.meta.reportsTo}</span></div>
         </header>
-        <section className="jd-background"><h2>为什么现在招聘这个岗位</h2><p>{recruitingPortrait.approvedContext.reason}</p><p>{recruitingPortrait.approvedContext.coreProblem}</p></section>
-        <section><h2>岗位使命</h2><p>{roleProfile.recruitment.mission}</p></section>
-        <section><h2>你将负责</h2><ul>
-          <li>复盘多个客户项目，识别共性场景，形成标准产品路线与清晰边界。</li>
-          <li>定义产品 MVP、验证指标和迭代优先级，并推动真实客户试点。</li>
-          <li>协同销售、交付、解决方案与研发，在复杂约束下形成可执行决策。</li>
-          <li>持续跟踪产品采用率、复用率和交付效率，验证产品化价值。</li>
-        </ul></section>
-        <section><h2>加入后，你需要取得的关键结果</h2><div className="jd-success-results">
-          {roleProfile.outcomes.map((outcome) => <div key={outcome.id}><span>{outcome.horizon}</span><strong>{outcome.title}</strong><p>{outcome.definition}</p></div>)}
+        <section className="jd-about-role">
+          <h2>关于岗位</h2>
+          <p>{content?.about_the_role ?? '我们正在从项目交付走向标准产品。你会从多个客户场景中识别高价值共性需求，定义可复用的产品路线，并推动首个标准能力完成真实客户验证。这个岗位主导跨项目的产品化判断，不代替单个客户的项目交付。'}</p>
+        </section>
+        <section><h2>你会做什么</h2><ol className="jd-responsibility-list">
+          {responsibilities.map((item) => <li key={item}>{item}</li>)}
+        </ol></section>
+        <section><h2>我们希望你具备</h2><div className="jd-capability-list">
+          {capabilities.map((capability) => <div key={capability.title}><strong>{capability.title}</strong>{capability.description && <p>{capability.description}</p>}</div>)}
         </div></section>
-        <section><h2>我们期待你</h2><ul>
-          <li>有从多个客户需求中抽象共性、建立产品边界的真实经验。</li>
-          <li>完整经历过从机会判断、MVP 到客户验证的产品化闭环。</li>
-          <li>能够用事实和取舍推动跨角色团队达成复杂决策。</li>
-        </ul></section>
-        <aside className="jd-preferred"><strong>加分项</strong><p>有企业服务、平台产品或行业解决方案产品化经验；同行业背景不是硬门槛。</p></aside>
-        <footer className="jd-document-footer"><span>本 JD 由画像澄清 Agent 根据用人经理确认内容生成</span><strong>版本 v0.4 · 待发布</strong></footer>
+        <footer className="jd-document-footer"><span>候选人版预览 · 仅包含可公开字段</span><strong>版本 v{jd?.version ?? '0.5'} · {jd?.status === 'CONFIRMED' ? '已确认' : '待发布'}</strong></footer>
       </article>
     </div>
   );
