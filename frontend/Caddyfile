@@ -13,6 +13,4 @@
     try_files {path} /index.html
     file_server
   }
-
-  auto_https off
 }
