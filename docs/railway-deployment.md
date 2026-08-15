@@ -17,20 +17,20 @@ Browser -> web (public HTTPS)
 
 ### web
 
-- `RAILWAY_DOCKERFILE_PATH=frontend/Dockerfile`
+- `RAILWAY_DOCKERFILE_PATH=/frontend/Dockerfile`
 - `PORT=80`
-- `API_UPSTREAM=http://${{api.RAILWAY_PRIVATE_DOMAIN}}:${{api.PORT}}`
+- `API_UPSTREAM=http://api.railway.internal:4100`
 
 ### api
 
-- `RAILWAY_DOCKERFILE_PATH=server/Dockerfile`
+- `RAILWAY_DOCKERFILE_PATH=/server/Dockerfile`
 - `NODE_ENV=production`
 - `HOST=::`
 - `PORT=4100`
 - `DATABASE_URL=${{Postgres.DATABASE_URL}}`
-- `WEB_ORIGIN=https://${{web.RAILWAY_PUBLIC_DOMAIN}}`
+- `WEB_ORIGIN=https://<web service public domain>`
 - `HARNESS_MODE=sidecar`
-- `HARNESS_BASE_URL=http://${{harness-sidecar.RAILWAY_PRIVATE_DOMAIN}}:${{harness-sidecar.SIDECAR_PORT}}`
+- `HARNESS_BASE_URL=http://harness-sidecar.railway.internal:4110`
 - `DEEPSEEK_FLASH_MODEL=deepseek-v4-flash`
 - `DEEPSEEK_PRO_MODEL=deepseek-v4-pro`
 - `AGENT_CONCURRENCY=4`
@@ -41,11 +41,11 @@ Browser -> web (public HTTPS)
 
 ### harness-sidecar
 
-- `RAILWAY_DOCKERFILE_PATH=harness-sidecar/Dockerfile`
+- `RAILWAY_DOCKERFILE_PATH=/harness-sidecar/Dockerfile`
 - `NODE_ENV=production`
 - `HOST=::`
 - `SIDECAR_PORT=4110`
-- `ROLE_AGENT_INTERNAL_URL=http://${{api.RAILWAY_PRIVATE_DOMAIN}}:${{api.PORT}}`
+- `ROLE_AGENT_INTERNAL_URL=http://api.railway.internal:4100`
 - `DEEPSEEK_API_KEY=<secret>`
 - `DEEPSEEK_BASE_URL=https://api.deepseek.com`
 - `DEEPSEEK_FLASH_MODEL=deepseek-v4-flash`

@@ -40,9 +40,9 @@
 
 三个应用服务都从仓库根目录构建，并分别设置：
 
-- `web`: `RAILWAY_DOCKERFILE_PATH=frontend/Dockerfile`，`PORT=80`，`API_UPSTREAM=http://${{api.RAILWAY_PRIVATE_DOMAIN}}:${{api.PORT}}`
-- `api`: `RAILWAY_DOCKERFILE_PATH=server/Dockerfile`，`PORT=4100`，`DATABASE_URL=${{Postgres.DATABASE_URL}}`，`HARNESS_BASE_URL=http://${{harness-sidecar.RAILWAY_PRIVATE_DOMAIN}}:${{harness-sidecar.SIDECAR_PORT}}`
-- `harness-sidecar`: `RAILWAY_DOCKERFILE_PATH=harness-sidecar/Dockerfile`，`SIDECAR_PORT=4110`，`ROLE_AGENT_INTERNAL_URL=http://${{api.RAILWAY_PRIVATE_DOMAIN}}:${{api.PORT}}`
+- `web`: `RAILWAY_DOCKERFILE_PATH=/frontend/Dockerfile`，`PORT=80`，`API_UPSTREAM=http://api.railway.internal:4100`
+- `api`: `RAILWAY_DOCKERFILE_PATH=/server/Dockerfile`，`PORT=4100`，`DATABASE_URL=${{Postgres.DATABASE_URL}}`，`HARNESS_BASE_URL=http://harness-sidecar.railway.internal:4110`
+- `harness-sidecar`: `RAILWAY_DOCKERFILE_PATH=/harness-sidecar/Dockerfile`，`SIDECAR_PORT=4110`，`ROLE_AGENT_INTERNAL_URL=http://api.railway.internal:4100`
 
 `SESSION_SECRET`、`HARNESS_SIDECAR_TOKEN`、`ROLE_AGENT_TOOL_TOKEN` 和 `DEEPSEEK_API_KEY` 只写入 Railway Secret，不提交 Git。详细变量和验收步骤见 `docs/railway-deployment.md`。
 
