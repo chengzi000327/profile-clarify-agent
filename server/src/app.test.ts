@@ -362,4 +362,58 @@ describe('Role Clarifier API', () => {
     })
     expect(response.statusCode).toBe(401)
   })
+
+  it('服务重启后会关闭中断的 Run，并在对话中保留可重试提示', async () => {
+    const store = new MemoryStore()
+    await store.initialize()
+    const createdAt = new Date().toISOString()
+    await store.createRun({
+      id: '22222222-2222-4222-8222-222222222222',
+      role_session_id: DEMO_ROLE_SESSION_ID,
+      actor_user_id: 'hr-demo',
+      status: 'RUNNING',
+      model_tier: 'FLASH',
+      task: 'CLARIFY_MESSAGE',
+      harness_session_id: `role-${DEMO_ROLE_SESSION_ID}`,
+      prompt_version: 'role-clarifier-v1',
+      model_name: 'deepseek-v4-flash',
+      tool_count: 0,
+      input_tokens: 0,
+      output_tokens: 0,
+      started_at: createdAt,
+      completed_at: null,
+      error_code: null,
+      input_message_id: '33333333-3333-4333-8333-333333333333',
+      output_message_id: null,
+    })
+    await store.appendConversationMessage({
+      id: '33333333-3333-4333-8333-333333333333',
+      tenant_id: 'tenant-demo',
+      role_session_id: DEMO_ROLE_SESSION_ID,
+      run_id: '22222222-2222-4222-8222-222222222222',
+      clarification_round_id: null,
+      sender_type: 'HUMAN',
+      sender_user_id: 'hr-demo',
+      sender_role: 'HR',
+      sender_name: 'HR · 林夏',
+      content: '这条消息在部署切换时仍在执行',
+      structured_content: null,
+      status: 'COMPLETED',
+      sequence: 1,
+      created_at: createdAt,
+      completed_at: createdAt,
+    })
+
+    const recoveringApp = await buildApp(config, { store })
+    const recovered = await store.getRun('22222222-2222-4222-8222-222222222222')
+    const messages = await store.listConversationMessages(DEMO_ROLE_SESSION_ID)
+    const events = await store.listRunEvents('22222222-2222-4222-8222-222222222222')
+
+    expect(recovered?.run.status).toBe('FAILED')
+    expect(recovered?.run.error_code).toBe('RUN_INTERRUPTED')
+    expect(messages.at(-1)?.sender_type).toBe('SYSTEM')
+    expect(messages.at(-1)?.content).toContain('原消息已保留')
+    expect(events.map((event) => event.type)).toEqual(['run.failed', 'assistant.completed'])
+    await recoveringApp.close()
+  })
 })

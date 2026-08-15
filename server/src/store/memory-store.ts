@@ -155,6 +155,14 @@ export class MemoryStore implements ApplicationStore {
     return clone(this.runs.get(runId) ?? null)
   }
 
+  async listActiveRuns(): Promise<RunRecord[]> {
+    return clone(
+      [...this.runs.values()].filter(({ run }) =>
+        ['QUEUED', 'RUNNING'].includes(run.status),
+      ),
+    )
+  }
+
   async findActiveRunByRole(roleSessionId: string): Promise<RunRecord | null> {
     const record = [...this.runs.values()].find(
       ({ run }) =>

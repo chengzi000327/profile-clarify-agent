@@ -403,6 +403,15 @@ export class PostgresStore implements ApplicationStore {
     return row ? { run: row.run, cancel_requested: row.cancelRequested } : null
   }
 
+  async listActiveRuns(): Promise<RunRecord[]> {
+    const rows = await this.db
+      .select()
+      .from(schema.agentRuns)
+      .where(inArray(schema.agentRuns.status, ['QUEUED', 'RUNNING']))
+      .orderBy(asc(schema.agentRuns.createdAt))
+    return rows.map((row) => ({ run: row.run, cancel_requested: row.cancelRequested }))
+  }
+
   async findActiveRunByRole(roleSessionId: string): Promise<RunRecord | null> {
     const [row] = await this.db
       .select()

@@ -21,8 +21,10 @@ import {
   PublicJDSchema,
   RoleStateSchema,
   type ActorContext,
+  type AgentEvent,
   type ArtifactType,
   type CandidateEvidence,
+  type ConversationMessage,
 } from '@role-clarifier/contracts'
 import { DomainError } from '@role-clarifier/domain'
 import { AgentRunner } from './agent/runner.js'
@@ -71,6 +73,69 @@ export interface AppDependencies {
   store?: ApplicationStore
 }
 
+const recoverInterruptedRuns = async (store: ApplicationStore): Promise<void> => {
+  const interrupted = await store.listActiveRuns()
+  for (const record of interrupted) {
+    const completedAt = new Date().toISOString()
+    const priorEvents = await store.listRunEvents(record.run.id)
+    let sequence = priorEvents.at(-1)?.sequence ?? 0
+    const messages = record.run.input_message_id
+      ? await store.listConversationMessages(record.run.role_session_id)
+      : []
+    const inputMessage = messages.find((message) => message.id === record.run.input_message_id)
+    let recoveryMessage: ConversationMessage | null = null
+    if (inputMessage) {
+      recoveryMessage = {
+        id: randomUUID(),
+        tenant_id: inputMessage.tenant_id,
+        role_session_id: record.run.role_session_id,
+        run_id: record.run.id,
+        clarification_round_id: inputMessage.clarification_round_id,
+        sender_type: 'SYSTEM',
+        sender_user_id: null,
+        sender_role: null,
+        sender_name: '系统',
+        content: '服务重启中断了本次 Agent 运行，原消息已保留，请重新发送或继续对话。',
+        structured_content: { error_code: 'RUN_INTERRUPTED' },
+        status: 'FAILED',
+        sequence: (messages.at(-1)?.sequence ?? 0) + 1,
+        created_at: completedAt,
+        completed_at: completedAt,
+      }
+      await store.appendConversationMessage(recoveryMessage)
+    }
+    await store.updateRun({
+      ...record.run,
+      status: 'FAILED',
+      completed_at: completedAt,
+      error_code: 'RUN_INTERRUPTED',
+      output_message_id: recoveryMessage?.id ?? null,
+    })
+    const failureEvent: AgentEvent = {
+      id: randomUUID(),
+      run_id: record.run.id,
+      sequence: ++sequence,
+      type: 'run.failed',
+      payload: {
+        code: 'RUN_INTERRUPTED',
+        message: '服务重启中断了本次 Agent 运行，原输入已保留',
+      },
+      created_at: completedAt,
+    }
+    await store.appendRunEvent(failureEvent)
+    if (recoveryMessage) {
+      await store.appendRunEvent({
+        id: randomUUID(),
+        run_id: record.run.id,
+        sequence: ++sequence,
+        type: 'assistant.completed',
+        payload: { message_id: recoveryMessage.id, status: recoveryMessage.status },
+        created_at: completedAt,
+      })
+    }
+  }
+}
+
 export const buildApp = async (
   config: AppConfig,
   dependencies: AppDependencies = {},
@@ -92,6 +157,7 @@ export const buildApp = async (
   })
   const store = dependencies.store ?? createStore(config)
   await store.initialize()
+  await recoverInterruptedRuns(store)
   const roleService = new RoleService(store)
   const runner = new AgentRunner(store, roleService, createHarnessAdapter(config), config)
 

@@ -103,6 +103,7 @@ export interface ApplicationStore {
   appendDecision(record: DecisionRecord): Promise<void>
   createRun(run: AgentRun): Promise<void>
   getRun(runId: string): Promise<RunRecord | null>
+  listActiveRuns(): Promise<RunRecord[]>
   findActiveRunByRole(roleSessionId: string): Promise<RunRecord | null>
   updateRun(run: AgentRun): Promise<void>
   requestRunCancel(runId: string): Promise<boolean>
