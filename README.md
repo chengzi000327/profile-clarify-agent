@@ -36,7 +36,7 @@
 
 ## Railway 线上环境
 
-生产环境拆为 `web`、`api`、`harness-sidecar` 和 PostgreSQL 四个 Railway 服务。只有 `web` 生成公开域名；浏览器的 REST、登录 Cookie 和 SSE 都由 Nginx 同源转发到 API。API、Harness 和数据库使用 Railway 私网互联，不直接暴露公网。
+生产环境拆为 `web`、`api`、`harness-sidecar` 和 PostgreSQL 四个 Railway 服务。只有 `web` 生成公开域名；浏览器的 REST、登录 Cookie 和 SSE 都由 Caddy 同源转发到 API。API、Harness 和数据库使用 Railway 私网互联，不直接暴露公网。Caddy 会按 Railway DNS TTL 重新解析 API 私网地址，服务滚动重启后不会继续使用旧 IP。
 
 三个应用服务都从仓库根目录构建，并分别设置：
 

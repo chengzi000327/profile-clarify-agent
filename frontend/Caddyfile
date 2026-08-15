@@ -1,0 +1,18 @@
+:{$PORT:80} {
+  handle /api/* {
+    reverse_proxy {$API_UPSTREAM}
+  }
+
+  handle /healthz {
+    reverse_proxy {$API_UPSTREAM}
+  }
+
+  handle {
+    root * /srv
+    encode zstd gzip
+    try_files {path} /index.html
+    file_server
+  }
+
+  auto_https off
+}

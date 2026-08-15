@@ -11,7 +11,7 @@ Browser -> web (public HTTPS)
                                                    `-- api internal tools
 ```
 
-浏览器不直接访问 API 或 Harness，因此登录 Cookie、REST 和 SSE 保持同源。API、Harness 和数据库只走 Railway 私网。
+浏览器不直接访问 API 或 Harness，因此登录 Cookie、REST 和 SSE 保持同源。Web 服务使用 Caddy 代理并按 DNS TTL 重新解析 API 私网地址；API、Harness 和数据库只走 Railway 私网。
 
 ## 服务变量
 
