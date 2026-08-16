@@ -1360,6 +1360,96 @@ textarea:focus-visible {
   background: #f1fbf6;
 }
 
+.empty-profile-fact-review {
+  width: 100%;
+  max-width: 590px;
+  margin: 0 0 20px;
+  padding: 14px;
+  border: 1px solid #cfdbf3;
+  border-radius: 10px;
+  background: #f7faff;
+  text-align: left;
+}
+
+.empty-profile-fact-review-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  color: #315f9f;
+}
+
+.empty-profile-fact-review-heading > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.empty-profile-fact-review-heading strong {
+  color: #244f8d;
+  font-size: 12px;
+}
+
+.empty-profile-fact-review-heading span,
+.empty-profile-fact-review > small {
+  color: #5a6f8f;
+  font-size: 10px;
+  line-height: 16px;
+}
+
+.empty-profile-fact-review-heading > svg {
+  flex: 0 0 auto;
+}
+
+.empty-profile-fact-list {
+  display: grid;
+  max-height: 260px;
+  margin-top: 12px;
+  overflow-y: auto;
+  border-top: 1px solid #dce5f5;
+}
+
+.empty-profile-fact-item {
+  display: grid;
+  grid-template-columns: 16px 70px minmax(0, 1fr);
+  gap: 9px;
+  padding: 10px 2px;
+  align-items: start;
+  border-bottom: 1px solid #e3eaf7;
+  cursor: pointer;
+}
+
+.empty-profile-fact-item > input {
+  width: 14px;
+  height: 14px;
+  margin: 3px 0 0;
+  accent-color: var(--blue);
+}
+
+.empty-profile-fact-item > span {
+  align-self: start;
+  padding: 3px 6px;
+  border-radius: 5px;
+  color: #315f9f;
+  background: #eaf1ff;
+  font-size: 9px;
+  font-weight: 650;
+  text-align: center;
+}
+
+.empty-profile-fact-item > p {
+  margin: 0;
+  color: #3f4d61;
+  font-size: 10px;
+  line-height: 17px;
+}
+
+.empty-profile-fact-review > small {
+  display: block;
+  margin-top: 10px;
+}
+
 .profile-page {
   width: min(1120px, calc(100% - 64px));
   margin: 0 auto;

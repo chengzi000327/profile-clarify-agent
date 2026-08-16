@@ -1141,6 +1141,13 @@ const assessmentMethodLabel = (type) => ({
 
 const publicFieldValue = (field, fallback = '待确认') => field?.value ?? fallback;
 
+const factCategoryLabels = {
+  BACKGROUND: '业务背景',
+  HIRING_REASON: '招聘原因',
+  SUCCESS_CRITERION: '成功标准',
+  CONSTRAINT: '岗位约束',
+};
+
 function ArtifactEmptyState({ title, description, invalidated = false }) {
   return (
     <div className="profile-empty-document embedded-artifact-empty">
@@ -1163,6 +1170,8 @@ function ProfileView({ viewerRole, onOpenEvidence, onOpenConversation, roleDetai
   const recruitingArtifact = state?.latest_artifacts?.HR_RECRUITING_BRIEF;
   const profile = profileArtifact?.content;
   const pendingFacts = (state?.facts ?? []).filter((fact) => fact.status === 'DRAFT');
+  const pendingFactSignature = pendingFacts.map((fact) => `${fact.id}:${fact.category}`).join('|');
+  const [selectedPendingFactIds, setSelectedPendingFactIds] = useState([]);
   const confirmedCategories = new Set(
     (state?.facts ?? [])
       .filter((fact) => fact.status === 'CONFIRMED')
@@ -1170,6 +1179,17 @@ function ProfileView({ viewerRole, onOpenEvidence, onOpenConversation, roleDetai
   );
   const profileReady = confirmedCategories.has('HIRING_REASON')
     && confirmedCategories.has('SUCCESS_CRITERION');
+  const canConfirmFacts = viewerRole === 'manager' || viewerRole === 'admin';
+
+  useEffect(() => {
+    const latestRecommendedByCategory = new Map();
+    pendingFacts.forEach((fact) => {
+      if (['HIRING_REASON', 'SUCCESS_CRITERION', 'CONSTRAINT'].includes(fact.category)) {
+        latestRecommendedByCategory.set(fact.category, fact.id);
+      }
+    });
+    setSelectedPendingFactIds([...latestRecommendedByCategory.values()]);
+  }, [state?.id, pendingFactSignature]);
 
   if (!profileArtifact) {
     const stageLabel = stagePresentation[state?.stage]?.[0] ?? '岗位澄清中';
@@ -1191,7 +1211,9 @@ function ProfileView({ viewerRole, onOpenEvidence, onOpenConversation, roleDetai
             <span className="profile-empty-icon"><FileSearch size={24} /></span>
             <h2>岗位画像尚未生成</h2>
             <p>
-              {roleIdentified
+              {pendingFacts.length > 0
+                ? `Agent 已提取 ${pendingFacts.length} 条事实草稿。请在下方核对并人工确认，确认后才会用于生成岗位画像。`
+                : roleIdentified
                 ? '当前只建立了待招岗位。请先在对话中确认招聘原因和成功标准；画像草稿生成后，这里才会展示真实岗位内容。'
                 : 'Agent 还在识别岗位名称和所属团队。请先继续对话；画像草稿生成后，这里才会展示真实岗位内容。'}
             </p>
@@ -1200,15 +1222,58 @@ function ProfileView({ viewerRole, onOpenEvidence, onOpenConversation, roleDetai
               <span className={confirmedCategories.has('HIRING_REASON') ? 'ready' : ''}>{confirmedCategories.has('HIRING_REASON') ? <Check size={13} /> : <CircleDot size={13} />}招聘原因</span>
               <span className={confirmedCategories.has('SUCCESS_CRITERION') ? 'ready' : ''}>{confirmedCategories.has('SUCCESS_CRITERION') ? <Check size={13} /> : <CircleDot size={13} />}成功标准</span>
             </div>
+
+            {pendingFacts.length > 0 && (
+              <div className="empty-profile-fact-review">
+                <div className="empty-profile-fact-review-heading">
+                  <div>
+                    <strong>{pendingFacts.length} 条事实待确认</strong>
+                    <span>确认后会成为岗位画像的正式依据</span>
+                  </div>
+                  <CircleDot size={17} />
+                </div>
+                <div className="empty-profile-fact-list">
+                  {pendingFacts.map((fact) => (
+                    <label className="empty-profile-fact-item" key={fact.id}>
+                      <input
+                        checked={selectedPendingFactIds.includes(fact.id)}
+                        disabled={!canConfirmFacts}
+                        type="checkbox"
+                        onChange={() => setSelectedPendingFactIds((current) => current.includes(fact.id)
+                          ? current.filter((id) => id !== fact.id)
+                          : [...current, fact.id])}
+                      />
+                      <span>{factCategoryLabels[fact.category] ?? fact.category}</span>
+                      <p>{fact.statement}</p>
+                    </label>
+                  ))}
+                </div>
+                {!canConfirmFacts && (
+                  <small>当前身份可查看事实草稿，需由用人经理或企业管理员确认。</small>
+                )}
+              </div>
+            )}
             <button
               className="primary-action"
-              disabled={agentStatus === 'running'}
-              onClick={() => profileReady ? onArtifactAction?.('ROLE_PROFILE') : onOpenConversation?.()}
+              disabled={agentStatus === 'running' || (!profileReady && canConfirmFacts && pendingFacts.length > 0 && selectedPendingFactIds.length === 0)}
+              onClick={() => {
+                if (profileReady) {
+                  onArtifactAction?.('ROLE_PROFILE');
+                  return;
+                }
+                if (selectedPendingFactIds.length > 0 && canConfirmFacts) {
+                  onConfirmFacts?.(selectedPendingFactIds);
+                  return;
+                }
+                onOpenConversation?.();
+              }}
             >
               {agentStatus === 'running'
                 ? 'Agent 生成中…'
                 : profileReady
                   ? '生成岗位画像草稿'
+                : pendingFacts.length > 0 && canConfirmFacts
+                  ? `确认已选的 ${selectedPendingFactIds.length} 条事实`
                   : '返回对话继续澄清'}
               <ChevronRight size={16} />
             </button>
@@ -1307,7 +1372,7 @@ function ProfileView({ viewerRole, onOpenEvidence, onOpenConversation, roleDetai
         {profileArtifact.status !== 'INVALIDATED' && pendingFacts.length > 0 && (
           <div className="profile-sync-notice pending">
             <CircleDot size={15} />
-            <div><strong>会话中有 {pendingFacts.length} 条待确认事实尚未进入当前画像</strong><span>当前页面只使用已确认事实生成。请先返回对话完成确认，再生成新版本，避免把未确认信息误写入正式画像。</span></div>
+            <div><strong>会话中有 {pendingFacts.length} 条待确认事实尚未进入当前画像</strong><span>当前页面只使用已确认事实生成。请在此核对并确认，再生成新版本，避免把未确认信息误写入正式画像。</span></div>
             {(viewerRole === 'manager' || viewerRole === 'admin') && <button disabled={agentStatus === 'running'} onClick={() => onConfirmFacts?.(pendingFacts.map((fact) => fact.id))}>确认这些事实</button>}
           </div>
         )}
