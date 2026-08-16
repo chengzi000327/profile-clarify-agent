@@ -159,7 +159,17 @@ const markdownCard = (
       tag: 'note',
       elements: [
         { tag: 'plain_text', content: '画像澄清 Agent · Web 与飞书共用同一业务事实源' },
-        { tag: 'a', href: webOrigin, text: { tag: 'plain_text', content: '在 Web 工作台查看' } },
+      ],
+    },
+    {
+      tag: 'action',
+      actions: [
+        {
+          tag: 'button',
+          text: { tag: 'plain_text', content: '在 Web 工作台查看' },
+          type: 'default',
+          url: webOrigin,
+        },
       ],
     },
   ],
