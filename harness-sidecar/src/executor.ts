@@ -9,8 +9,17 @@ import {
   type RoleAgentToolName,
 } from '@role-clarifier/contracts'
 import type { SidecarConfig } from './config.js'
-import { buildContextSnapshot, buildRepairPrompt, buildTaskPrompt } from './prompts.js'
-import { JsonRpcHarnessRuntime, type RuntimeTurn } from './protocol-client.js'
+import {
+  buildContextSnapshot,
+  buildMaxTokensRecoveryPrompt,
+  buildRepairPrompt,
+  buildTaskPrompt,
+} from './prompts.js'
+import {
+  JsonRpcHarnessRuntime,
+  type RuntimeLaunch,
+  type RuntimeTurn,
+} from './protocol-client.js'
 import {
   buildRoutePrompt,
   buildRouteRepairPrompt,
@@ -189,8 +198,54 @@ export const recoverResultFromTool = (
   }))
 }
 
+interface MaxTokenResult {
+  result: HarnessResult
+  recoveredFromTool: boolean
+}
+
+export interface ExecutorRuntime {
+  runTurn(
+    sessionId: string,
+    prompt: string,
+    signal: AbortSignal,
+    maximumToolCalls?: number,
+  ): Promise<RuntimeTurn>
+  close(): Promise<void>
+}
+
+export type ExecutorRuntimeFactory = (launch: RuntimeLaunch) => ExecutorRuntime
+
+export const resolveMaxTokenResult = (
+  request: HarnessRequest,
+  finalResponse: string,
+  calledTools: string[],
+  successfulTools: string[],
+  successfulToolCalls: Array<{ name: string; arguments: unknown }>,
+): MaxTokenResult | null => {
+  try {
+    const result = parseHarnessResult(finalResponse)
+    assertTaskResult(request.task, result)
+    assertTaskToolPolicy(request.task, calledTools, successfulTools)
+    return { result, recoveredFromTool: false }
+  } catch {
+    // A max-token turn may contain a partial JSON response; never accept it without full validation.
+  }
+  try {
+    const result = recoverResultFromTool(request, successfulToolCalls)
+    assertTaskResult(request.task, result)
+    assertTaskToolPolicy(request.task, calledTools, successfulTools)
+    return { result, recoveredFromTool: true }
+  } catch {
+    return null
+  }
+}
+
 export class HarnessExecutor {
-  constructor(private readonly config: SidecarConfig) {}
+  constructor(
+    private readonly config: SidecarConfig,
+    private readonly runtimeFactory: ExecutorRuntimeFactory =
+      (launch) => new JsonRpcHarnessRuntime(launch),
+  ) {}
 
   readiness(): { runtime: boolean; credential: boolean } {
     return {
@@ -211,7 +266,7 @@ export class HarnessExecutor {
     const model = this.config.DEEPSEEK_FLASH_MODEL
     const reasoning = reasoningForTask('ROUTER')
     const sessionRoot = await mkdtemp(join(tmpdir(), 'role-router-dsh-'))
-    const runtime = new JsonRpcHarnessRuntime({
+    const runtime = this.runtimeFactory({
       runtimeBin: this.config.DSH_RUNTIME_BIN,
       cordisConfig: this.config.DSH_CORDIS_CONFIG,
       cwd: process.cwd(),
@@ -316,36 +371,116 @@ export class HarnessExecutor {
       : this.config.DEEPSEEK_PRO_MODEL
     const reasoning = reasoningForTask(request.task)
     const sessionRoot = await mkdtemp(join(tmpdir(), 'role-clarifier-dsh-'))
-    const runtime = new JsonRpcHarnessRuntime({
-      runtimeBin: this.config.DSH_RUNTIME_BIN,
-      cordisConfig: this.config.DSH_CORDIS_CONFIG,
-      cwd: process.cwd(),
-      env: {
-        ...process.env,
-        DEEPSEEK_API_KEY: this.config.DEEPSEEK_API_KEY,
-        ...(this.config.DEEPSEEK_BASE_URL ? { DEEPSEEK_BASE_URL: this.config.DEEPSEEK_BASE_URL } : {}),
-        ROLE_AGENT_INTERNAL_URL: this.config.ROLE_AGENT_INTERNAL_URL,
-        ROLE_AGENT_TOOL_TOKEN: this.config.ROLE_AGENT_TOOL_TOKEN,
-        ROLE_AGENT_ALLOWED_TOOLS: JSON.stringify(HARNESS_TASK_TOOL_POLICY[request.task].allowed),
-        ROLE_AGENT_MODE: 'domain',
-        ROLE_AGENT_THINKING: reasoning.thinking,
-        ROLE_AGENT_REASONING_EFFORT: reasoning.effort,
-        DSH_SESSION_ROOT: sessionRoot,
-      },
-      model,
-      provider: 'deepseek-official',
-      maxTokens: maxTokensForTask(request.task, this.config.DSH_MAX_TOKENS),
-      requestTimeoutMs: this.config.DSH_RUN_TIMEOUT_MS,
-    })
+    const createRuntime = (runtimeSessionRoot: string): ExecutorRuntime =>
+      this.runtimeFactory({
+        runtimeBin: this.config.DSH_RUNTIME_BIN,
+        cordisConfig: this.config.DSH_CORDIS_CONFIG,
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          DEEPSEEK_API_KEY: this.config.DEEPSEEK_API_KEY,
+          ...(this.config.DEEPSEEK_BASE_URL ? { DEEPSEEK_BASE_URL: this.config.DEEPSEEK_BASE_URL } : {}),
+          ROLE_AGENT_INTERNAL_URL: this.config.ROLE_AGENT_INTERNAL_URL,
+          ROLE_AGENT_TOOL_TOKEN: this.config.ROLE_AGENT_TOOL_TOKEN,
+          ROLE_AGENT_ALLOWED_TOOLS: JSON.stringify(HARNESS_TASK_TOOL_POLICY[request.task].allowed),
+          ROLE_AGENT_MODE: 'domain',
+          ROLE_AGENT_THINKING: reasoning.thinking,
+          ROLE_AGENT_REASONING_EFFORT: reasoning.effort,
+          DSH_SESSION_ROOT: runtimeSessionRoot,
+        },
+        model,
+        provider: 'deepseek-official',
+        maxTokens: maxTokensForTask(request.task, this.config.DSH_MAX_TOKENS),
+        requestTimeoutMs: this.config.DSH_RUN_TIMEOUT_MS,
+      })
+    const runtime = createRuntime(sessionRoot)
     const sessionId = `role-${request.execution_context.role_session_id}`
     const turns: RuntimeTurn[] = []
     const modelEvents: SidecarEvent[] = []
     let repaired = false
     let recoveredFromTool = false
+    let recoveredFromMaxTokens = false
     const runSignal = AbortSignal.any([
       signal,
       AbortSignal.timeout(this.config.DSH_RUN_TIMEOUT_MS),
     ])
+    const handleMaxTokens = async (exhaustedTurn: RuntimeTurn): Promise<HarnessResult> => {
+      recoveredFromMaxTokens = true
+      repaired = true
+      const exhausted = combineTurns(turns)
+      const resolved = resolveMaxTokenResult(
+        request,
+        exhaustedTurn.finalResponse,
+        exhausted.tools,
+        exhausted.successfulTools,
+        exhausted.successfulToolCalls,
+      )
+      if (resolved) {
+        recoveredFromTool ||= resolved.recoveredFromTool
+        return resolved.result
+      }
+      if (request.task !== 'CLARIFY_MESSAGE') {
+        throw new Error('Harness turn ended with max-tokens and no validated result was recoverable')
+      }
+
+      const remainingTransitions = Math.max(
+        0,
+        request.maximum_transitions - exhausted.tools.length,
+      )
+      const missingRequiredTools = HARNESS_TASK_TOOL_POLICY.CLARIFY_MESSAGE.required.filter(
+        (name) => !exhausted.successfulTools.includes(name),
+      )
+      if (remainingTransitions < missingRequiredTools.length) {
+        throw new Error(
+          `Harness max-token recovery needs ${missingRequiredTools.length} tool transitions but only ${remainingTransitions} remain`,
+        )
+      }
+
+      const recoveryRoot = await mkdtemp(join(tmpdir(), 'role-clarifier-recovery-dsh-'))
+      const recoveryRuntime = createRuntime(recoveryRoot)
+      try {
+        const recoveryPrompt = buildMaxTokensRecoveryPrompt(
+          request,
+          exhausted.successfulToolCalls,
+        )
+        modelEvents.push({ type: 'model.request', value: recoveryPrompt, attempt: 'repair' })
+        const recovery = await recoveryRuntime.runTurn(
+          sessionId,
+          recoveryPrompt,
+          runSignal,
+          remainingTransitions,
+        )
+        turns.push(recovery)
+        modelEvents.push({
+          type: 'model.response',
+          value: recovery.finalResponse,
+          attempt: 'repair',
+        })
+        if (recovery.finishReason !== 'completed' && recovery.finishReason !== 'max-tokens') {
+          throw new Error(
+            `Harness max-token recovery ended with ${recovery.finishReason ?? 'unknown reason'}`,
+          )
+        }
+        const combinedRecovery = combineTurns(turns)
+        const recovered = resolveMaxTokenResult(
+          request,
+          recovery.finalResponse,
+          combinedRecovery.tools,
+          combinedRecovery.successfulTools,
+          combinedRecovery.successfulToolCalls,
+        )
+        if (!recovered) {
+          throw new Error(
+            'Harness max-token recovery did not produce a valid response or complete the required tools',
+          )
+        }
+        recoveredFromTool ||= recovered.recoveredFromTool
+        return recovered.result
+      } finally {
+        await recoveryRuntime.close()
+        await rm(recoveryRoot, { recursive: true, force: true })
+      }
+    }
     try {
       const initialPrompt = buildTaskPrompt(request)
       modelEvents.push({ type: 'model.request', value: initialPrompt, attempt: 'initial' })
@@ -359,8 +494,7 @@ export class HarnessExecutor {
       modelEvents.push({ type: 'model.response', value: initial.finalResponse, attempt: 'initial' })
       let result: HarnessResult
       if (initial.finishReason === 'max-tokens') {
-        result = recoverResultFromTool(request, combineTurns(turns).successfulToolCalls)
-        recoveredFromTool = true
+        result = await handleMaxTokens(initial)
       } else if (initial.finishReason !== 'completed') {
         throw new Error(`Harness turn ended with ${initial.finishReason ?? 'unknown reason'}`)
       } else {
@@ -382,8 +516,7 @@ export class HarnessExecutor {
           turns.push(repair)
           modelEvents.push({ type: 'model.response', value: repair.finalResponse, attempt: 'repair' })
           if (repair.finishReason === 'max-tokens') {
-            result = recoverResultFromTool(request, combineTurns(turns).successfulToolCalls)
-            recoveredFromTool = true
+            result = await handleMaxTokens(repair)
           } else {
             if (repair.finishReason !== 'completed') {
               throw new Error(`Harness repair turn ended with ${repair.finishReason ?? 'unknown reason'}`)
@@ -428,7 +561,9 @@ export class HarnessExecutor {
       const events: SidecarEvent[] = [
         {
           type: 'status',
-          value: recoveredFromTool
+          value: recoveredFromMaxTokens
+            ? `${model} 达到输出上限后已通过一次受控恢复完成本轮`
+            : recoveredFromTool
             ? `${model} 已根据成功的领域工具结果安全恢复本轮回复`
             : `${model} 已完成真实 Harness 推理`,
         },

@@ -10,6 +10,7 @@ import {
   type RoleState,
 } from '@role-clarifier/contracts'
 import { describe, expect, it } from 'vitest'
+import { resolve } from 'node:path'
 import { buildSidecarApp, type ExecutorLike } from './app.js'
 import { loadSidecarConfig } from './config.js'
 import {
@@ -18,9 +19,15 @@ import {
   maxTokensForTask,
   reasoningForTask,
   recoverResultFromTool,
+  resolveMaxTokenResult,
 } from './executor.js'
-import { buildContextSnapshot, buildTaskPrompt } from './prompts.js'
+import {
+  buildContextSnapshot,
+  buildMaxTokensRecoveryPrompt,
+  buildTaskPrompt,
+} from './prompts.js'
 import { buildRoutePrompt, parseAgentRouteResult } from './routing.js'
+import type { RuntimeLaunch, RuntimeTurn } from './protocol-client.js'
 import { parseHarnessResult, type HarnessRequest } from './schemas.js'
 
 const state: RoleState = {
@@ -981,6 +988,122 @@ describe('Harness sidecar', () => {
       title: '企业产品经理',
       department: '企业服务产品部',
     })
+  })
+
+  it('does not accept a max-token clarification before required tools complete', () => {
+    expect(resolveMaxTokenResult(request, '', [], [], [])).toBeNull()
+  })
+
+  it('recovers a max-token clarification only after all required tools complete', () => {
+    const successfulCalls = [
+      { name: 'read_role_state', arguments: {} },
+      {
+        name: 'save_fact_draft',
+        arguments: {
+          category: 'SUCCESS_CRITERION',
+          statement: '半年内完成三个客户场景的标准化',
+        },
+      },
+    ]
+    const recovered = resolveMaxTokenResult(
+      request,
+      '',
+      successfulCalls.map((call) => call.name),
+      successfulCalls.map((call) => call.name),
+      successfulCalls,
+    )
+    expect(recovered?.recoveredFromTool).toBe(true)
+    expect(recovered?.result).toMatchObject({
+      kind: 'CLARIFICATION',
+      fact_draft: {
+        category: 'SUCCESS_CRITERION',
+        statement: '半年内完成三个客户场景的标准化',
+      },
+    })
+  })
+
+  it('builds a bounded fresh-session prompt for max-token clarification recovery', () => {
+    const prompt = buildMaxTokensRecoveryPrompt(request, [])
+    expect(prompt).toContain(String(request.message))
+    expect(prompt).toContain('read_role_state, save_fact_draft')
+    expect(prompt).toContain('不得输出 Markdown')
+    expect(prompt).not.toContain('recruiting_context')
+  })
+
+  it('retries a max-token clarification once in a fresh minimal session', async () => {
+    const launches: RuntimeLaunch[] = []
+    const prompts: string[] = []
+    const runtimeTurns: RuntimeTurn[][] = [
+      [{
+        finalResponse: '',
+        toolNames: [],
+        successfulToolNames: [],
+        successfulToolCalls: [],
+        toolEvents: [],
+        inputTokens: 100,
+        outputTokens: 8_192,
+        finishReason: 'max-tokens',
+      }],
+      [{
+        finalResponse: JSON.stringify({
+          kind: 'CLARIFICATION',
+          persistence: 'TOOL',
+          answer: '我已记录：半年内完成三个客户场景的标准化。',
+          question: '这项结果由谁验收？',
+          fact_draft: {
+            category: 'SUCCESS_CRITERION',
+            statement: '半年内完成三个客户场景的标准化',
+          },
+        }),
+        toolNames: ['read_role_state', 'save_fact_draft'],
+        successfulToolNames: ['read_role_state', 'save_fact_draft'],
+        successfulToolCalls: [
+          { name: 'read_role_state', arguments: {} },
+          {
+            name: 'save_fact_draft',
+            arguments: {
+              category: 'SUCCESS_CRITERION',
+              statement: '半年内完成三个客户场景的标准化',
+            },
+          },
+        ],
+        toolEvents: [],
+        inputTokens: 60,
+        outputTokens: 120,
+        finishReason: 'completed',
+      }],
+    ]
+    const executor = new HarnessExecutor({
+      ...config,
+      DEEPSEEK_API_KEY: 'test-deepseek-key',
+      DSH_RUNTIME_BIN: process.execPath,
+      DSH_CORDIS_CONFIG: resolve(process.cwd(), 'runtime/cordis.yml'),
+    }, (launch) => {
+      launches.push(launch)
+      const turns = runtimeTurns.shift()
+      if (!turns) throw new Error('Unexpected extra runtime')
+      return {
+        runTurn: async (_sessionId, prompt) => {
+          prompts.push(prompt)
+          const turn = turns.shift()
+          if (!turn) throw new Error('Unexpected extra turn')
+          return turn
+        },
+        close: async () => undefined,
+      }
+    })
+
+    const execution = await executor.execute(request, new AbortController().signal)
+
+    expect(launches).toHaveLength(2)
+    expect(launches[0]?.env.DSH_SESSION_ROOT).not.toBe(launches[1]?.env.DSH_SESSION_ROOT)
+    expect(prompts[1]).toContain('最小化恢复')
+    expect(execution.result).toMatchObject({
+      kind: 'CLARIFICATION',
+      fact_draft: { statement: '半年内完成三个客户场景的标准化' },
+    })
+    expect(execution.trace.repaired).toBe(true)
+    expect(execution.events[0]?.value).toContain('受控恢复')
   })
 
   it('does not recover P-06 from a write tool because caller persistence is authoritative', () => {
