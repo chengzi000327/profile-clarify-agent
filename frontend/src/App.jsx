@@ -1388,7 +1388,7 @@ function buildRecruitingPortrait(artifact, profile) {
       keywords: (content.search_strategy?.keyword_groups ?? []).flatMap((group) => group.keywords ?? []),
       nonTarget: nonTarget.map((item) => `${item.signal}：${item.reason}`),
     },
-    resumeScreen: {
+    resumeScreening: {
       decision: '简历未写明时进入电话核实，不因信息缺失直接淘汰。',
       coreSignals: (content.resume_screen?.thirty_second_checks ?? []).map((item, index) => ({
         id: `S-${String(index + 1).padStart(2, '0')}`,
