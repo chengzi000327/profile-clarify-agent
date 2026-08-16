@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { buildSidecarApp, type ExecutorLike } from './app.js'
 import { loadSidecarConfig } from './config.js'
 import { HarnessExecutor, quickConversationReply, recoverResultFromTool } from './executor.js'
-import { buildTaskPrompt } from './prompts.js'
+import { buildContextSnapshot, buildTaskPrompt } from './prompts.js'
 import { parseHarnessResult, type HarnessRequest } from './schemas.js'
 
 const state: RoleState = {
@@ -64,6 +64,23 @@ describe('Harness sidecar', () => {
     expect(prompt).toContain('CONVERSATION')
   })
 
+  it('separates system prompt, current input, short-term memory, long-term memory and task state', () => {
+    const context = buildContextSnapshot(request)
+    expect(context.system_prompt.content).toContain('岗位画像澄清 Agent')
+    expect(context.current_user_input.content).toEqual({
+      message: '半年内完成三个客户场景的标准化。',
+    })
+    expect(context.short_term_memory.messages).toHaveLength(1)
+    expect(context.long_term_memory.role_state).toMatchObject({
+      title: '商业化产品负责人',
+      revision: 1,
+    })
+    expect(context.task_state).toMatchObject({
+      task: 'CLARIFY_MESSAGE',
+      current_user_role: 'MANAGER',
+    })
+  })
+
   it('repairs fenced model JSON into the typed result', () => {
     const result = parseHarnessResult(`\`\`\`json
       {"kind":"CLARIFICATION","persistence":"TOOL","answer":"已记录","question":"如何验收？","fact_draft":{"category":"SUCCESS_CRITERION","statement":"完成标准化"}}
@@ -100,6 +117,7 @@ describe('Harness sidecar', () => {
       provider: 'local-intent-router',
       tool_count: 0,
     })
+    expect(execution.events.some((event) => event.type === 'context.snapshot')).toBe(true)
   })
 
   it('recovers a relevant clarification answer from exact saved tool arguments', () => {

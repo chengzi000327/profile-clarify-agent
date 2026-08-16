@@ -32,7 +32,6 @@ import type {
   StoredUser,
   TraceAccessAuditRecord,
 } from './types.js'
-import { createDemoAggregate, demoUsers } from './seed.js'
 
 const iso = (value: Date | string): string =>
   value instanceof Date ? value.toISOString() : new Date(value).toISOString()
@@ -48,33 +47,6 @@ export class PostgresStore implements ApplicationStore {
   }
 
   async initialize(): Promise<void> {
-    for (const user of demoUsers) {
-      await this.db
-        .insert(schema.users)
-        .values({
-          id: user.user_id,
-          tenantId: user.tenant_id,
-          displayName: user.display_name,
-          role: user.role,
-          active: user.active,
-        })
-        .onConflictDoUpdate({
-          target: schema.users.id,
-          set: {
-            tenantId: user.tenant_id,
-            displayName: user.display_name,
-            role: user.role,
-            active: user.active,
-          },
-        })
-    }
-
-    const [existing] = await this.db
-      .select({ id: schema.roleSessions.id })
-      .from(schema.roleSessions)
-      .limit(1)
-    if (!existing) await this.createRoleAggregate(createDemoAggregate())
-
     const roleRows = await this.db.select({ id: schema.roleSessions.id }).from(schema.roleSessions)
     for (const role of roleRows) {
       const policy = this.makeDefaultPolicy(role.id)
@@ -99,6 +71,25 @@ export class PostgresStore implements ApplicationStore {
       display_name: row.displayName,
       active: row.active,
     }
+  }
+
+  async saveUser(user: StoredUser): Promise<void> {
+    await this.db
+      .insert(schema.users)
+      .values({
+        id: user.user_id,
+        tenantId: user.tenant_id,
+        displayName: user.display_name,
+        role: user.role,
+        active: user.active,
+      })
+      .onConflictDoUpdate({
+        target: schema.users.id,
+        set: {
+          displayName: user.display_name,
+          active: user.active,
+        },
+      })
   }
 
   async listRoleStates(actor: ActorContext): Promise<RoleState[]> {

@@ -70,6 +70,18 @@ const stagePresentation = {
   ARCHIVED: ['已归档', 'confirmed'],
 };
 
+const actorRoleLabel = {
+  MANAGER: '用人经理',
+  HR: 'HR 招聘负责人',
+  ADMIN: '企业管理员 · 最高权限',
+};
+
+function displayInitial(name, role) {
+  const value = String(name ?? '').trim();
+  if (value) return Array.from(value)[0];
+  return role === 'ADMIN' ? '管' : role === 'HR' ? 'HR' : '用';
+}
+
 function toRoleCard(state) {
   const [stage, stageTone] = stagePresentation[state.stage] ?? [state.stage, 'active'];
   const latestProfile = state.latest_artifacts?.ROLE_PROFILE;
@@ -178,8 +190,8 @@ function App() {
     setActiveRoleId((current) => cards.some((item) => item.id === current) ? current : cards[0]?.id ?? null);
   }
 
-  async function handleLogin(userId) {
-    const session = await api.login(userId);
+  async function handleLogin(credentials) {
+    const session = await api.login(credentials);
     setActor(session.actor);
     setActiveView('conversation');
     setRequestError('');
@@ -326,12 +338,15 @@ function App() {
 
   if (!activeRole) {
     return (
-      <div className="app-loading">
-        <ClarifierMark size={46} plate />
-        <span>还没有岗位会话</span>
-        <button className="primary-action" onClick={() => setCreateOpen(true)}>新建岗位澄清</button>
+      <EmptyWorkspace
+        actor={actor}
+        activeView={activeView}
+        onOpenTrace={() => setActiveView('admin-trace')}
+        onOpenCreate={() => setCreateOpen(true)}
+        onLogout={handleLogout}
+      >
         {createOpen && <CreateRoleModal onClose={() => setCreateOpen(false)} onSubmit={createRoleSession} />}
-      </div>
+      </EmptyWorkspace>
     );
   }
 
@@ -357,10 +372,10 @@ function App() {
           </button>
         </div>
 
-        {actor.role !== 'HR' && <button className="new-project-button" onClick={() => setCreateOpen(true)}>
+        <button className="new-project-button" onClick={() => setCreateOpen(true)}>
           <Plus size={17} />
           {!sidebarCollapsed && <span>新建岗位澄清</span>}
-        </button>}
+        </button>
 
         {!sidebarCollapsed && (
           <div className="sidebar-section-title">
@@ -414,11 +429,11 @@ function App() {
             {!sidebarCollapsed && <span>资料与权限</span>}
           </button>
           <button className="user-chip" onClick={() => setProfileMenuOpen((value) => !value)}>
-            <span className={`avatar avatar-${viewerRole}`}>{viewerRole === 'manager' ? '陈' : viewerRole === 'hr' ? 'HR' : '管'}</span>
+            <span className={`avatar avatar-${viewerRole}`}>{displayInitial(actor.display_name, actor.role)}</span>
             {!sidebarCollapsed && (
               <span className="user-copy">
                 <strong>{actor.display_name}</strong>
-                <small>{viewerRole === 'manager' ? '用人经理' : viewerRole === 'hr' ? 'HR 招聘负责人' : '企业管理员 · 最高权限'}</small>
+                <small>{actorRoleLabel[actor.role]}</small>
               </span>
             )}
             {!sidebarCollapsed && <MoreHorizontal size={16} />}
@@ -428,7 +443,7 @@ function App() {
               <strong>后端身份已验证</strong>
               <span>权限来自签名 HttpOnly Session，不能通过前端参数切换。</span>
               <div className="role-preview-switch">
-                <button className="active" type="button">{viewerRole === 'manager' ? '用人经理' : viewerRole === 'hr' ? 'HR 招聘负责人' : '企业管理员'}</button>
+                <button className="active" type="button">{actorRoleLabel[actor.role]}</button>
                 <button type="button" onClick={handleLogout}>退出并切换账号</button>
               </div>
             </div>
@@ -453,9 +468,10 @@ function App() {
           </div>
           <div className="header-actions">
             <div className="collaborators" aria-label="会话协作者">
-              <span className="avatar avatar-manager">陈</span>
-              <span className="avatar avatar-hr">HR</span>
-              <button className="avatar avatar-add" aria-label="邀请 HR"><Plus size={13} /></button>
+              <span className={`avatar avatar-${viewerRole}`} title={`${actor.display_name} · ${actorRoleLabel[actor.role]}`}>
+                {displayInitial(actor.display_name, actor.role)}
+              </span>
+              <button className="avatar avatar-add" aria-label="邀请协作者"><Plus size={13} /></button>
             </div>
             <button className="quiet-button"><History size={15} />版本</button>
             <button className="icon-button" aria-label="更多操作"><MoreHorizontal size={18} /></button>
@@ -507,6 +523,56 @@ function App() {
 
       {evidence && <EvidenceDrawer evidence={evidence} onClose={() => setEvidenceId(null)} />}
       {createOpen && <CreateRoleModal onClose={() => setCreateOpen(false)} onSubmit={createRoleSession} />}
+    </div>
+  );
+}
+
+function EmptyWorkspace({ actor, activeView, onOpenTrace, onOpenCreate, onLogout, children }) {
+  const viewerRole = actor.role === 'ADMIN' ? 'admin' : actor.role === 'HR' ? 'hr' : 'manager';
+  return (
+    <div className="app-shell empty-workspace-shell">
+      <aside className="sidebar">
+        <div className="brand-row">
+          <div className="brand">
+            <ClarifierMark size={34} plate />
+            <span className="brand-copy"><strong>画像澄清 Agent</strong><small>ROLE CLARIFIER</small></span>
+          </div>
+        </div>
+        <button className="new-project-button" onClick={onOpenCreate}>
+          <Plus size={17} /><span>新建岗位澄清</span>
+        </button>
+        <div className="sidebar-section-title"><span>最近会话</span></div>
+        <div className="empty-session-list">
+          <MessageSquare size={18} />
+          <span>这个账号还没有岗位</span>
+        </div>
+        <div className="sidebar-footer">
+          {actor.role === 'ADMIN' && (
+            <button className={`sidebar-utility ${activeView === 'admin-trace' ? 'active' : ''}`} onClick={onOpenTrace}>
+              <BarChart3 size={17} /><span>Agent Trace 控制台</span>
+            </button>
+          )}
+          <button className="user-chip empty-user-chip" type="button">
+            <span className={`avatar avatar-${viewerRole}`}>{displayInitial(actor.display_name, actor.role)}</span>
+            <span className="user-copy"><strong>{actor.display_name}</strong><small>{actorRoleLabel[actor.role]}</small></span>
+          </button>
+          <button className="empty-workspace-logout" type="button" onClick={onLogout}>退出并切换账号</button>
+        </div>
+      </aside>
+      <main className="main-workspace empty-main-workspace">
+        {activeView === 'admin-trace' && actor.role === 'ADMIN' ? (
+          <AdminTraceConsole />
+        ) : (
+          <section className="empty-workspace-hero">
+            <ClarifierMark size={52} plate />
+            <span>欢迎，{actor.display_name}</span>
+            <h1>从一个新的岗位开始</h1>
+            <p>当前账号还没有岗位内容。创建后，岗位对话、画像、JD 和 Agent Trace 会只归属到这个账号及其企业空间权限范围。</p>
+            <button className="primary-action" onClick={onOpenCreate}><Plus size={16} />新建岗位澄清</button>
+          </section>
+        )}
+      </main>
+      {children}
     </div>
   );
 }

@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { SidecarConfig } from './config.js'
-import { buildRepairPrompt, buildTaskPrompt } from './prompts.js'
+import { buildContextSnapshot, buildRepairPrompt, buildTaskPrompt } from './prompts.js'
 import { JsonRpcHarnessRuntime, type RuntimeTurn } from './protocol-client.js'
 import {
   parseHarnessResult,
@@ -14,8 +14,9 @@ import {
 } from './schemas.js'
 
 export interface SidecarEvent {
-  type: 'status' | 'model.request' | 'model.response' | 'delta' | 'tool.started' | 'tool.completed'
+  type: 'status' | 'context.snapshot' | 'model.request' | 'model.response' | 'delta' | 'tool.started' | 'tool.completed'
   value: string
+  context?: import('@role-clarifier/contracts').AgentContextSnapshot
   summary?: string
   arguments?: unknown
   result?: unknown
@@ -142,12 +143,29 @@ export class HarnessExecutor {
 
   async execute(request: HarnessRequest, signal: AbortSignal): Promise<SidecarExecution> {
     const startedAt = Date.now()
+    const contextSnapshot = buildContextSnapshot(request)
     const quickReply = quickConversationReply(request)
     if (quickReply) {
+      const localRouterContext = {
+        ...contextSnapshot,
+        system_prompt: {
+          ...contextSnapshot.system_prompt,
+          harness_managed_base: {
+            included: false,
+            captured_as_text: false,
+            description: '本轮由本地意图路由直接回答，未调用 DeepSeek Harness 或模型。',
+          },
+        },
+        task_state: {
+          ...contextSnapshot.task_state,
+          execution_path: 'LOCAL_INTENT_ROUTER',
+        },
+      } satisfies typeof contextSnapshot
       return {
         result: { kind: 'CONVERSATION', persistence: 'NONE', answer: quickReply },
         events: [
           { type: 'status', value: '普通问答意图已识别，不调用岗位写入工具' },
+          { type: 'context.snapshot', value: '本轮上下文分层快照', context: localRouterContext },
           { type: 'delta', value: quickReply },
         ],
         trace: {
@@ -257,6 +275,7 @@ export class HarnessExecutor {
       }
       const events: SidecarEvent[] = [
         { type: 'status', value: `${model} 已完成真实 Harness 推理` },
+        { type: 'context.snapshot', value: '本轮上下文分层快照', context: contextSnapshot },
         ...modelEvents.filter((event) => event.type === 'model.request' && event.attempt === 'initial'),
         ...combined.toolEvents.map((event): SidecarEvent => event.type === 'tool.started'
           ? { type: event.type, value: event.value, arguments: event.arguments }

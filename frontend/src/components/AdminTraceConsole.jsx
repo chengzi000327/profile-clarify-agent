@@ -25,6 +25,7 @@ const eventLabel = {
   'run.started': '运行开始',
   'agent.status': 'Agent 状态',
   'message.accepted': '用户消息原文',
+  'context.snapshot': '注入上下文分层',
   'model.request': '发送给模型的完整 Prompt',
   'model.response': '模型原始最终输出',
   'assistant.delta': '用户可见 Agent 回复',
@@ -55,6 +56,55 @@ function durationOf(run) {
   if (!run.started_at) return '—';
   const end = run.completed_at ? new Date(run.completed_at).getTime() : Date.now();
   return `${Math.max(0, end - new Date(run.started_at).getTime())} ms`;
+}
+
+function TraceContextSnapshot({ payload }) {
+  const sections = [
+    {
+      key: 'system',
+      label: 'System Prompt',
+      subtitle: 'Harness 系统规则 · 长期固定指令',
+      value: {
+        section_name: payload.system_prompt?.section_name,
+        content: payload.system_prompt?.content,
+        harness_managed_base: payload.system_prompt?.harness_managed_base,
+      },
+    },
+    {
+      key: 'input',
+      label: '当前用户输入',
+      subtitle: '本轮请求 · 不属于记忆',
+      value: payload.current_user_input,
+    },
+    {
+      key: 'short',
+      label: '短期记忆',
+      subtitle: `最近会话窗口 · ${payload.short_term_memory?.window_size ?? 0} 条`,
+      value: payload.short_term_memory,
+    },
+    {
+      key: 'long',
+      label: '长期记忆',
+      subtitle: '业务数据库中的岗位事实、冲突与产物状态',
+      value: payload.long_term_memory,
+    },
+    {
+      key: 'task',
+      label: '任务状态',
+      subtitle: '角色、当前澄清题、运行上限与编排指令',
+      value: payload.task_state,
+    },
+  ];
+  return (
+    <div className="trace-context-sections">
+      {sections.map((section, index) => (
+        <details className={`trace-context-section context-${section.key}`} key={section.key} open={index < 3}>
+          <summary><span>{section.label}</span><small>{section.subtitle}</small></summary>
+          <code>{JSON.stringify(section.value ?? null, null, 2)}</code>
+        </details>
+      ))}
+    </div>
+  );
 }
 
 export default function AdminTraceConsole() {
@@ -183,14 +233,16 @@ export default function AdminTraceConsole() {
                 <div><span>Token</span><strong>{trace.run.input_tokens + trace.run.output_tokens}</strong><small>{trace.run.input_tokens} 输入 / {trace.run.output_tokens} 输出</small></div>
                 <div><span>工具调用</span><strong>{trace.run.tool_count}</strong><small><Wrench size={11} />最多10个内部步骤</small></div>
               </div>
-              <div className="trace-privacy-note"><ShieldCheck size={14} /><span>完整 Trace 已开启：展示用户原文、实际 Prompt、模型最终输出、工具参数与工具返回。API Key、Cookie、内部令牌及模型未提供的隐藏思维链不采集。</span></div>
+              <div className="trace-privacy-note"><ShieldCheck size={14} /><span>完整 Trace 已开启：上下文按 System Prompt、当前输入、短期会话记忆、长期岗位记忆与任务状态分层，并保留实际模型请求、最终输出和工具调用。API Key、Cookie、内部令牌及模型未提供的隐藏思维链不采集。</span></div>
               <div className="trace-timeline">
                 {trace.events.map((event) => (
                   <div className={`trace-event ${event.type.includes('failed') ? 'failed' : ''}`} key={event.id}>
                     <span className="trace-event-dot">{event.type.includes('completed') ? <CheckCircle2 size={12} /> : <Activity size={11} />}</span>
                     <div>
                       <header><strong>{eventLabel[event.type] ?? event.type}</strong><time>{formatTime(event.created_at)}</time></header>
-                      <code>{JSON.stringify(event.payload, null, 2)}</code>
+                      {event.type === 'context.snapshot'
+                        ? <TraceContextSnapshot payload={event.payload} />
+                        : <code>{JSON.stringify(event.payload, null, 2)}</code>}
                     </div>
                   </div>
                 ))}

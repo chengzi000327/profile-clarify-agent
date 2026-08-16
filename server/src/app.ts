@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import cookie from '@fastify/cookie'
 import cors from '@fastify/cors'
 import sensible from '@fastify/sensible'
@@ -45,6 +45,23 @@ const ArtifactIdParamsSchema = z.object({
   artifact_id: z.string().uuid(),
 })
 const RevisionSchema = z.object({ expected_revision: z.number().int().nonnegative() })
+
+const stableId = (prefix: string, value: string): string =>
+  `${prefix}-${createHash('sha256').update(value).digest('hex').slice(0, 24)}`
+
+const resolveLoginIdentity = (workspaceId: string, accountId: string) => {
+  const workspace = workspaceId.trim().toLowerCase()
+  const account = accountId.trim().toLowerCase()
+  const legacyIds = new Set(['manager-demo', 'hr-demo', 'admin-demo'])
+  if (workspace === 'legacy-demo' && legacyIds.has(account)) {
+    return { tenantId: 'tenant-demo', userId: account }
+  }
+  const tenantId = stableId('tenant', workspace)
+  return {
+    tenantId,
+    userId: stableId('user', `${tenantId}\u0000${account}`),
+  }
+}
 
 const suffixedParam = (
   params: unknown,
@@ -393,8 +410,25 @@ export const buildApp = async (
 
   app.post('/api/v1/auth/login', async (request, reply) => {
     const body = LoginRequestSchema.parse(request.body)
-    const user = await store.getUser(body.user_id)
-    if (!user) throw new DomainError('INVALID_LOGIN', '测试账号不存在', 401)
+    const identity = resolveLoginIdentity(body.workspace_id, body.account_id)
+    const existing = await store.getUser(identity.userId)
+    if (existing && (existing.tenant_id !== identity.tenantId || existing.role !== body.role)) {
+      throw new DomainError(
+        'ACCOUNT_ROLE_MISMATCH',
+        '该账号已绑定其他角色；同一账号的角色不能在登录时变更',
+        409,
+      )
+    }
+    const user = existing
+      ? { ...existing, display_name: body.display_name, active: true }
+      : {
+          tenant_id: identity.tenantId,
+          user_id: identity.userId,
+          role: body.role,
+          display_name: body.display_name,
+          active: true,
+        }
+    await store.saveUser(user)
     reply.setCookie('role_agent_session', user.user_id, {
       signed: true,
       httpOnly: true,
@@ -404,6 +438,7 @@ export const buildApp = async (
       maxAge: 8 * 60 * 60,
     })
     return {
+      is_new_account: !existing,
       actor: {
         tenant_id: user.tenant_id,
         user_id: user.user_id,

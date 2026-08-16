@@ -50,6 +50,10 @@ export class MemoryStore implements ApplicationStore {
     return clone(this.users.get(userId) ?? null)
   }
 
+  async saveUser(user: StoredUser): Promise<void> {
+    this.users.set(user.user_id, clone(user))
+  }
+
   async listRoleStates(actor: ActorContext): Promise<RoleState[]> {
     return [...this.roles.values()]
       .filter(

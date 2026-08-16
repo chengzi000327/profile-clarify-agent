@@ -1,8 +1,10 @@
-import type {
-  ArtifactType,
-  CandidateEvidence,
-  RoleState,
-  ToolExecutionContext,
+import {
+  ROLE_CLARIFIER_SYSTEM_PROMPT,
+  type AgentContextSnapshot,
+  type ArtifactType,
+  type CandidateEvidence,
+  type RoleState,
+  type ToolExecutionContext,
 } from '@role-clarifier/contracts'
 import type { AppConfig } from '../config.js'
 
@@ -82,6 +84,7 @@ export interface HarnessTrace {
 export interface HarnessHooks {
   signal: AbortSignal
   onStatus(status: string): Promise<void>
+  onContextSnapshot(snapshot: AgentContextSnapshot): Promise<void>
   onModelRequest(prompt: string): Promise<void>
   onModelResponse(response: string): Promise<void>
   onDelta(delta: string): Promise<void>
@@ -167,6 +170,38 @@ const extractCandidate = (item: CandidateImportItem): CandidateEvidence => {
 
 export class DeterministicHarnessAdapter implements HarnessAdapter {
   async run(request: HarnessRequest, hooks: HarnessHooks): Promise<HarnessResult> {
+    const { tenant_id: _tenantId, ...longTermRoleState } = request.role_state
+    await hooks.onContextSnapshot({
+      system_prompt: {
+        section_name: 'role-clarifier:guardrails',
+        content: ROLE_CLARIFIER_SYSTEM_PROMPT,
+        provenance: 'HARNESS_SYSTEM_PROMPT',
+        harness_managed_base: {
+          included: false,
+          captured_as_text: false,
+          description: 'Mock Harness 不启动 DeepSeek Harness 基础系统提示。',
+        },
+      },
+      current_user_input: {
+        content: request.message === undefined ? { candidate_data: request.candidates ?? [] } : { message: request.message },
+        source: 'CURRENT_REQUEST',
+      },
+      short_term_memory: {
+        source: 'RECENT_CONVERSATION',
+        window_size: request.conversation_context?.recent_messages.length ?? 0,
+        messages: request.conversation_context?.recent_messages ?? [],
+      },
+      long_term_memory: {
+        source: 'BUSINESS_DATABASE',
+        role_state: longTermRoleState,
+      },
+      task_state: {
+        task: request.task,
+        current_user_role: request.conversation_context?.current_user_role ?? null,
+        open_clarification: request.conversation_context?.open_clarification ?? null,
+        maximum_transitions: request.maximum_transitions,
+      },
+    })
     const inputPrompt = JSON.stringify({
       task: request.task,
       role_state: request.role_state,
@@ -402,6 +437,7 @@ export class SidecarHarnessAdapter implements HarnessAdapter {
       result: HarnessResult
       events?: Array<
         | { type: 'status'; value: string }
+        | { type: 'context.snapshot'; value: string; context: AgentContextSnapshot }
         | { type: 'model.request'; value: string; attempt?: 'initial' | 'repair' }
         | { type: 'model.response'; value: string; attempt?: 'initial' | 'repair' }
         | { type: 'delta'; value: string }
@@ -412,6 +448,7 @@ export class SidecarHarnessAdapter implements HarnessAdapter {
     }
     for (const event of result.events ?? []) {
       if (event.type === 'status') await hooks.onStatus(event.value)
+      else if (event.type === 'context.snapshot') await hooks.onContextSnapshot(event.context)
       else if (event.type === 'model.request') await hooks.onModelRequest(event.value)
       else if (event.type === 'model.response') await hooks.onModelResponse(event.value)
       else if (event.type === 'delta') await hooks.onDelta(event.value)

@@ -4,7 +4,8 @@
 
 ## 当前可以跑通
 
-- 用人经理、HR 和企业管理员使用三个后端测试账号登录；权限来自签名 HttpOnly Cookie。
+- 登录时填写企业空间、账号和姓名并选择用人经理、HR 或企业管理员；不存在固定用户名，权限来自签名 HttpOnly Cookie。
+- 新普通账号进入空工作台，只能看到自己创建或被加入的岗位；同一账号重新登录恢复历史内容。企业管理员按企业空间查看全部岗位。
 - 三种角色都能以真实身份和 Agent 对话，消息、回复与主动澄清轮次持久化保存；普通对话不限轮数。
 - 企业管理员拥有租户级最高权限，并可在完整 Trace 控制台查看全岗位运行、用户原文、模型输入输出、工具调用和审计记录。
 - 创建岗位会话、同步 Mock HC/组织背景、多轮澄清并实时接收 SSE。
@@ -12,7 +13,7 @@
 - 导入 JSON/纯文本脱敏候选人；手机号、邮箱和显式姓名在进入模型前被拒绝。
 - 候选人达到“10 名＋2 个渠道＋2 次同类卡点”后进入 HR 审核；HR 通过后才创建经理任务。
 - 正式产物使用只追加版本、content_hash、乐观锁和下游确认失效。
-- 完整 Trace 保存用户原文、发送给模型的 Prompt、模型最终输出、工具入参与返回、Token 和延迟；API Key、Cookie、内部令牌与模型未提供的隐藏思维链不采集。
+- 完整 Trace 将注入上下文拆成 System Prompt、当前用户输入、短期会话记忆、长期岗位记忆和任务状态，并保存实际模型 Prompt、最终输出、工具入参与返回、Token 和延迟；API Key、Cookie、内部令牌与模型未提供的隐藏思维链不采集。
 
 ## 本地启动
 
@@ -23,13 +24,9 @@
     corepack pnpm harness:prepare
     corepack pnpm dev
 
-访问 http://localhost:5173。登录页提供：
+访问 http://localhost:5173。登录页要求填写企业空间 ID、账号和姓名，并选择本账号的角色。账号第一次出现时完成 Demo 注册并进入空工作台；相同企业空间和账号再次登录时恢复原身份与岗位。账号首次绑定角色后不能在登录页提权或切换角色。
 
-- manager-demo：用人经理
-- hr-demo：HR 招聘负责人
-- admin-demo：企业管理员
-
-在 `.env` 中填写 `DEEPSEEK_API_KEY` 后，`pnpm dev` 会同时启动 Web、API 和真实 Harness Sidecar。若暂时不配置 `DATABASE_URL`，API 会使用包含固定演示岗位的内存 Store。若只想运行不产生模型费用的确定性模式，可执行 `corepack pnpm dev:mock`。
+在 `.env` 中填写 `DEEPSEEK_API_KEY` 后，`pnpm dev` 会同时启动 Web、API 和真实 Harness Sidecar。若暂时不配置 `DATABASE_URL`，API 会使用带兼容测试夹具的内存 Store；动态注册的新账号仍按成员关系隔离。若只想运行不产生模型费用的确定性模式，可执行 `corepack pnpm dev:mock`。
 
 ## Docker Compose 测试环境
 

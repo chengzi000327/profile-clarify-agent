@@ -354,6 +354,18 @@ DRAFT → MANAGER_CONFIRMED → READY_TO_PUBLISH → PUBLISHED | SUPERSEDED
 
 ## 8. 功能需求
 
+### FR-000 Demo账号、角色与数据隔离
+
+| 项 | 需求 |
+| --- | --- |
+| 登录输入 | 企业空间ID、账号、姓名与角色；不得在界面中预置固定人名 |
+| 首次登录 | 创建账号并绑定所选角色，进入没有岗位的空工作台 |
+| 再次登录 | 相同企业空间＋账号恢复原身份、岗位会话和历史内容 |
+| 新账号隔离 | 普通新账号不得继承其他账号的岗位；仅能看到自己创建或被加入的岗位 |
+| 角色约束 | 角色首次绑定后不能在登录请求中切换，避免通过前端参数提权 |
+| 管理员边界 | 企业管理员拥有企业空间内最高权限，可查看该空间的全部岗位与完整Trace |
+| Demo安全 | MVP登录不使用真实密码，界面必须提示不得填写密码和敏感身份信息；生产环境由SSO替换 |
+
 ### FR-001 创建和恢复岗位会话
 
 来源：C-11、S-01、F-01、F-02。
@@ -364,9 +376,9 @@ DRAFT → MANAGER_CONFIRMED → READY_TO_PUBLISH → PUBLISHED | SUPERSEDED
 | 输入 | 岗位名称（必填，1—50字）、初始需求（必填，1—2000字）、HR协作人（选填） |
 | 核心逻辑 | 创建唯一 `role_session_id`；一条岗位会话只对应一个岗位；MVP与一个 Harness Session 1:1关联；切换会话不共享未确认事实 |
 | 输出 | 会话列表新增记录；进入 `CONTEXT_SYNCING`；生成第一条当前任务 |
-| 默认 | 创建人为当前登录用人经理；未邀请HR不阻塞经理澄清 |
+| 默认 | 创建人为当前登录账号；未邀请协作者不阻塞岗位澄清 |
 | 异常 | 重复点击使用 idempotency_key 去重；创建失败保留表单；同名岗位允许创建但提示团队和时间 |
-| 权限 | 只有用人经理可创建；HR可被邀请加入 |
+| 权限 | Demo中用人经理、HR和企业管理员均可发起岗位；生产权限由企业策略配置 |
 | 数据写入 | RoleSession、Member、DecisionLog |
 | 埋点/验收 | `role_session_created`；SC-001、SC-002、SC-015 |
 
@@ -736,7 +748,7 @@ State写入规则：结构化业务事实只能通过业务工具写入；LLM回
 | `POST /api/v1/role-sessions/{id}/messages` | 提交用户输入并运行Agent | client_message_id | 400、409、429、500 |
 | `GET /api/v1/agent-runs/{run_id}/events` | SSE事件流，支持Last-Event-ID续传 | event sequence | 401、403、404 |
 | `POST /api/v1/agent-runs/{run_id}:cancel` | 取消Agent Run | run status | 403、404、409 |
-| `GET /api/v1/agent-runs/{run_id}/trace` | 读取不含用户原文和候选人内容的Trace | run_id | 403、404 |
+| `GET /api/v1/agent-runs/{run_id}/trace` | 企业管理员读取完整Trace；按System Prompt、当前输入、短期会话记忆、长期岗位记忆和任务状态分层，并展示实际模型输入输出与工具数据 | run_id | 403、404 |
 | `GET /api/v1/role-sessions/{id}/facts` | 读取可见事实 | ETag | 403 |
 | `POST /api/v1/conflicts/{id}:resolve` | 解决冲突 | expected_version | 403、409 |
 | `POST /api/v1/artifacts/{type}:generate` | 生成画像/评分卡/JD草稿 | base_version | 409、422、429 |
@@ -1010,6 +1022,7 @@ State写入规则：结构化业务事实只能通过业务工具写入；LLM回
 
 | Trace项 | 必须检查 |
 | --- | --- |
+| 上下文分层 | System Prompt、当前用户输入、短期会话记忆、长期岗位记忆与当前任务状态是否来源清晰、互不混淆 |
 | 工具选择 | 是否在正确阶段调用正确业务工具，是否避免无必要调用 |
 | 参数 | role_session_id、actor、version、idempotency_key、trace_id是否正确 |
 | 权限 | 工具是否使用后端身份；越权是否在返回数据前拒绝 |

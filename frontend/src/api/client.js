@@ -30,10 +30,10 @@ async function request(path, options = {}) {
 }
 
 export const api = {
-  login(userId) {
+  login(credentials) {
     return request('/api/v1/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ user_id: userId }),
+      body: JSON.stringify(credentials),
     });
   },
   logout() {
@@ -113,6 +113,7 @@ export const api = {
       'run.started',
       'agent.status',
       'message.accepted',
+      'context.snapshot',
       'assistant.delta',
       'assistant.completed',
       'tool.started',

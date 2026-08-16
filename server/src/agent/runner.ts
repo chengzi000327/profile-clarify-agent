@@ -306,6 +306,10 @@ export class AgentRunner {
       const result = await this.harness.run(request, {
         signal: controller.signal,
         onStatus: async (status) => emit('agent.status', { status }),
+        onContextSnapshot: async (snapshot) => emit(
+          'context.snapshot',
+          snapshot as unknown as Record<string, unknown>,
+        ),
         onModelRequest: async (prompt) => emit('model.request', { prompt }),
         onModelResponse: async (response) => emit('model.response', { response }),
         onDelta: async (delta) => {

@@ -54,9 +54,6 @@ export class RoleService {
     actor: ActorContext,
     input: { title: string; department: string },
   ): Promise<RoleView> {
-    if (!['MANAGER', 'ADMIN'].includes(actor.role)) {
-      throw new DomainError('FORBIDDEN', '仅用人经理可以创建岗位会话', 403)
-    }
     const timestamp = nowIso()
     const state: RoleState = {
       id: randomUUID(),
@@ -77,7 +74,7 @@ export class RoleService {
     }
     const aggregate: RoleAggregate = {
       state,
-      member_ids: [actor.user_id, 'hr-demo'],
+      member_ids: [actor.user_id],
       artifacts: [],
       candidates: [],
       calibration_signals: [],
@@ -412,6 +409,20 @@ export class RoleService {
     if (!current || current.status !== 'HR_REVIEW') {
       throw new DomainError('CALIBRATION_SIGNAL_NOT_REVIEWABLE', '校准信号不存在或已处理', 409)
     }
+    let managerAssigneeId: string | null = null
+    if (decision === 'APPROVE') {
+      const members = await Promise.all(
+        aggregate.member_ids.map((memberId) => this.store.getUser(memberId)),
+      )
+      managerAssigneeId = members.find((member) => member?.role === 'MANAGER')?.user_id ?? null
+      if (!managerAssigneeId) {
+        throw new DomainError(
+          'MANAGER_MEMBER_REQUIRED',
+          '岗位尚未加入用人经理，不能创建经理校准任务',
+          409,
+        )
+      }
+    }
     const timestamp = nowIso()
     const signal: CalibrationSignalRecord = {
       ...current,
@@ -427,7 +438,7 @@ export class RoleService {
         id: randomUUID(),
         role_session_id: roleSessionId,
         signal_id: signalId,
-        assignee_user_id: 'manager-demo',
+        assignee_user_id: managerAssigneeId!,
         status: 'OPEN',
         decision_reason: null,
         due_at: new Date(Date.now() + 3 * 24 * 60 * 60 * 1_000).toISOString(),

@@ -24,10 +24,20 @@ const login = async (
   app: FastifyInstance,
   userId: 'manager-demo' | 'hr-demo' | 'admin-demo',
 ): Promise<string> => {
+  const profile = {
+    'manager-demo': { display_name: '用人经理 · 陈曦', role: 'MANAGER' },
+    'hr-demo': { display_name: 'HR · 林夏', role: 'HR' },
+    'admin-demo': { display_name: '企业管理员 · 周宁', role: 'ADMIN' },
+  }[userId] as { display_name: string; role: 'MANAGER' | 'HR' | 'ADMIN' }
   const response = await app.inject({
     method: 'POST',
     url: '/api/v1/auth/login',
-    payload: { user_id: userId },
+    payload: {
+      workspace_id: 'legacy-demo',
+      account_id: userId,
+      display_name: profile.display_name,
+      role: profile.role,
+    },
   })
   expect(response.statusCode).toBe(200)
   return cookieFrom(response)
@@ -38,6 +48,64 @@ describe('Role Clarifier API', () => {
 
   beforeEach(async () => {
     app = await buildApp(config, { store: new MemoryStore() })
+  })
+
+  it('动态账号选择角色：新账号为空，同一账号恢复岗位，不同账号互相隔离', async () => {
+    const loginDynamic = async (accountId: string, displayName: string, role = 'MANAGER') => {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/v1/auth/login',
+        payload: {
+          workspace_id: 'acme-demo',
+          account_id: accountId,
+          display_name: displayName,
+          role,
+        },
+      })
+      return { response, cookie: response.statusCode === 200 ? cookieFrom(response) : '' }
+    }
+
+    const first = await loginDynamic('zhangsan', '张三')
+    expect(first.response.statusCode).toBe(200)
+    expect(first.response.json()).toMatchObject({
+      is_new_account: true,
+      actor: { display_name: '张三', role: 'MANAGER' },
+    })
+    const initiallyEmpty = await app.inject({
+      method: 'GET',
+      url: '/api/v1/role-sessions',
+      headers: { cookie: first.cookie },
+    })
+    expect(initiallyEmpty.json().items).toEqual([])
+
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/v1/role-sessions',
+      headers: { cookie: first.cookie },
+      payload: { title: '增长负责人', department: '增长团队' },
+    })
+    expect(created.statusCode).toBe(201)
+
+    const sameAccount = await loginDynamic('zhangsan', '张三')
+    expect(sameAccount.response.json().is_new_account).toBe(false)
+    const restored = await app.inject({
+      method: 'GET',
+      url: '/api/v1/role-sessions',
+      headers: { cookie: sameAccount.cookie },
+    })
+    expect(restored.json().items).toHaveLength(1)
+
+    const second = await loginDynamic('lisi', '李四')
+    const isolated = await app.inject({
+      method: 'GET',
+      url: '/api/v1/role-sessions',
+      headers: { cookie: second.cookie },
+    })
+    expect(isolated.json().items).toEqual([])
+
+    const roleMismatch = await loginDynamic('zhangsan', '张三', 'HR')
+    expect(roleMismatch.response.statusCode).toBe(409)
+    expect(roleMismatch.response.json().error.code).toBe('ACCOUNT_ROLE_MISMATCH')
   })
 
   afterEach(async () => {
@@ -126,6 +194,14 @@ describe('Role Clarifier API', () => {
       hidden_reasoning_exposed: false,
     })
     expect(JSON.stringify(trace)).toContain('半年内要建立')
+    expect(trace.events.map((event: { type: string }) => event.type)).toContain('context.snapshot')
+    const contextEvent = trace.events.find(
+      (event: { type: string }) => event.type === 'context.snapshot',
+    )
+    expect(contextEvent.payload.system_prompt.content).toContain('岗位画像澄清 Agent')
+    expect(contextEvent.payload.current_user_input.content.message).toContain('半年内要建立')
+    expect(contextEvent.payload.short_term_memory.source).toBe('RECENT_CONVERSATION')
+    expect(contextEvent.payload.long_term_memory.source).toBe('BUSINESS_DATABASE')
     expect(trace.events.map((event: { type: string }) => event.type)).toContain('model.request')
     expect(trace.events.map((event: { type: string }) => event.type)).toContain('model.response')
     expect(trace.events.find((event: { type: string }) => event.type === 'tool.started').payload)
