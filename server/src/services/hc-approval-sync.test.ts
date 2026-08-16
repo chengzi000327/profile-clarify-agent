@@ -25,8 +25,14 @@ describe('HC approval synchronization', () => {
   it('matches an approved HC after role identity is recognized', async () => {
     const intake = await service.createIntake(manager)
     expect(intake.state.hc_status).toBe('PENDING')
+    const drafted = await service.saveFactDraft(
+      intake.state.id,
+      manager,
+      '会话里推测的招聘原因，后续应由 HC 审批单覆盖。',
+      'HIRING_REASON',
+    )
 
-    const state = await service.updateRoleIdentityDraft(intake.state.id, manager, {
+    const state = await service.updateRoleIdentityDraft(drafted.id, manager, {
       title: '企业产品经理',
       department: '企业服务产品部',
     })
@@ -40,6 +46,13 @@ describe('HC approval synchronization', () => {
       source: 'Mock HC 审批单 HC-2026-EP-001',
       evidence_refs: ['mock://hc/HC-2026-EP-001'],
     }))
+    expect(state.facts).toContainEqual(expect.objectContaining({
+      statement: '会话里推测的招聘原因，后续应由 HC 审批单覆盖。',
+      status: 'STALE',
+    }))
+    expect(state.facts.filter((fact) =>
+      fact.category === 'HIRING_REASON' && fact.status === 'CONFIRMED',
+    )).toHaveLength(1)
     expect(evaluateRoleProfileGenerationReadiness(state)).toMatchObject({
       allowed: false,
       code: 'SUCCESS_CRITERION_REQUIRED',

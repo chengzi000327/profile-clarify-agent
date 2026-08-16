@@ -1335,7 +1335,11 @@ export class RoleService {
     const facts = current.facts.map((fact) => {
       const isHcFact = fact.category === 'HIRING_REASON'
         && fact.evidence_refs.some((reference) => /^(mock|hris):\/\/hc\//.test(reference))
-      if (!isHcFact || fact.evidence_refs.includes(approval?.source_ref ?? '')) return fact
+      const isSupersededHiringReason = approval?.status === 'APPROVED'
+        && fact.category === 'HIRING_REASON'
+        && !fact.evidence_refs.includes(approval.source_ref)
+      if ((!isHcFact && !isSupersededHiringReason)
+        || fact.evidence_refs.includes(approval?.source_ref ?? '')) return fact
       return fact.status === 'STALE'
         ? fact
         : { ...fact, status: 'STALE' as const, updated_at: nowIso() }
