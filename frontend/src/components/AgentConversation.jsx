@@ -79,7 +79,7 @@ export function Composer({ onSend, onExtend, pending = false, policy }) {
           </button>
         </div>
       )}
-      <p className="composer-caption">画像结论保留证据和推断状态，仅在用人经理确认后生效。</p>
+      <p className="composer-caption">画像结论保留证据和推断状态，由用人经理提交并经 HR 审核后生效。</p>
     </div>
   );
 }

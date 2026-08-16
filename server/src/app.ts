@@ -785,6 +785,40 @@ export const buildApp = async (
     }
   })
 
+  app.post('/api/v1/role-sessions/:id/artifacts/:artifact_id/submit-review', async (request) => {
+    const { id, artifact_id: artifactId } = z.object({
+      id: z.string().uuid(),
+      artifact_id: z.string().uuid(),
+    }).parse(request.params)
+    const body = z.object({
+      content_hash: z.string().min(16),
+      expected_revision: z.number().int().nonnegative(),
+    }).strict().parse(request.body)
+    return {
+      state: await roleService.submitRoleProfileForReview(
+        id,
+        artifactId,
+        request.actor,
+        body.content_hash,
+        body.expected_revision,
+      ),
+    }
+  })
+
+  app.post('/api/v1/role-sessions/:id/artifacts/:artifact_id/review', async (request) => {
+    const { id, artifact_id: artifactId } = z.object({
+      id: z.string().uuid(),
+      artifact_id: z.string().uuid(),
+    }).parse(request.params)
+    const body = z.object({
+      decision: z.enum(['APPROVE', 'REQUEST_CHANGES']),
+      comment: z.string().trim().max(2_000).default(''),
+      content_hash: z.string().min(16),
+      expected_revision: z.number().int().nonnegative(),
+    }).strict().parse(request.body)
+    return roleService.reviewRoleProfile(id, artifactId, request.actor, body)
+  })
+
   app.post('/api/v1/role-sessions/:id/publish:prepare', async (request) => {
     const { id } = IdParamsSchema.parse(request.params)
     const { expected_revision } = RevisionSchema.parse(request.body)

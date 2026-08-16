@@ -91,7 +91,14 @@ function privateMessagesForActor(items, actorId) {
 }
 
 function toRoleCard(state) {
-  const [stage, stageTone] = stagePresentation[state.stage] ?? [state.stage, 'active'];
+  const reviewPresentation = {
+    PENDING: ['待 HR 审核', 'active'],
+    APPROVED: ['HR 已通过', 'confirmed'],
+    CHANGES_REQUESTED: ['HR 已退回', 'calibrating'],
+  };
+  const [stage, stageTone] = reviewPresentation[state.profile_review?.status]
+    ?? stagePresentation[state.stage]
+    ?? [state.stage, 'active'];
   const latestProfile = state.latest_artifacts?.ROLE_PROFILE;
   return {
     id: state.id,
@@ -161,6 +168,7 @@ function App() {
         const session = await api.me();
         if (cancelled) return;
         setActor(session.actor);
+        if (session.actor.role === 'HR') setActiveView('profile');
         await loadRoleSessions(cancelled);
       } catch (error) {
         if (!(error instanceof ApiError) || error.status !== 401) setRequestError(error.message);
@@ -220,7 +228,7 @@ function App() {
     setAgentStatus('idle');
     setClarificationPolicy(null);
     setActor(session.actor);
-    setActiveView('conversation');
+    setActiveView(session.actor.role === 'HR' ? 'profile' : 'conversation');
     setNewConversationMode(false);
     setRequestError('');
     await loadRoleSessions();
@@ -245,7 +253,7 @@ function App() {
   function chooseRole(roleId) {
     setNewConversationMode(false);
     setActiveRoleId(roleId);
-    setActiveView('conversation');
+    setActiveView(actor?.role === 'HR' ? 'profile' : 'conversation');
     setEvidenceId(null);
     setMessages([]);
     setClarificationPolicy(null);
@@ -255,6 +263,7 @@ function App() {
   }
 
   function startNewConversation() {
+    if (actor?.role === 'HR') return;
     streamStopRef.current?.();
     setNewConversationMode(true);
     setActiveRoleId(null);
@@ -400,13 +409,24 @@ function App() {
     if (!activeRoleId || !roleDetail || isAgentBusy(agentStatus)) return;
     const latest = roleDetail.state.latest_artifacts?.[type];
     try {
-      if (latest?.status === 'DRAFT') {
-        await api.confirmArtifact(
+      if (latest?.status === 'DRAFT' && type === 'ROLE_PROFILE') {
+        if (roleDetail.state.profile_review?.status === 'PENDING') return;
+        if (roleDetail.state.profile_review?.status === 'CHANGES_REQUESTED') {
+          setAgentStatus('running');
+          const run = await api.generateArtifact(activeRoleId, type);
+          connectRun(run);
+          return;
+        }
+        await api.submitProfileReview(
           activeRoleId,
           latest.id,
           latest.content_hash,
           roleDetail.state.revision,
         );
+        await refreshActiveRole();
+        await loadRoleSessions(false, activeRoleId);
+      } else if (latest?.status === 'DRAFT') {
+        await api.confirmArtifact(activeRoleId, latest.id, latest.content_hash, roleDetail.state.revision);
         await refreshActiveRole();
       } else {
         // Lock the action before the create-run request returns to prevent double clicks.
@@ -418,6 +438,29 @@ function App() {
     } catch (error) {
       setAgentStatus('failed');
       setRequestError(error.message);
+    }
+  }
+
+  async function handleProfileReview(decision, comment) {
+    if (!activeRoleId || !roleDetail || isAgentBusy(agentStatus)) return;
+    const latest = roleDetail.state.latest_artifacts?.ROLE_PROFILE;
+    if (!latest || roleDetail.state.profile_review?.status !== 'PENDING') return;
+    setRequestError('');
+    try {
+      await api.reviewProfile(
+        activeRoleId,
+        latest.id,
+        decision,
+        comment,
+        latest.content_hash,
+        roleDetail.state.revision,
+      );
+      await refreshActiveRole();
+      await loadRoleSessions(false, activeRoleId);
+      return true;
+    } catch (error) {
+      setRequestError(error.message);
+      return false;
     }
   }
 
@@ -470,20 +513,18 @@ function App() {
           </button>
         </div>
 
-        <button className="new-project-button" onClick={startNewConversation}>
+        {actor.role !== 'HR' && <button className="new-project-button" onClick={startNewConversation}>
           <Plus size={17} />
           {!sidebarCollapsed && (
-            <span>{actor.role === 'HR'
-              ? '开始岗位需求审核'
-              : actor.role === 'ADMIN'
+            <span>{actor.role === 'ADMIN'
                 ? '开始 Agent 测试对话'
                 : '开始新岗位对话'}</span>
           )}
-        </button>
+        </button>}
 
         {!sidebarCollapsed && (
           <div className="sidebar-section-title">
-            <span>最近会话</span>
+            <span>{actor.role === 'HR' ? '岗位画像审核队列' : '最近会话'}</span>
             <div>
               <button className="icon-button tiny" aria-label="搜索会话"><Search size={15} /></button>
               <button className="icon-button tiny" aria-label="会话筛选"><SlidersHorizontal size={15} /></button>
@@ -584,10 +625,10 @@ function App() {
 
         <div className="workspace-tabs">
           <button className={activeView === 'conversation' ? 'active' : ''} onClick={() => setActiveView('conversation')}>
-            对话
+            {actor.role === 'HR' ? '审核协作' : '对话'}
           </button>
           <button className={activeView === 'profile' ? 'active' : ''} onClick={() => setActiveView('profile')}>
-            岗位画像 <span className="tab-state">{activeRole.version}</span>
+            {actor.role === 'HR' ? '画像审核' : '岗位画像'} <span className="tab-state">{activeRole.version}</span>
           </button>
           {actor.role === 'ADMIN' && (
             <button className={activeView === 'admin-trace' ? 'active' : ''} onClick={() => setActiveView('admin-trace')}>
@@ -622,6 +663,7 @@ function App() {
             roleDetail={roleDetail}
             onArtifactAction={handleArtifactAction}
             onConfirmFacts={confirmPendingFacts}
+            onReviewProfile={handleProfileReview}
             agentStatus={agentStatus}
           />
         )}
@@ -672,6 +714,18 @@ function EmptyWorkspace({
       cancelled = true;
     };
   }, [actor.role, actor.user_id]);
+  if (actor.role === 'HR') {
+    return (
+      <HrReviewEmptyWorkspace
+        actor={actor}
+        onLogout={onLogout}
+        onChooseRole={onChooseRole}
+        requestError={requestError}
+        onDismissError={onDismissError}
+        roleSessions={roleSessions}
+      />
+    );
+  }
   const guidance = actor.role === 'HR'
     ? {
         sidebarAction: '开始岗位需求审核',
@@ -930,6 +984,81 @@ function EmptyWorkspace({
             <Composer onSend={onSend} pending={agentStatus === 'running' || agentStatus === 'reconnecting'} />
           </section>
         )}
+      </main>
+    </div>
+  );
+}
+
+function HrReviewEmptyWorkspace({ actor, onLogout, onChooseRole, requestError, onDismissError, roleSessions }) {
+  const [profileOpen, setProfileOpen] = useState(false);
+  return (
+    <div className="app-shell empty-workspace-shell hr-review-workspace">
+      <aside className="sidebar">
+        <div className="brand-row">
+          <div className="brand">
+            <ClarifierMark size={34} plate />
+            <span className="brand-copy"><strong>画像澄清 Agent</strong><small>ROLE CLARIFIER</small></span>
+          </div>
+        </div>
+        <div className="hr-queue-label"><ListChecks size={16} /><span>岗位画像审核队列</span></div>
+        <div className="sidebar-section-title"><span>待我审核</span></div>
+        <nav className="role-session-list empty-role-session-list" aria-label="岗位画像审核队列">
+          {roleSessions.length === 0 ? (
+            <div className="empty-session-list">
+              <span className="session-icon"><FileSearch size={15} /></span>
+              <span><strong>暂无待审核画像</strong><small>用人经理提交后会出现在这里</small></span>
+            </div>
+          ) : roleSessions.map((role) => (
+            <button className="role-session-row" key={role.id} onClick={() => onChooseRole(role.id)}>
+              <span className="session-icon"><FileSearch size={15} /></span>
+              <span className="role-session-copy">
+                <span className="role-session-title"><strong>{role.name}</strong><small>{role.updatedAt}</small></span>
+                <span className="role-session-meta"><em className={role.stageTone}>{role.stage}</em><i>·</i><small>{role.version}</small></span>
+              </span>
+            </button>
+          ))}
+        </nav>
+        <div className="sidebar-footer">
+          <button className="sidebar-utility" type="button"><Settings size={17} /><span>审核规则与权限</span></button>
+          <button className="user-chip" type="button" onClick={() => setProfileOpen((value) => !value)}>
+            <span className="avatar avatar-hr">{displayInitial(actor.display_name, actor.role)}</span>
+            <span className="user-copy"><strong>{actor.display_name}</strong><small>{actorRoleLabel[actor.role]}</small></span>
+            <MoreHorizontal size={16} />
+          </button>
+          {profileOpen && (
+            <div className="profile-popover">
+              <strong>HR 人工审核权限</strong>
+              <span>Agent 只提供预审建议，最终通过或退回必须由当前 HR 操作。</span>
+              <div className="role-preview-switch"><button className="active" type="button">HR 审核人</button><button type="button" onClick={onLogout}>退出账号</button></div>
+            </div>
+          )}
+        </div>
+      </aside>
+      <main className="main-workspace empty-main-workspace">
+        <header className="workspace-header">
+          <div className="title-stack">
+            <div className="title-line"><strong>岗位画像审核</strong><span className="role-stage-badge empty">等待业务提交</span></div>
+            <div className="preset-line"><span className="preset-badge"><ClarifierMark size={16} />Agent 辅助审核</span><span className="phase-dot" /><span>HR 最终决策</span></div>
+          </div>
+          <div className="header-actions"><span className="avatar avatar-hr">{displayInitial(actor.display_name, actor.role)}</span></div>
+        </header>
+        <div className="workspace-tabs"><button className="active">待审核画像 <span className="tab-state">0</span></button></div>
+        {requestError && <div className="workspace-error"><AlertTriangle size={14} />{requestError}<button onClick={onDismissError}><X size={13} /></button></div>}
+        <section className="hr-review-empty-state">
+          <div className="hr-review-empty-card">
+            <span className="profile-empty-icon"><ListChecks size={25} /></span>
+            <h1>当前没有待审核的岗位画像</h1>
+            <p>用人经理完成画像澄清并提交审核后，单据会自动进入这里。HR 不需要替业务重新描述招聘需求。</p>
+            <div className="hr-review-process" aria-label="岗位画像审核流程">
+              <div className="completed"><span>1</span><strong>用人经理澄清并提交</strong><small>确认招聘原因、成功标准与岗位边界</small></div>
+              <ChevronRight size={16} />
+              <div><span>2</span><strong>Agent 提供预审建议</strong><small>检查证据缺口、冲突与执行风险</small></div>
+              <ChevronRight size={16} />
+              <div><span>3</span><strong>HR 人工审核</strong><small>最终决定通过或退回补充</small></div>
+            </div>
+            <div className="hr-human-boundary"><ShieldCheck size={16} /><div><strong>决策边界</strong><span>Agent 建议仅供参考，不能自动通过、驳回或代替 HR 作出审批决定。</span></div></div>
+          </div>
+        </section>
       </main>
     </div>
   );
@@ -1257,9 +1386,9 @@ function ArtifactEmptyState({ title, description, invalidated = false }) {
   );
 }
 
-function ProfileView({ viewerRole, onOpenEvidence, onOpenConversation, roleDetail, onArtifactAction, onConfirmFacts, agentStatus }) {
+function ProfileView({ viewerRole, onOpenEvidence, onOpenConversation, roleDetail, onArtifactAction, onConfirmFacts, onReviewProfile, agentStatus }) {
   const agentBusy = isAgentBusy(agentStatus);
-  const [section, setSection] = useState(viewerRole === 'hr' || viewerRole === 'admin' ? 'portrait' : 'basis');
+  const [section, setSection] = useState(viewerRole === 'admin' ? 'portrait' : 'basis');
   const [expandedScenario, setExpandedScenario] = useState(null);
   const [expandedRequirement, setExpandedRequirement] = useState(null);
   const [expandedScore, setExpandedScore] = useState(null);
@@ -1268,6 +1397,7 @@ function ProfileView({ viewerRole, onOpenEvidence, onOpenConversation, roleDetai
   const assessmentArtifact = state?.latest_artifacts?.ASSESSMENT_SCORECARD;
   const jdArtifact = state?.latest_artifacts?.PUBLIC_JD;
   const recruitingArtifact = state?.latest_artifacts?.HR_RECRUITING_BRIEF;
+  const profileReview = state?.profile_review;
   const hcApproval = state?.hc_approval;
   const profile = profileArtifact?.content;
   const pendingFacts = (state?.facts ?? []).filter((fact) => fact.status === 'DRAFT');
@@ -1412,11 +1542,15 @@ function ProfileView({ viewerRole, onOpenEvidence, onOpenConversation, roleDetai
 
   const allProfileTabs = [
     { id: 'portrait', label: '招聘画像', meta: recruitingArtifact ? `v${recruitingArtifact.version} · ${artifactStatusLabel(recruitingArtifact.status)}` : '尚未生成' },
-    { id: 'basis', label: '画像依据', meta: `v${profileArtifact.version} · ${artifactStatusLabel(profileArtifact.status)}` },
+    { id: 'basis', label: '画像依据', meta: `v${profileArtifact.version} · ${profileReview?.status === 'PENDING' ? '待 HR 审核' : artifactStatusLabel(profileArtifact.status)}` },
     { id: 'assessment', label: '评估方案', meta: assessmentArtifact ? `${assessmentArtifact.content?.dimensions?.length ?? 0} 个维度` : '尚未生成' },
     { id: 'jd', label: '对外 JD', meta: jdArtifact ? `v${jdArtifact.version} · ${artifactStatusLabel(jdArtifact.status)}` : '尚未生成' },
   ];
-  const profileTabs = viewerRole === 'hr' || viewerRole === 'admin' ? allProfileTabs : allProfileTabs.filter((item) => item.id !== 'portrait');
+  const profileTabs = viewerRole === 'hr'
+    ? [allProfileTabs[1], allProfileTabs[2], allProfileTabs[3], allProfileTabs[0]]
+    : viewerRole === 'admin'
+      ? allProfileTabs
+      : allProfileTabs.filter((item) => item.id !== 'portrait');
   const primaryActionLabel = section === 'jd'
     ? '确认并交给 HR 发布'
     : section === 'assessment'
@@ -1433,7 +1567,13 @@ function ProfileView({ viewerRole, onOpenEvidence, onOpenConversation, roleDetai
         : 'ROLE_PROFILE';
   const latestArtifact = roleDetail?.state?.latest_artifacts?.[artifactType];
   const connectedActionLabel = latestArtifact?.status === 'DRAFT'
-    ? primaryActionLabel
+    ? artifactType === 'ROLE_PROFILE'
+      ? profileReview?.status === 'PENDING'
+        ? '等待 HR 审核'
+        : profileReview?.status === 'CHANGES_REQUESTED'
+          ? '根据 HR 意见生成新版本'
+          : '提交 HR 审核'
+      : primaryActionLabel
     : latestArtifact?.status === 'CONFIRMED'
       ? '生成新版本'
       : latestArtifact?.status === 'INVALIDATED'
@@ -1447,7 +1587,7 @@ function ProfileView({ viewerRole, onOpenEvidence, onOpenConversation, roleDetai
       <div className="profile-page profile-page-wide">
         <div className="profile-heading profile-heading-rich">
           <div>
-            <div className="document-kicker"><FileSearch size={15} />招聘识别画像 · v{profileArtifact.version} · {artifactStatusLabel(profileArtifact.status)}</div>
+            <div className="document-kicker"><FileSearch size={15} />招聘识别画像 · v{profileArtifact.version} · {profileReview?.status === 'PENDING' ? '待 HR 审核' : artifactStatusLabel(profileArtifact.status)}</div>
             <h1>{state?.title ?? '待识别岗位'}</h1>
             <div className="profile-meta-line">
               <span className={state?.hc_status === 'APPROVED' ? 'approved-inline' : ''}><CheckCircle2 size={12} />HC {state?.hc_status === 'APPROVED' ? '已审批' : '待审批'}</span><i>·</i><span>{state?.department ?? '待确认团队'}</span>
@@ -1455,15 +1595,25 @@ function ProfileView({ viewerRole, onOpenEvidence, onOpenConversation, roleDetai
           </div>
           <div className="profile-heading-actions">
             <button className="quiet-button"><History size={15} />查看版本</button>
-            <button
-              className="primary-action"
-              disabled={agentBusy}
-              onClick={() => onArtifactAction?.(artifactType)}
-            >
-              {agentBusy ? '正在生成岗位画像…' : connectedActionLabel}<ChevronRight size={16} />
-            </button>
+            {!(viewerRole === 'hr' && artifactType === 'ROLE_PROFILE') && (
+              <button
+                className="primary-action"
+                disabled={agentBusy || (artifactType === 'ROLE_PROFILE' && profileReview?.status === 'PENDING')}
+                onClick={() => onArtifactAction?.(artifactType)}
+              >
+                {agentBusy ? '正在生成岗位画像…' : connectedActionLabel}<ChevronRight size={16} />
+              </button>
+            )}
           </div>
         </div>
+
+        <ProfileReviewPanel
+          viewerRole={viewerRole}
+          review={profileReview}
+          artifact={profileArtifact}
+          agentBusy={agentBusy}
+          onReview={onReviewProfile}
+        />
 
         <div className="portrait-basic-strip" aria-label="招聘基本信息">
           {basicInfo.map((item) => (
@@ -1476,7 +1626,7 @@ function ProfileView({ viewerRole, onOpenEvidence, onOpenConversation, roleDetai
 
         <div className={`profile-permission-note ${viewerRole}`}>
           <ShieldCheck size={13} />
-          <span>{viewerRole === 'admin' ? '企业管理员最高权限：可查看和处理企业内全部岗位、内部画像、产物与审计记录。' : viewerRole === 'hr' ? 'HR 权限：可查看内部寻源策略、候选人判断规则和全部协作产物。' : '用人经理权限：可确认画像依据、评估方案和对外 JD；HR 内部寻源策略不可见。'}</span>
+          <span>{viewerRole === 'admin' ? '企业管理员最高权限：可查看和处理企业内全部岗位、内部画像、产物与审计记录。' : viewerRole === 'hr' ? 'HR 审核权限：结合业务提交内容、事实证据和 Agent 建议，人工决定通过或退回；Agent 不能代替审批。' : '用人经理权限：负责澄清并提交岗位画像；HR 审核通过后，画像才成为后续产物的正式依据。'}</span>
         </div>
 
         {profileArtifact.status === 'INVALIDATED' && (
@@ -1536,6 +1686,119 @@ function ProfileView({ viewerRole, onOpenEvidence, onOpenConversation, roleDetai
             />
           )}
           {section === 'jd' && <JDPreview jd={jdArtifact} state={state} />}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function ProfileReviewPanel({ viewerRole, review, artifact, agentBusy, onReview }) {
+  const [comment, setComment] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  if (!review || review.status === 'NOT_SUBMITTED') return null;
+
+  const submittedAt = review.submitted_at
+    ? new Date(review.submitted_at).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+    : '';
+  const reviewBusy = agentBusy || submitting;
+
+  async function decide(decision) {
+    if (reviewBusy || !onReview) return;
+    setSubmitting(true);
+    try {
+      const succeeded = await onReview(decision, comment.trim());
+      if (succeeded) setComment('');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  if (viewerRole !== 'hr') {
+    const copy = review.status === 'PENDING'
+      ? {
+          tone: 'pending',
+          title: `岗位画像 v${review.artifact_version ?? artifact?.version} 已提交 HR 审核`,
+          detail: 'HR 将结合画像原文、事实证据和 Agent 预审建议作出最终决定。在审核完成前不能重复提交。',
+        }
+      : review.status === 'APPROVED'
+        ? {
+            tone: 'approved',
+            title: 'HR 已审核通过岗位画像',
+            detail: review.review_comment || '当前版本已成为后续评估方案和 JD 的正式依据。',
+          }
+        : {
+            tone: 'changes',
+            title: 'HR 已退回，请补充后提交新版本',
+            detail: review.review_comment || '请根据 HR 审核意见调整岗位画像。',
+          };
+    return (
+      <div className={`manager-review-status ${copy.tone}`}>
+        {review.status === 'APPROVED' ? <CheckCircle2 size={17} /> : <AlertTriangle size={17} />}
+        <div><strong>{copy.title}</strong><span>{copy.detail}</span></div>
+      </div>
+    );
+  }
+
+  if (review.status !== 'PENDING') {
+    return (
+      <div className={`manager-review-status ${review.status === 'APPROVED' ? 'approved' : 'changes'}`}>
+        {review.status === 'APPROVED' ? <CheckCircle2 size={17} /> : <AlertTriangle size={17} />}
+        <div>
+          <strong>{review.status === 'APPROVED' ? '该岗位画像已由 HR 审核通过' : '该岗位画像已退回用人经理补充'}</strong>
+          <span>{review.review_comment || '暂无补充审核意见。'}</span>
+        </div>
+      </div>
+    );
+  }
+
+  const advice = review.agent_advice;
+  return (
+    <section className="profile-review-panel">
+      <div className="profile-review-heading">
+        <div>
+          <span className="review-kicker"><ListChecks size={14} />用人经理提交的画像单</span>
+          <h2>请 HR 审核岗位画像 v{review.artifact_version ?? artifact?.version}</h2>
+          <p>{review.submitted_by_name ?? '用人经理'} 于 {submittedAt || '刚刚'}提交。Agent 会提供检查建议，但不会替你作出审批决定。</p>
+        </div>
+        <span className="review-pending-badge">等待 HR 决策</span>
+      </div>
+
+      {advice && (
+        <div className="agent-review-advice">
+          <div className="agent-review-title">
+            <span><ClarifierMark size={27} plate /></span>
+            <div><strong>Agent 预审建议 · 仅供参考</strong><p>{advice.summary}</p></div>
+            <em className={advice.recommendation === 'APPROVE' ? 'approve' : 'changes'}>
+              {advice.recommendation === 'APPROVE' ? '建议通过' : '建议重点复核'}
+            </em>
+          </div>
+          <div className="agent-review-checks">
+            {advice.checks.map((check) => (
+              <div className={check.status.toLowerCase()} key={check.label}>
+                {check.status === 'PASS' ? <CheckCircle2 size={15} /> : <AlertTriangle size={15} />}
+                <span><strong>{check.label}</strong><small>{check.detail}</small></span>
+              </div>
+            ))}
+          </div>
+          {advice.concerns.length > 0 && (
+            <div className="agent-review-concerns"><strong>建议 HR 重点判断</strong>{advice.concerns.map((item) => <p key={item}>{item}</p>)}</div>
+          )}
+        </div>
+      )}
+
+      <div className="hr-review-decision">
+        <label htmlFor="hr-review-comment">HR 审核意见</label>
+        <textarea
+          id="hr-review-comment"
+          value={comment}
+          onChange={(event) => setComment(event.target.value)}
+          placeholder="通过时可补充执行提醒；退回时请明确说明需要用人经理补充或修改的内容。"
+          rows={3}
+        />
+        <div>
+          <span><ShieldCheck size={14} />最终决定由当前 HR 账号记录并进入审计日志</span>
+          <button className="quiet-button review-return-button" disabled={reviewBusy || comment.trim().length < 3} onClick={() => decide('REQUEST_CHANGES')}>退回补充</button>
+          <button className="primary-action" disabled={reviewBusy} onClick={() => decide('APPROVE')}><Check size={15} />确认通过</button>
         </div>
       </div>
     </section>

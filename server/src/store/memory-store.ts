@@ -104,7 +104,16 @@ export class MemoryStore implements ApplicationStore {
     if (
       !aggregate ||
       aggregate.state.tenant_id !== actor.tenant_id ||
-      (actor.role !== 'ADMIN' && !aggregate.member_ids.includes(actor.user_id))
+      (
+        actor.role !== 'ADMIN'
+        && !aggregate.member_ids.includes(actor.user_id)
+        && !(
+          actor.role === 'HR'
+          && ['PENDING', 'APPROVED', 'CHANGES_REQUESTED'].includes(
+            aggregate.state.profile_review?.status ?? 'NOT_SUBMITTED',
+          )
+        )
+      )
     ) {
       return null
     }

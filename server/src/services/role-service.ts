@@ -23,6 +23,7 @@ import {
   type PublicJD,
   type PublicJobBasics,
   type PublicJobBasicsUpdate,
+  type ProfileReviewAdvice,
   type RoleProfile,
   type RoleState,
 } from '@role-clarifier/contracts'
@@ -51,6 +52,59 @@ import {
 } from './role-state-projection.js'
 
 const nowIso = (): string => new Date().toISOString()
+
+const buildProfileReviewAdvice = (
+  state: RoleState,
+  profile: RoleProfile,
+): ProfileReviewAdvice => {
+  const confirmedFacts = state.facts.filter((fact) => fact.status === 'CONFIRMED')
+  const openConflicts = state.conflicts.filter((conflict) => conflict.status === 'OPEN')
+  const hasHiringReason = confirmedFacts.some((fact) => fact.category === 'HIRING_REASON')
+  const hasSuccessCriteria = confirmedFacts.some((fact) => fact.category === 'SUCCESS_CRITERION')
+  const mustHaves = profile.requirements.filter((item) => item.priority === 'MUST_HAVE')
+  const concerns = [
+    ...openConflicts.map((conflict) => `存在未解决冲突：${conflict.field}`),
+    ...profile.open_questions.map((question) => question.question),
+    ...(!hasHiringReason ? ['招聘原因尚未形成已确认事实。'] : []),
+    ...(!hasSuccessCriteria ? ['成功标准尚未形成已确认事实。'] : []),
+  ]
+  const recommendation = concerns.length > 0 ? 'REQUEST_CHANGES' : 'APPROVE'
+  return {
+    recommendation,
+    summary: recommendation === 'APPROVE'
+      ? `画像已覆盖岗位使命、${profile.work.length} 项关键工作和 ${profile.requirements.length} 项人才要求，关键结论均保留事实引用，建议 HR 在核对招聘可执行性后决定是否通过。`
+      : `画像主体已经形成，但仍有 ${concerns.length} 项需要 HR 重点判断。Agent 建议先核对这些缺口，再决定通过或退回用人经理补充。`,
+    checks: [
+      {
+        label: '招聘原因',
+        status: hasHiringReason ? 'PASS' : 'WARNING',
+        detail: hasHiringReason ? '已引用用人经理确认的招聘原因。' : '缺少已确认的招聘原因。',
+      },
+      {
+        label: '成功标准',
+        status: hasSuccessCriteria ? 'PASS' : 'WARNING',
+        detail: hasSuccessCriteria ? '已形成可追溯的成功标准。' : '缺少已确认的成功标准。',
+      },
+      {
+        label: '岗位边界',
+        status: openConflicts.length === 0 ? 'PASS' : 'WARNING',
+        detail: openConflicts.length === 0 ? '当前没有未解决的岗位事实冲突。' : `仍有 ${openConflicts.length} 个事实冲突待处理。`,
+      },
+      {
+        label: '人才要求',
+        status: mustHaves.length > 0 ? 'PASS' : 'WARNING',
+        detail: mustHaves.length > 0 ? `包含 ${mustHaves.length} 项 Must-have，并保留工作或事实依据。` : '尚未形成明确的 Must-have。',
+      },
+      {
+        label: '待确认问题',
+        status: profile.open_questions.length === 0 ? 'PASS' : 'WARNING',
+        detail: profile.open_questions.length === 0 ? '画像没有遗留开放问题。' : `仍有 ${profile.open_questions.length} 个开放问题需要人工判断。`,
+      },
+    ],
+    concerns,
+    generated_at: nowIso(),
+  }
+}
 
 const hcApprovalFromRecord = (record: RecruitingContextRecord): HCApproval | null => {
   const parsed = HCApprovalSchema.safeParse({
@@ -1409,7 +1463,12 @@ export class RoleService {
   }
 
   async list(actor: ActorContext): Promise<RoleState[]> {
-    const states = await this.store.listRoleStates(actor)
+    const states = actor.role === 'HR'
+      ? (await this.store.listTenantRoleStates(actor.tenant_id)).filter((state) =>
+          state.profile_review?.status === 'PENDING'
+          || state.profile_review?.status === 'APPROVED'
+          || state.profile_review?.status === 'CHANGES_REQUESTED')
+      : await this.store.listRoleStates(actor)
     return states.map((state) => this.filterState(state, actor))
   }
 
@@ -1442,6 +1501,9 @@ export class RoleService {
     actor: ActorContext,
     input: { title: string; department: string },
   ): Promise<RoleView> {
+    if (actor.role === 'HR') {
+      throw new DomainError('HR_REVIEW_ONLY', 'HR 工作台只接收用人经理提交的岗位画像，不能代替业务发起岗位需求。', 403)
+    }
     const timestamp = nowIso()
     const state: RoleState = {
       id: randomUUID(),
@@ -1473,6 +1535,9 @@ export class RoleService {
   }
 
   async createIntake(actor: ActorContext): Promise<RoleView> {
+    if (actor.role === 'HR') {
+      throw new DomainError('HR_REVIEW_ONLY', 'HR 工作台只接收用人经理提交的岗位画像，不能代替业务发起岗位需求。', 403)
+    }
     const timestamp = nowIso()
     const state: RoleState = {
       id: randomUUID(),
@@ -1528,6 +1593,9 @@ export class RoleService {
       ...(title ? { title } : {}),
       ...(department ? { department } : {}),
       stage: invalidation.invalidatedTypes.length > 0 ? 'PROFILE_DRAFT' : aggregate.state.stage,
+      profile_review: invalidation.invalidatedTypes.includes('ROLE_PROFILE')
+        ? undefined
+        : aggregate.state.profile_review,
       latest_artifacts: invalidation.latest,
       revision: aggregate.state.revision + 1,
       updated_at: timestamp,
@@ -1729,6 +1797,9 @@ export class RoleService {
       facts: aggregate.state.facts.map((fact) =>
         ids.has(fact.id) ? { ...fact, status: 'CONFIRMED' as const, updated_at: timestamp } : fact,
       ),
+      profile_review: invalidation.invalidatedTypes.includes('ROLE_PROFILE')
+        ? undefined
+        : aggregate.state.profile_review,
       latest_artifacts: invalidation.latest,
       updated_at: timestamp,
     }
@@ -1749,6 +1820,9 @@ export class RoleService {
     const aggregate = await this.requireAggregate(roleSessionId, actor)
     assertArtifactAccess(actor, type)
     if (type === 'ROLE_PROFILE') {
+      if (!['MANAGER', 'ADMIN'].includes(actor.role)) {
+        throw new DomainError('FORBIDDEN', 'HR 只负责审核用人经理提交的岗位画像，不代替业务生成画像', 403)
+      }
       const visibleState = this.filterState(aggregate.state, actor)
       const readiness = evaluateRoleProfileGenerationReadiness(visibleState)
       if (!readiness.allowed) {
@@ -1851,11 +1925,167 @@ export class RoleService {
       ...aggregate.state,
       stage: stageByType[type],
       revision: aggregate.state.revision + 1,
+      ...(type === 'ROLE_PROFILE'
+        ? {
+            profile_review: {
+              status: 'NOT_SUBMITTED' as const,
+              artifact_id: artifact.id,
+              artifact_version: artifact.version,
+              submitted_by: null,
+              submitted_by_name: null,
+              submitted_at: null,
+              reviewed_by: null,
+              reviewed_at: null,
+              review_comment: null,
+              agent_advice: null,
+            },
+          }
+        : {}),
       latest_artifacts: latest,
       updated_at: nowIso(),
     }
     await this.persistState(state, aggregate.state.revision)
     return artifact
+  }
+
+  async submitRoleProfileForReview(
+    roleSessionId: string,
+    artifactId: string,
+    actor: ActorContext,
+    submittedHash: string,
+    expectedRevision: number,
+  ): Promise<RoleState> {
+    const aggregate = await this.requireAggregate(roleSessionId, actor)
+    if (!['MANAGER', 'ADMIN'].includes(actor.role)) {
+      throw new DomainError('FORBIDDEN', '仅用人经理可以提交岗位画像给 HR 审核', 403)
+    }
+    assertRevision(aggregate.state.revision, expectedRevision)
+    const artifact = aggregate.artifacts.find((item) => item.id === artifactId)
+    if (!artifact || artifact.type !== 'ROLE_PROFILE') {
+      throw new DomainError('ARTIFACT_NOT_FOUND', '岗位画像不存在', 404)
+    }
+    if (artifact.status !== 'DRAFT') {
+      throw new DomainError('ROLE_PROFILE_NOT_SUBMITTABLE', '只有岗位画像草稿可以提交 HR 审核', 409)
+    }
+    if (artifact.content_hash !== submittedHash) {
+      throw new DomainError('CONTENT_HASH_MISMATCH', '岗位画像已发生变化，请刷新后重新提交', 409)
+    }
+    if (aggregate.state.latest_artifacts.ROLE_PROFILE?.id !== artifact.id) {
+      throw new DomainError('ROLE_PROFILE_NOT_LATEST', '只能提交最新版本的岗位画像', 409)
+    }
+    const profile = RoleProfileSchema.parse(artifact.content)
+    const timestamp = nowIso()
+    const state: RoleState = {
+      ...aggregate.state,
+      stage: 'PROFILE_DRAFT',
+      revision: aggregate.state.revision + 1,
+      profile_review: {
+        status: 'PENDING',
+        artifact_id: artifact.id,
+        artifact_version: artifact.version,
+        submitted_by: actor.user_id,
+        submitted_by_name: actor.display_name,
+        submitted_at: timestamp,
+        reviewed_by: null,
+        reviewed_at: null,
+        review_comment: null,
+        agent_advice: buildProfileReviewAdvice(aggregate.state, profile),
+      },
+      updated_at: timestamp,
+    }
+    await this.persistState(state, aggregate.state.revision)
+    await this.audit(actor, roleSessionId, 'SUBMIT_PROFILE_REVIEW', 'ROLE_PROFILE', artifact.id, {
+      content_hash: submittedHash,
+      version: artifact.version,
+    })
+    return this.filterState(state, actor)
+  }
+
+  async reviewRoleProfile(
+    roleSessionId: string,
+    artifactId: string,
+    actor: ActorContext,
+    input: {
+      decision: 'APPROVE' | 'REQUEST_CHANGES'
+      comment: string
+      content_hash: string
+      expected_revision: number
+    },
+  ): Promise<{ state: RoleState; artifact: ArtifactEnvelope }> {
+    const aggregate = await this.requireAggregate(roleSessionId, actor)
+    if (!['HR', 'ADMIN'].includes(actor.role)) {
+      throw new DomainError('FORBIDDEN', '岗位画像必须由 HR 审核', 403)
+    }
+    assertRevision(aggregate.state.revision, input.expected_revision)
+    const artifact = aggregate.artifacts.find((item) => item.id === artifactId)
+    if (!artifact || artifact.type !== 'ROLE_PROFILE') {
+      throw new DomainError('ARTIFACT_NOT_FOUND', '岗位画像不存在', 404)
+    }
+    const review = aggregate.state.profile_review
+    if (review?.status !== 'PENDING' || review.artifact_id !== artifact.id) {
+      throw new DomainError('PROFILE_REVIEW_NOT_PENDING', '当前岗位画像不在 HR 待审核状态', 409)
+    }
+    if (artifact.content_hash !== input.content_hash) {
+      throw new DomainError('CONTENT_HASH_MISMATCH', '岗位画像已发生变化，请刷新后重新审核', 409)
+    }
+    if (input.decision === 'REQUEST_CHANGES' && input.comment.trim().length < 3) {
+      throw new DomainError('PROFILE_REVIEW_COMMENT_REQUIRED', '退回补充时请填写具体审核意见', 422)
+    }
+
+    const timestamp = nowIso()
+    if (input.decision === 'APPROVE') {
+      const confirmed = confirmArtifact(artifact, actor, input.content_hash)
+      await this.store.updateArtifact(confirmed)
+      const state: RoleState = {
+        ...aggregate.state,
+        stage: 'PROFILE_CONFIRMED',
+        revision: aggregate.state.revision + 1,
+        profile_review: {
+          ...review,
+          status: 'APPROVED',
+          reviewed_by: actor.user_id,
+          reviewed_at: timestamp,
+          review_comment: input.comment.trim() || null,
+        },
+        latest_artifacts: {
+          ...aggregate.state.latest_artifacts,
+          ROLE_PROFILE: {
+            id: confirmed.id,
+            version: confirmed.version,
+            status: confirmed.status,
+            content_hash: confirmed.content_hash,
+            content: confirmed.content,
+          },
+        },
+        updated_at: timestamp,
+      }
+      await this.persistState(state, aggregate.state.revision)
+      await this.audit(actor, roleSessionId, 'APPROVE_PROFILE_REVIEW', 'ROLE_PROFILE', artifact.id, {
+        comment: input.comment.trim() || null,
+        version: artifact.version,
+      })
+      return { state: this.filterState(state, actor), artifact: confirmed }
+    }
+
+    const state: RoleState = {
+      ...aggregate.state,
+      stage: 'PROFILE_DRAFT',
+      revision: aggregate.state.revision + 1,
+      profile_review: {
+        ...review,
+        status: 'CHANGES_REQUESTED',
+        reviewed_by: actor.user_id,
+        reviewed_at: timestamp,
+        review_comment: input.comment.trim(),
+      },
+      updated_at: timestamp,
+    }
+    await this.persistState(state, aggregate.state.revision)
+    await this.audit(actor, roleSessionId, 'REQUEST_PROFILE_CHANGES', 'ROLE_PROFILE', artifact.id, {
+      comment: input.comment.trim(),
+      version: artifact.version,
+    })
+    return { state: this.filterState(state, actor), artifact }
   }
 
   async confirmArtifact(
@@ -1870,6 +2100,9 @@ export class RoleService {
     const artifact = aggregate.artifacts.find((item) => item.id === artifactId)
     if (!artifact) throw new DomainError('ARTIFACT_NOT_FOUND', '产物不存在', 404)
     assertArtifactAccess(actor, artifact.type)
+    if (artifact.type === 'ROLE_PROFILE') {
+      throw new DomainError('ROLE_PROFILE_REVIEW_REQUIRED', '岗位画像需先由用人经理提交，再由 HR 审核', 409)
+    }
     if (artifact.type === 'HR_RECRUITING_BRIEF' && !['HR', 'ADMIN'].includes(actor.role)) {
       throw new DomainError('FORBIDDEN', '仅 HR 可以确认内部招聘画像', 403)
     }

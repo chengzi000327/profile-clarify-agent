@@ -6167,6 +6167,162 @@ textarea:focus-visible {
 .anchor-3 span { color: #155eef; }
 .anchor-5 span { color: #14845c; }
 
+.hr-queue-label {
+  display: flex;
+  min-height: 44px;
+  margin: 8px 10px 18px;
+  padding: 0 13px;
+  align-items: center;
+  gap: 9px;
+  border: 1px solid #cddcff;
+  border-radius: 8px;
+  color: #255fc5;
+  background: #f4f7ff;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.hr-review-empty-state {
+  display: grid;
+  min-height: calc(100vh - 126px);
+  padding: 42px;
+  place-items: start center;
+  background: #f6f8fc;
+}
+
+.hr-review-empty-card {
+  display: grid;
+  width: min(920px, 100%);
+  margin-top: 44px;
+  padding: 48px 54px;
+  justify-items: center;
+  border: 1px solid #dde3ed;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 12px 35px rgb(30 61 112 / 6%);
+  text-align: center;
+}
+
+.hr-review-empty-card h1 { margin: 17px 0 8px; font-size: 21px; }
+.hr-review-empty-card > p { max-width: 650px; margin: 0; color: #707a8a; font-size: 11px; line-height: 19px; }
+
+.hr-review-process {
+  display: grid;
+  width: 100%;
+  margin-top: 34px;
+  grid-template-columns: 1fr auto 1fr auto 1fr;
+  align-items: center;
+  gap: 13px;
+}
+
+.hr-review-process > div {
+  display: grid;
+  min-height: 105px;
+  padding: 15px;
+  justify-items: start;
+  border: 1px solid #dfe5ef;
+  border-radius: 9px;
+  background: #fbfcfe;
+  text-align: left;
+}
+
+.hr-review-process > div > span { display: grid; width: 23px; height: 23px; place-items: center; border-radius: 50%; color: #fff; background: #2f6fea; font-size: 9px; font-weight: 750; }
+.hr-review-process strong { margin-top: 10px; color: #293548; font-size: 10px; }
+.hr-review-process small { margin-top: 5px; color: #7c8798; font-size: 8px; line-height: 14px; }
+.hr-review-process > svg { color: #a8b5c9; }
+
+.hr-human-boundary {
+  display: flex;
+  width: 100%;
+  margin-top: 22px;
+  padding: 13px 15px;
+  align-items: flex-start;
+  gap: 10px;
+  border: 1px solid #cfe0ff;
+  border-radius: 8px;
+  color: #2c67c8;
+  background: #f5f8ff;
+  text-align: left;
+}
+
+.hr-human-boundary div { display: grid; gap: 3px; }
+.hr-human-boundary strong { color: #2457ae; font-size: 9px; }
+.hr-human-boundary span { color: #617595; font-size: 8px; line-height: 14px; }
+
+.profile-review-panel {
+  overflow: hidden;
+  margin-bottom: 14px;
+  border: 1px solid #cfdcf5;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 7px 22px rgb(37 83 157 / 6%);
+}
+
+.profile-review-heading {
+  display: flex;
+  padding: 17px 19px;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  border-bottom: 1px solid #e2e8f2;
+  background: #f8faff;
+}
+
+.profile-review-heading > div { display: grid; gap: 5px; }
+.review-kicker { display: flex; align-items: center; gap: 6px; color: #2b65c5; font-size: 8px; font-weight: 700; }
+.profile-review-heading h2 { margin: 0; color: #253246; font-size: 15px; }
+.profile-review-heading p { margin: 0; color: #718097; font-size: 9px; line-height: 15px; }
+.review-pending-badge { flex: 0 0 auto; padding: 5px 9px; border-radius: 999px; color: #9a6506; background: #fff2cc; font-size: 8px; font-weight: 700; }
+
+.agent-review-advice { padding: 17px 19px; border-bottom: 1px solid #e7ebf1; }
+.agent-review-title { display: flex; align-items: flex-start; gap: 10px; }
+.agent-review-title > div { display: grid; flex: 1; gap: 4px; }
+.agent-review-title strong { color: #2d3d54; font-size: 10px; }
+.agent-review-title p { margin: 0; color: #637187; font-size: 9px; line-height: 16px; }
+.agent-review-title em { flex: 0 0 auto; padding: 5px 8px; border-radius: 5px; font-size: 8px; font-style: normal; font-weight: 700; }
+.agent-review-title em.approve { color: #16734e; background: #eaf8f2; }
+.agent-review-title em.changes { color: #9a6506; background: #fff3d7; }
+
+.agent-review-checks { display: grid; margin-top: 14px; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 7px; }
+.agent-review-checks > div { display: flex; min-width: 0; padding: 9px; align-items: flex-start; gap: 7px; border: 1px solid #dfe5ed; border-radius: 7px; background: #fbfcfd; }
+.agent-review-checks > div.pass { color: #16805a; border-color: #cde8dc; background: #f6fcf9; }
+.agent-review-checks > div.warning { color: #b47708; border-color: #efdfb9; background: #fffaf0; }
+.agent-review-checks span { display: grid; min-width: 0; gap: 3px; }
+.agent-review-checks strong { color: #354255; font-size: 8px; }
+.agent-review-checks small { color: #788496; font-size: 7px; line-height: 12px; }
+
+.agent-review-concerns { display: grid; margin-top: 11px; padding: 10px 12px; gap: 5px; border-left: 3px solid #e2ac43; color: #7b602e; background: #fffaf1; }
+.agent-review-concerns strong { font-size: 8px; }
+.agent-review-concerns p { margin: 0; font-size: 8px; line-height: 14px; }
+
+.hr-review-decision { display: grid; padding: 16px 19px 18px; gap: 7px; }
+.hr-review-decision > label { color: #37465c; font-size: 9px; font-weight: 700; }
+.hr-review-decision textarea { min-height: 70px; padding: 10px 11px; resize: vertical; border: 1px solid #d6dde8; border-radius: 7px; color: #334155; background: #fcfdff; font: inherit; font-size: 9px; line-height: 15px; }
+.hr-review-decision textarea:focus { border-color: #7fa5ef; outline: 2px solid #eaf0ff; }
+.hr-review-decision > div { display: flex; margin-top: 4px; align-items: center; justify-content: flex-end; gap: 8px; }
+.hr-review-decision > div > span { display: flex; margin-right: auto; align-items: center; gap: 5px; color: #6f7e92; font-size: 8px; }
+.review-return-button { color: #9b443d; border-color: #e4c3c0; background: #fffafa; }
+
+.manager-review-status {
+  display: flex;
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  align-items: flex-start;
+  gap: 9px;
+  border: 1px solid #cfdbf3;
+  border-radius: 8px;
+  color: #315f9f;
+  background: #f7faff;
+}
+
+.manager-review-status > div { display: grid; gap: 3px; }
+.manager-review-status strong { color: #294f88; font-size: 9px; }
+.manager-review-status span { color: #657793; font-size: 8px; line-height: 14px; }
+.manager-review-status.approved { color: #1a7957; border-color: #c5e3d5; background: #f4fbf8; }
+.manager-review-status.approved strong { color: #196d50; }
+.manager-review-status.changes { color: #a74d40; border-color: #edcac5; background: #fff8f7; }
+.manager-review-status.changes strong { color: #8c3c33; }
+
 @media (max-width: 1180px) {
   .profile-health-bar {
     grid-template-columns: minmax(190px, 1.4fr) repeat(4, minmax(82px, .7fr));
@@ -6187,4 +6343,8 @@ textarea:focus-visible {
   .scorecard-overview {
     grid-template-columns: 1fr;
   }
+
+  .agent-review-checks { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .hr-review-process { grid-template-columns: 1fr; }
+  .hr-review-process > svg { transform: rotate(90deg); }
 }

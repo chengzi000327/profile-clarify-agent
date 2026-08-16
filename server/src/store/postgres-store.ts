@@ -60,6 +60,7 @@ const roleBusinessState = (
   ...(state.hr_recruiting_context
     ? { hr_recruiting_context: state.hr_recruiting_context }
     : {}),
+  ...(state.profile_review ? { profile_review: state.profile_review } : {}),
   latest_artifacts: state.latest_artifacts,
   candidate_count: state.candidate_count,
   candidate_channels: state.candidate_channels,
@@ -275,7 +276,7 @@ export class PostgresStore implements ApplicationStore {
     actor: ActorContext,
     options?: RoleAggregateReadOptions,
   ): Promise<RoleAggregate | null> {
-    const [access] = actor.role === 'ADMIN'
+    const [access] = actor.role === 'ADMIN' || actor.role === 'HR'
       ? await this.db
           .select()
           .from(schema.roleSessions)
@@ -304,6 +305,26 @@ export class PostgresStore implements ApplicationStore {
     if (!access) return null
 
     const roleRow = 'role' in access ? access.role : access
+
+    if (actor.role === 'HR') {
+      const reviewStatus = roleStateFromRow(roleRow).profile_review?.status
+      const reviewVisible = reviewStatus === 'PENDING'
+        || reviewStatus === 'APPROVED'
+        || reviewStatus === 'CHANGES_REQUESTED'
+      if (!reviewVisible) {
+        const [membership] = await this.db
+          .select({ userId: schema.roleMembers.userId })
+          .from(schema.roleMembers)
+          .where(
+            and(
+              eq(schema.roleMembers.roleSessionId, roleSessionId),
+              eq(schema.roleMembers.userId, actor.user_id),
+            ),
+          )
+          .limit(1)
+        if (!membership) return null
+      }
+    }
 
     const [memberRows, artifactRows, candidateRows, signalRows, taskRows] = await Promise.all([
       options?.members === false

@@ -150,6 +150,9 @@ export class AgentRunner {
       throw new DomainError('FORBIDDEN', '仅 HR 可以生成内部招聘画像', 403)
     }
     if (artifactType === 'ROLE_PROFILE') {
+      if (!['MANAGER', 'ADMIN'].includes(actor.role)) {
+        throw new DomainError('FORBIDDEN', 'HR 只负责审核用人经理提交的岗位画像，不代替业务生成画像', 403)
+      }
       const view = await this.roleService.get(roleSessionId, actor)
       const readiness = evaluateRoleProfileGenerationReadiness(view.state)
       if (!readiness.allowed) {

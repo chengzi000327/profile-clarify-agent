@@ -119,6 +119,26 @@ export const api = {
       }),
     });
   },
+  submitProfileReview(id, artifactId, contentHash, expectedRevision) {
+    return request(`/api/v1/role-sessions/${id}/artifacts/${artifactId}/submit-review`, {
+      method: 'POST',
+      body: JSON.stringify({
+        content_hash: contentHash,
+        expected_revision: expectedRevision,
+      }),
+    });
+  },
+  reviewProfile(id, artifactId, decision, comment, contentHash, expectedRevision) {
+    return request(`/api/v1/role-sessions/${id}/artifacts/${artifactId}/review`, {
+      method: 'POST',
+      body: JSON.stringify({
+        decision,
+        comment,
+        content_hash: contentHash,
+        expected_revision: expectedRevision,
+      }),
+    });
+  },
   streamAgentRun(streamUrl, onEvent, onDisconnect) {
     const source = new EventSource(`${API_BASE}${streamUrl}`, { withCredentials: true });
     const names = [

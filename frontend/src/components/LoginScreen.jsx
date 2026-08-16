@@ -13,7 +13,7 @@ const demoAccounts = [
     accountId: 'hr-demo',
     role: 'HR',
     displayName: 'HR · 林夏',
-    description: '协作澄清、管理招聘画像、候选人证据与校准',
+    description: '审核用人经理提交的画像，结合 Agent 建议作出决定',
     icon: Users,
   },
   {

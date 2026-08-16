@@ -1168,6 +1168,33 @@ export const ClarificationRoundSchema = z.object({
 })
 export type ClarificationRound = z.infer<typeof ClarificationRoundSchema>
 
+export const ProfileReviewAdviceSchema = z.object({
+  recommendation: z.enum(['APPROVE', 'REQUEST_CHANGES']),
+  summary: z.string().trim().min(1).max(2_000),
+  checks: z.array(z.object({
+    label: z.string().trim().min(1).max(160),
+    status: z.enum(['PASS', 'WARNING']),
+    detail: z.string().trim().min(1).max(1_000),
+  }).strict()).min(1).max(12),
+  concerns: z.array(z.string().trim().min(1).max(1_000)).max(12),
+  generated_at: z.string().datetime(),
+}).strict()
+export type ProfileReviewAdvice = z.infer<typeof ProfileReviewAdviceSchema>
+
+export const ProfileReviewSchema = z.object({
+  status: z.enum(['NOT_SUBMITTED', 'PENDING', 'APPROVED', 'CHANGES_REQUESTED']),
+  artifact_id: z.string().nullable(),
+  artifact_version: z.number().int().positive().nullable(),
+  submitted_by: z.string().nullable(),
+  submitted_by_name: z.string().nullable(),
+  submitted_at: z.string().datetime().nullable(),
+  reviewed_by: z.string().nullable(),
+  reviewed_at: z.string().datetime().nullable(),
+  review_comment: z.string().nullable(),
+  agent_advice: ProfileReviewAdviceSchema.nullable(),
+}).strict()
+export type ProfileReview = z.infer<typeof ProfileReviewSchema>
+
 export const RoleStateSchema = z.object({
   id: z.string(),
   tenant_id: z.string(),
@@ -1181,6 +1208,7 @@ export const RoleStateSchema = z.object({
   conflicts: z.array(ConflictSchema),
   public_job_basics: PublicJobBasicsSchema.optional(),
   hr_recruiting_context: HRRecruitingContextSchema.optional(),
+  profile_review: ProfileReviewSchema.optional(),
   latest_artifacts: z.partialRecord(
     ArtifactTypeSchema,
     z.object({
