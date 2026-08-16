@@ -13,6 +13,8 @@
     "predev:api": "pnpm --filter @role-clarifier/contracts build && pnpm --filter @role-clarifier/domain build",
     "dev:api": "pnpm --filter @role-clarifier/api dev",
     "dev:web": "pnpm --filter @role-clarifier/web dev",
+    "dev:intro": "pnpm --filter @role-clarifier/intro-web dev",
+    "build:intro": "pnpm --filter @role-clarifier/intro-web build",
     "test": "pnpm -r --if-present test",
     "typecheck": "pnpm -r --if-present typecheck",
     "db:generate": "pnpm --filter @role-clarifier/api db:generate",
