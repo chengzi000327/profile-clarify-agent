@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import type { ActorContext } from '@role-clarifier/contracts'
 import { MemoryStore } from '../store/memory-store.js'
-import { seedMockHcApprovals } from '../store/mock-hc-fixtures.js'
+import { mockHcRecords, seedMockHcApprovals } from '../store/mock-hc-fixtures.js'
 import { RoleService, evaluateRoleProfileGenerationReadiness } from './role-service.js'
 
 const manager: ActorContext = {
@@ -20,6 +20,22 @@ describe('HC approval synchronization', () => {
     await store.initialize()
     await seedMockHcApprovals(store)
     service = new RoleService(store)
+  })
+
+  it('provides ten product, engineering, and algorithm HC fixtures', () => {
+    expect(mockHcRecords).toHaveLength(10)
+    expect(mockHcRecords.filter((record) => record.content.approval_status === 'APPROVED')).toHaveLength(5)
+    expect(mockHcRecords.filter((record) => record.content.approval_status === 'PENDING')).toHaveLength(3)
+    expect(mockHcRecords.filter((record) => record.content.approval_status === 'REJECTED')).toHaveLength(2)
+    expect(mockHcRecords.every((record) =>
+      /产品|研发|工程|算法/.test(`${record.role_title}${record.team_id}`),
+    )).toBe(true)
+    expect(mockHcRecords.every((record) =>
+      typeof record.content.hiring_reason === 'string'
+      && record.content.hiring_reason.length >= 20
+      && typeof record.content.business_goal === 'string'
+      && record.content.business_goal.length >= 15,
+    )).toBe(true)
   })
 
   it('matches an approved HC after role identity is recognized', async () => {
@@ -89,8 +105,8 @@ describe('HC approval synchronization', () => {
 
     const rejectedIntake = await service.createIntake(manager)
     const rejected = await service.updateRoleIdentityDraft(rejectedIntake.state.id, manager, {
-      title: '客户成功经理',
-      department: '客户成功部',
+      title: '后端研发工程师',
+      department: '核心服务研发部',
     })
     expect(rejected.hc_status).toBe('REJECTED')
     expect(rejected.hc_approval?.approval_id).toBe('HC-2026-CS-003')
