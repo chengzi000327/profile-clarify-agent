@@ -341,6 +341,7 @@ function App() {
       <EmptyWorkspace
         actor={actor}
         activeView={activeView}
+        onOpenConversation={() => setActiveView('conversation')}
         onOpenTrace={() => setActiveView('admin-trace')}
         onOpenCreate={() => setCreateOpen(true)}
         onLogout={handleLogout}
@@ -527,7 +528,8 @@ function App() {
   );
 }
 
-function EmptyWorkspace({ actor, activeView, onOpenTrace, onOpenCreate, onLogout, children }) {
+function EmptyWorkspace({ actor, activeView, onOpenConversation, onOpenTrace, onOpenCreate, onLogout, children }) {
+  const [profileOpen, setProfileOpen] = useState(false);
   const viewerRole = actor.role === 'ADMIN' ? 'admin' : actor.role === 'HR' ? 'hr' : 'manager';
   return (
     <div className="app-shell empty-workspace-shell">
@@ -542,33 +544,129 @@ function EmptyWorkspace({ actor, activeView, onOpenTrace, onOpenCreate, onLogout
           <Plus size={17} /><span>新建岗位澄清</span>
         </button>
         <div className="sidebar-section-title"><span>最近会话</span></div>
-        <div className="empty-session-list">
-          <MessageSquare size={18} />
-          <span>这个账号还没有岗位</span>
-        </div>
+        <nav className="role-session-list empty-role-session-list" aria-label="岗位澄清会话列表">
+          <div className="empty-session-list">
+            <span className="session-icon"><MessageSquare size={15} /></span>
+            <span><strong>暂无岗位会话</strong><small>点击上方按钮创建</small></span>
+          </div>
+        </nav>
         <div className="sidebar-footer">
           {actor.role === 'ADMIN' && (
             <button className={`sidebar-utility ${activeView === 'admin-trace' ? 'active' : ''}`} onClick={onOpenTrace}>
               <BarChart3 size={17} /><span>Agent Trace 控制台</span>
             </button>
           )}
-          <button className="user-chip empty-user-chip" type="button">
+          <button className="sidebar-utility" type="button">
+            <Settings size={17} /><span>资料与权限</span>
+          </button>
+          <button className="user-chip" type="button" onClick={() => setProfileOpen((value) => !value)}>
             <span className={`avatar avatar-${viewerRole}`}>{displayInitial(actor.display_name, actor.role)}</span>
             <span className="user-copy"><strong>{actor.display_name}</strong><small>{actorRoleLabel[actor.role]}</small></span>
+            <MoreHorizontal size={16} />
           </button>
-          <button className="empty-workspace-logout" type="button" onClick={onLogout}>退出并切换账号</button>
+          {profileOpen && (
+            <div className="profile-popover">
+              <strong>后端身份已验证</strong>
+              <span>权限来自签名 HttpOnly Session，不能通过前端参数切换。</span>
+              <div className="role-preview-switch">
+                <button className="active" type="button">{actorRoleLabel[actor.role]}</button>
+                <button type="button" onClick={onLogout}>退出并切换账号</button>
+              </div>
+            </div>
+          )}
         </div>
       </aside>
       <main className="main-workspace empty-main-workspace">
+        <header className="workspace-header">
+          <div className="title-stack">
+            <div className="title-line">
+              <strong>新岗位澄清</strong>
+              <span className="role-stage-badge empty">尚未创建</span>
+            </div>
+            <div className="preset-line">
+              <span className="preset-badge"><ClarifierMark size={16} />画像澄清 Agent</span>
+              <span className="phase-dot" />
+              <span>等待岗位信息</span>
+              <span className="phase-dot" />
+              <span>未生成画像</span>
+            </div>
+          </div>
+          <div className="header-actions">
+            <div className="collaborators" aria-label="当前账号">
+              <span className={`avatar avatar-${viewerRole}`} title={`${actor.display_name} · ${actorRoleLabel[actor.role]}`}>
+                {displayInitial(actor.display_name, actor.role)}
+              </span>
+              <button className="avatar avatar-add" aria-label="邀请协作者" disabled><Plus size={13} /></button>
+            </div>
+            <button className="quiet-button" disabled><History size={15} />版本</button>
+            <button className="icon-button" aria-label="更多操作" disabled><MoreHorizontal size={18} /></button>
+          </div>
+        </header>
+
+        <div className="workspace-tabs">
+          <button className={activeView === 'conversation' ? 'active' : ''} onClick={onOpenConversation}>对话</button>
+          <button className="empty-disabled-tab" type="button" disabled>
+            岗位画像 <span className="tab-state">未生成</span>
+          </button>
+          {actor.role === 'ADMIN' && (
+            <button className={activeView === 'admin-trace' ? 'active' : ''} onClick={onOpenTrace}>
+              Trace 控制台 <span className="tab-state">ADMIN</span>
+            </button>
+          )}
+        </div>
+
         {activeView === 'admin-trace' && actor.role === 'ADMIN' ? (
           <AdminTraceConsole />
         ) : (
-          <section className="empty-workspace-hero">
-            <ClarifierMark size={52} plate />
-            <span>欢迎，{actor.display_name}</span>
-            <h1>从一个新的岗位开始</h1>
-            <p>当前账号还没有岗位内容。创建后，岗位对话、画像、JD 和 Agent Trace 会只归属到这个账号及其企业空间权限范围。</p>
-            <button className="primary-action" onClick={onOpenCreate}><Plus size={16} />新建岗位澄清</button>
+          <section className="conversation-surface real-conversation empty-conversation">
+            <div className="conversation-scroll">
+              <div className="transcript">
+                <div className="session-intro">
+                  <ClarifierMark size={40} plate />
+                  <div>
+                    <h1>开始新的岗位澄清</h1>
+                    <p>创建岗位后，用人经理、HR 和企业管理员可以在这里与 Agent 对话，并持续生成岗位画像、评估方案和 JD。</p>
+                  </div>
+                </div>
+
+                <div className="conversation-policy-strip empty-policy-strip">
+                  <span><CircleDot size={13} />主动澄清 <strong>尚未开始</strong></span>
+                  <span>创建岗位后，Agent 才会围绕关键问题主动追问</span>
+                </div>
+
+                <div className="message message-agent empty-onboarding-message">
+                  <span className="agent-avatar"><ClarifierMark size={25} /></span>
+                  <div className="message-body">
+                    <div className="message-label">画像澄清 Agent</div>
+                    <p>你好，{actor.display_name}。这个账号目前还没有岗位。</p>
+                    <p>先创建一个岗位，我会在同一个会话里帮你澄清招聘原因、成功标准、岗位画像和 JD。</p>
+                    <div className="empty-create-card">
+                      <span><Sparkles size={14} />准备好岗位基本信息了吗？</span>
+                      <strong>你准备招聘什么岗位？</strong>
+                      <small>只需先填写职位名称、所属部门和 HC 状态，后续信息可以和 Agent 边聊边补充。</small>
+                      <button className="primary-action" type="button" onClick={onOpenCreate}><Plus size={16} />新建岗位澄清</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="composer-dock empty-composer-dock">
+              <div className="composer empty-composer" aria-disabled="true">
+                <textarea placeholder="创建岗位后即可开始和 Agent 对话…" rows={1} disabled />
+                <div className="composer-toolbar">
+                  <div>
+                    <button className="icon-button tiny" aria-label="添加资料" disabled><Plus size={17} /></button>
+                    <button className="composer-setting" disabled><ShieldCheck size={14} />会话资料可读</button>
+                  </div>
+                  <div>
+                    <button className="composer-setting" disabled>Flash / Pro 自动路由<ChevronDown size={13} /></button>
+                    <button className="send-button" aria-label="发送" disabled><ArrowUp size={17} /></button>
+                  </div>
+                </div>
+              </div>
+              <p className="composer-caption">创建岗位后，消息和产物会保存到当前账号与企业空间。</p>
+            </div>
           </section>
         )}
       </main>
