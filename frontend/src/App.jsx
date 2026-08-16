@@ -1432,7 +1432,7 @@ function RecruitingPortrait({ artifact, profile }) {
       </section>
 
       <section className="action-section sourcing-action-section">
-        <ActionSectionHeading number="01" title="先去这些人里找" description="三个优先来源，每一类都给出简历检查点。" />
+        <ActionSectionHeading number="01" title="先去这些人里找" description={`${portrait.sourcingBrief.targetTypes.length} 类优先来源，每一类都给出简历检查点。`} />
         <div className="sourcing-action-layout">
           <div className="target-type-grid">
             {portrait.sourcingBrief.targetTypes.map((item) => (
@@ -1473,7 +1473,7 @@ function RecruitingPortrait({ artifact, profile }) {
       </section>
 
       <section className="action-section phone-action-section">
-        <ActionSectionHeading number="03" title="电话初筛就问这 4 个问题" description="每个问题都配有应听到的证据和风险信号。" />
+        <ActionSectionHeading number="03" title={`电话初筛就问这 ${portrait.phoneScreen.length} 个问题`} description="每个问题都配有应听到的证据和追问方向。" />
         <div className="phone-screen-table">
           <div className="phone-screen-head"><span>直接问</span><span>重点听</span><span>风险信号</span></div>
           {portrait.phoneScreen.map((item, index) => (
