@@ -59,15 +59,15 @@ export const mockHcRecords: RecruitingContextRecord[] = [
     approved_at: '2026-08-01T09:00:00.000Z',
   }),
   hcRecord('HC-2026-AIPM-002', 'AI 产品经理', 'AI 应用产品部', {
-    approval_status: 'PENDING',
+    approval_status: 'APPROVED',
     request_type: 'EXPANSION',
     headcount: 2,
     hiring_reason: '需要扩充 AI 应用产品团队，承接多业务线的场景评估与产品化。',
     business_goal: '支持新增 AI 场景的评估和验证。',
     requested_by_role: 'AI 应用产品负责人',
-    approved_by_role: null,
+    approved_by_role: 'AI 产品平台主管',
     requested_at: '2026-08-10T03:00:00.000Z',
-    approved_at: null,
+    approved_at: '2026-08-13T07:30:00.000Z',
   }),
   hcRecord('HC-2026-CS-003', '后端研发工程师', '核心服务研发部', {
     approval_status: 'REJECTED',

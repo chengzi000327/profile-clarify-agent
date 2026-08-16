@@ -24,8 +24,8 @@ describe('HC approval synchronization', () => {
 
   it('provides ten product, engineering, and algorithm HC fixtures', () => {
     expect(mockHcRecords).toHaveLength(10)
-    expect(mockHcRecords.filter((record) => record.content.approval_status === 'APPROVED')).toHaveLength(5)
-    expect(mockHcRecords.filter((record) => record.content.approval_status === 'PENDING')).toHaveLength(3)
+    expect(mockHcRecords.filter((record) => record.content.approval_status === 'APPROVED')).toHaveLength(6)
+    expect(mockHcRecords.filter((record) => record.content.approval_status === 'PENDING')).toHaveLength(2)
     expect(mockHcRecords.filter((record) => record.content.approval_status === 'REJECTED')).toHaveLength(2)
     expect(mockHcRecords.every((record) =>
       /产品|研发|工程|算法/.test(`${record.role_title}${record.team_id}`),
@@ -93,14 +93,25 @@ describe('HC approval synchronization', () => {
     expect(drafted.facts.at(-1)?.status).toBe('DRAFT')
   })
 
-  it('exposes pending and rejected HC states without confirming their reasons', async () => {
-    const pendingIntake = await service.createIntake(manager)
-    const pending = await service.updateRoleIdentityDraft(pendingIntake.state.id, manager, {
+  it('exposes approved, pending, and rejected HC states correctly', async () => {
+    const approvedIntake = await service.createIntake(manager)
+    const approved = await service.updateRoleIdentityDraft(approvedIntake.state.id, manager, {
       title: 'AI 产品经理',
       department: 'AI 应用产品部',
     })
+    expect(approved.hc_status).toBe('APPROVED')
+    expect(approved.hc_approval?.approval_id).toBe('HC-2026-AIPM-002')
+    expect(approved.facts.some((fact) =>
+      fact.category === 'HIRING_REASON' && fact.status === 'CONFIRMED',
+    )).toBe(true)
+
+    const pendingIntake = await service.createIntake(manager)
+    const pending = await service.updateRoleIdentityDraft(pendingIntake.state.id, manager, {
+      title: '前端研发工程师',
+      department: '用户体验研发部',
+    })
     expect(pending.hc_status).toBe('PENDING')
-    expect(pending.hc_approval?.approval_id).toBe('HC-2026-AIPM-002')
+    expect(pending.hc_approval?.approval_id).toBe('HC-2026-FE-006')
     expect(pending.facts.some((fact) => fact.category === 'HIRING_REASON')).toBe(false)
 
     const rejectedIntake = await service.createIntake(manager)
