@@ -91,11 +91,14 @@ export const buildContextSnapshot = (request: HarnessRequest): AgentContextSnaps
 
 export const buildTaskPrompt = (request: HarnessRequest): string => {
   const context = buildContextSnapshot(request)
+  const persistenceInstruction = request.task === 'CLARIFY_MESSAGE'
+    ? '只输出一个 JSON 对象，不使用 Markdown。CONVERSATION 必须使用 "persistence":"NONE"；只有已完成领域写入的 CLARIFICATION 才使用 "persistence":"TOOL"。'
+    : '所有必要工具成功后，只输出一个 JSON 对象，不使用 Markdown。JSON 必须包含 "persistence":"TOOL"。'
   return [
     '<task_instructions>',
     String(context.task_state.orchestration_instructions),
     '每次工具调用必须等待结果；工具失败时不要声称已经保存。',
-    '所有必要工具成功后，只输出一个 JSON 对象，不使用 Markdown。JSON 必须包含 "persistence":"TOOL"。',
+    persistenceInstruction,
     '</task_instructions>',
     '<current_user_input>',
     JSON.stringify(context.current_user_input.content),

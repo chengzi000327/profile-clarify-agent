@@ -11,6 +11,7 @@ import {
   visibleResultText,
   type HarnessRequest,
   type HarnessResult,
+  type HarnessTask,
 } from './schemas.js'
 
 export interface SidecarEvent {
@@ -58,6 +59,12 @@ export const quickConversationReply = (request: HarnessRequest): string | null =
   return null
 }
 
+export const maxTokensForTask = (task: HarnessTask, configuredMaximum: number): number => {
+  if (task === 'CLARIFY_MESSAGE') return Math.min(configuredMaximum, 4_096)
+  if (task === 'EXTRACT_CANDIDATES') return Math.min(configuredMaximum, 8_192)
+  return configuredMaximum
+}
+
 const combineTurns = (turns: RuntimeTurn[]) => ({
   tools: turns.flatMap((turn) => turn.toolNames),
   successfulTools: turns.flatMap((turn) => turn.successfulToolNames),
@@ -99,6 +106,17 @@ export const recoverResultFromTool = (
   }
   const args = call.arguments
   if (request.task === 'CLARIFY_MESSAGE') {
+    const identityCall = lastSuccessfulCall(calls, 'update_role_identity_draft')
+    const roleIdentity = identityCall && isRecord(identityCall.arguments)
+      ? {
+          ...(typeof identityCall.arguments.title === 'string'
+            ? { title: identityCall.arguments.title }
+            : {}),
+          ...(typeof identityCall.arguments.department === 'string'
+            ? { department: identityCall.arguments.department }
+            : {}),
+        }
+      : undefined
     return parseHarnessResult(JSON.stringify({
       kind: 'CLARIFICATION',
       persistence: 'TOOL',
@@ -106,6 +124,9 @@ export const recoverResultFromTool = (
       question: args.category === 'HIRING_REASON'
         ? '如果半年后证明这次招聘成功，最重要的一个可观察业务结果是什么？'
         : '这项结果由谁验收，最关键的量化或可观察指标是什么？',
+      ...(roleIdentity && Object.keys(roleIdentity).length > 0
+        ? { role_identity: roleIdentity }
+        : {}),
       fact_draft: { category: args.category, statement: args.statement },
     }))
   }
@@ -207,7 +228,7 @@ export class HarnessExecutor {
       },
       model,
       provider: 'deepseek-official',
-      maxTokens: this.config.DSH_MAX_TOKENS,
+      maxTokens: maxTokensForTask(request.task, this.config.DSH_MAX_TOKENS),
       requestTimeoutMs: this.config.DSH_RUN_TIMEOUT_MS,
     })
     const sessionId = `role-${request.execution_context.role_session_id}`

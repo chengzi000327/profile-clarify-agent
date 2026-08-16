@@ -1,5 +1,5 @@
 # Applied after dsh-base and dsh-headless. Every general-purpose coding or
-# discovery tool is disabled at the composition layer; only the six domain
+# discovery tool is disabled at the composition layer; only the seven domain
 # tools registered by this bundle remain model-visible.
 - update:
     - id: session-telemetry-otel

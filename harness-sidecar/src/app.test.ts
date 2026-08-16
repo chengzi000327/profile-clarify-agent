@@ -2,7 +2,12 @@ import type { RoleState } from '@role-clarifier/contracts'
 import { describe, expect, it } from 'vitest'
 import { buildSidecarApp, type ExecutorLike } from './app.js'
 import { loadSidecarConfig } from './config.js'
-import { HarnessExecutor, quickConversationReply, recoverResultFromTool } from './executor.js'
+import {
+  HarnessExecutor,
+  maxTokensForTask,
+  quickConversationReply,
+  recoverResultFromTool,
+} from './executor.js'
 import { buildContextSnapshot, buildTaskPrompt } from './prompts.js'
 import { parseHarnessResult, type HarnessRequest } from './schemas.js'
 
@@ -101,6 +106,12 @@ describe('Harness sidecar', () => {
     expect(reply).toContain('普通提问我会直接回答')
   })
 
+  it('caps Flash token budgets without shrinking Pro artifact generation', () => {
+    expect(maxTokensForTask('CLARIFY_MESSAGE', 16_384)).toBe(4_096)
+    expect(maxTokensForTask('EXTRACT_CANDIDATES', 16_384)).toBe(8_192)
+    expect(maxTokensForTask('GENERATE_JD', 16_384)).toBe(16_384)
+  })
+
   it('falls back to a conversation result when no fact tool was called', () => {
     const result = recoverResultFromTool({ ...request, message: '你能做什么？' }, [])
     expect(result).toMatchObject({ kind: 'CONVERSATION', persistence: 'NONE' })
@@ -121,17 +132,27 @@ describe('Harness sidecar', () => {
   })
 
   it('recovers a relevant clarification answer from exact saved tool arguments', () => {
-    const result = recoverResultFromTool(request, [{
-      name: 'save_fact_draft',
-      arguments: {
-        category: 'SUCCESS_CRITERION',
-        statement: '半年内完成三个客户场景的标准化',
+    const result = recoverResultFromTool(request, [
+      {
+        name: 'update_role_identity_draft',
+        arguments: { title: '企业产品经理', department: '企业服务产品部' },
       },
-    }])
+      {
+        name: 'save_fact_draft',
+        arguments: {
+          category: 'SUCCESS_CRITERION',
+          statement: '半年内完成三个客户场景的标准化',
+        },
+      },
+    ])
     expect(result.kind).toBe('CLARIFICATION')
     if (result.kind !== 'CLARIFICATION') throw new Error('Expected clarification')
     expect(result.answer).toContain('半年内完成三个客户场景的标准化')
     expect(result.question).not.toContain('这条事实是否准确')
+    expect(result.role_identity).toEqual({
+      title: '企业产品经理',
+      department: '企业服务产品部',
+    })
   })
 
   it('normalizes a missing display-only summary after tools already persisted the artifact', () => {

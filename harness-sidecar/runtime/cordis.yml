@@ -12,7 +12,7 @@
   config:
     apiKeyEnv: DEEPSEEK_API_KEY
     thinking: enabled
-    reasoningEffort: high
+    reasoningEffort: medium
     maxTokens: 16384
     streamIdleTimeoutMs: 60000
 
