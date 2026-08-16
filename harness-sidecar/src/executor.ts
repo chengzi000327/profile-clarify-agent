@@ -215,7 +215,7 @@ export interface ExecutorRuntime {
 
 export type ExecutorRuntimeFactory = (launch: RuntimeLaunch) => ExecutorRuntime
 
-export const resolveMaxTokenResult = (
+export const resolveIncompleteTurnResult = (
   request: HarnessRequest,
   finalResponse: string,
   calledTools: string[],
@@ -228,7 +228,7 @@ export const resolveMaxTokenResult = (
     assertTaskToolPolicy(request.task, calledTools, successfulTools)
     return { result, recoveredFromTool: false }
   } catch {
-    // A max-token turn may contain a partial JSON response; never accept it without full validation.
+    // A stopped or invalid turn may contain partial JSON; never accept it without full validation.
   }
   try {
     const result = recoverResultFromTool(request, successfulToolCalls)
@@ -399,16 +399,19 @@ export class HarnessExecutor {
     const modelEvents: SidecarEvent[] = []
     let repaired = false
     let recoveredFromTool = false
-    let recoveredFromMaxTokens = false
+    let usedBoundedRecovery = false
     const runSignal = AbortSignal.any([
       signal,
       AbortSignal.timeout(this.config.DSH_RUN_TIMEOUT_MS),
     ])
-    const handleMaxTokens = async (exhaustedTurn: RuntimeTurn): Promise<HarnessResult> => {
-      recoveredFromMaxTokens = true
+    const handleClarificationFailure = async (
+      exhaustedTurn: RuntimeTurn,
+      reason: 'max-tokens' | 'invalid-structured-output',
+    ): Promise<HarnessResult> => {
+      usedBoundedRecovery = true
       repaired = true
       const exhausted = combineTurns(turns)
-      const resolved = resolveMaxTokenResult(
+      const resolved = resolveIncompleteTurnResult(
         request,
         exhaustedTurn.finalResponse,
         exhausted.tools,
@@ -420,7 +423,7 @@ export class HarnessExecutor {
         return resolved.result
       }
       if (request.task !== 'CLARIFY_MESSAGE') {
-        throw new Error('Harness turn ended with max-tokens and no validated result was recoverable')
+        throw new Error(`Harness turn ended with ${reason} and no validated result was recoverable`)
       }
 
       const remainingTransitions = Math.max(
@@ -462,7 +465,7 @@ export class HarnessExecutor {
           )
         }
         const combinedRecovery = combineTurns(turns)
-        const recovered = resolveMaxTokenResult(
+        const recovered = resolveIncompleteTurnResult(
           request,
           recovery.finalResponse,
           combinedRecovery.tools,
@@ -471,7 +474,7 @@ export class HarnessExecutor {
         )
         if (!recovered) {
           throw new Error(
-            'Harness max-token recovery did not produce a valid response or complete the required tools',
+            'Harness bounded recovery did not produce a valid response or complete the required tools',
           )
         }
         recoveredFromTool ||= recovered.recoveredFromTool
@@ -494,38 +497,45 @@ export class HarnessExecutor {
       modelEvents.push({ type: 'model.response', value: initial.finalResponse, attempt: 'initial' })
       let result: HarnessResult
       if (initial.finishReason === 'max-tokens') {
-        result = await handleMaxTokens(initial)
+        result = await handleClarificationFailure(initial, 'max-tokens')
       } else if (initial.finishReason !== 'completed') {
         throw new Error(`Harness turn ended with ${initial.finishReason ?? 'unknown reason'}`)
       } else {
         try {
           result = parseHarnessResult(initial.finalResponse)
         } catch (error) {
-          repaired = true
-          const repairPrompt = buildRepairPrompt(
-            request,
-            error instanceof Error ? error.message : String(error),
+          const initialCombined = combineTurns(turns)
+          const missingRequiredTools = HARNESS_TASK_TOOL_POLICY[request.task].required.filter(
+            (name) => !initialCombined.successfulTools.includes(name),
           )
-          modelEvents.push({ type: 'model.request', value: repairPrompt, attempt: 'repair' })
-          const repair = await runtime.runTurn(
-            sessionId,
-            repairPrompt,
-            runSignal,
-            Math.max(0, request.maximum_transitions - initial.toolNames.length),
-          )
-          turns.push(repair)
-          modelEvents.push({ type: 'model.response', value: repair.finalResponse, attempt: 'repair' })
-          if (repair.finishReason === 'max-tokens') {
-            result = await handleMaxTokens(repair)
+          if (request.task === 'CLARIFY_MESSAGE' && missingRequiredTools.length > 0) {
+            result = await handleClarificationFailure(initial, 'invalid-structured-output')
           } else {
-            if (repair.finishReason !== 'completed') {
-              throw new Error(`Harness repair turn ended with ${repair.finishReason ?? 'unknown reason'}`)
-            }
-            try {
-              result = parseHarnessResult(repair.finalResponse)
-            } catch {
-              result = recoverResultFromTool(request, combineTurns(turns).successfulToolCalls)
-              recoveredFromTool = true
+            repaired = true
+            const repairPrompt = buildRepairPrompt(
+              request,
+              error instanceof Error ? error.message : String(error),
+            )
+            modelEvents.push({ type: 'model.request', value: repairPrompt, attempt: 'repair' })
+            const repair = await runtime.runTurn(
+              sessionId,
+              repairPrompt,
+              runSignal,
+              Math.max(0, request.maximum_transitions - initial.toolNames.length),
+            )
+            turns.push(repair)
+            modelEvents.push({ type: 'model.response', value: repair.finalResponse, attempt: 'repair' })
+            if (repair.finishReason === 'max-tokens') {
+              result = await handleClarificationFailure(repair, 'max-tokens')
+            } else {
+              if (repair.finishReason !== 'completed') {
+                throw new Error(`Harness repair turn ended with ${repair.finishReason ?? 'unknown reason'}`)
+              }
+              try {
+                result = parseHarnessResult(repair.finalResponse)
+              } catch {
+                result = await handleClarificationFailure(repair, 'invalid-structured-output')
+              }
             }
           }
         }
@@ -561,8 +571,8 @@ export class HarnessExecutor {
       const events: SidecarEvent[] = [
         {
           type: 'status',
-          value: recoveredFromMaxTokens
-            ? `${model} 达到输出上限后已通过一次受控恢复完成本轮`
+          value: usedBoundedRecovery
+            ? `${model} 首轮未完成后已通过一次受控恢复完成本轮`
             : recoveredFromTool
             ? `${model} 已根据成功的领域工具结果安全恢复本轮回复`
             : `${model} 已完成真实 Harness 推理`,

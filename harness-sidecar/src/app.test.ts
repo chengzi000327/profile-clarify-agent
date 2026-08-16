@@ -19,7 +19,7 @@ import {
   maxTokensForTask,
   reasoningForTask,
   recoverResultFromTool,
-  resolveMaxTokenResult,
+  resolveIncompleteTurnResult,
 } from './executor.js'
 import {
   buildContextSnapshot,
@@ -991,7 +991,7 @@ describe('Harness sidecar', () => {
   })
 
   it('does not accept a max-token clarification before required tools complete', () => {
-    expect(resolveMaxTokenResult(request, '', [], [], [])).toBeNull()
+    expect(resolveIncompleteTurnResult(request, '', [], [], [])).toBeNull()
   })
 
   it('recovers a max-token clarification only after all required tools complete', () => {
@@ -1005,7 +1005,7 @@ describe('Harness sidecar', () => {
         },
       },
     ]
-    const recovered = resolveMaxTokenResult(
+    const recovered = resolveIncompleteTurnResult(
       request,
       '',
       successfulCalls.map((call) => call.name),
@@ -1030,19 +1030,25 @@ describe('Harness sidecar', () => {
     expect(prompt).not.toContain('recruiting_context')
   })
 
-  it('retries a max-token clarification once in a fresh minimal session', async () => {
+  it.each([
+    { label: 'max-token stop', finishReason: 'max-tokens' as const, finalResponse: '' },
+    { label: 'completed invalid output', finishReason: 'completed' as const, finalResponse: 'not-json' },
+  ])('retries a clarification with $label once in a fresh minimal session', async ({
+    finishReason,
+    finalResponse,
+  }) => {
     const launches: RuntimeLaunch[] = []
     const prompts: string[] = []
     const runtimeTurns: RuntimeTurn[][] = [
       [{
-        finalResponse: '',
+        finalResponse,
         toolNames: [],
         successfulToolNames: [],
         successfulToolCalls: [],
         toolEvents: [],
         inputTokens: 100,
         outputTokens: 8_192,
-        finishReason: 'max-tokens',
+        finishReason,
       }],
       [{
         finalResponse: JSON.stringify({
