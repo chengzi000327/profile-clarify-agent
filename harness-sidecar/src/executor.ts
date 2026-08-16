@@ -82,6 +82,24 @@ export const reasoningForTask = (
     ? { thinking: 'disabled', effort: 'off' }
     : { thinking: 'enabled', effort: 'high' }
 
+export const timeoutMsForTask = (
+  task: HarnessTask | 'ROUTER',
+  config: Pick<
+    SidecarConfig,
+    | 'DSH_ROUTER_TIMEOUT_MS'
+    | 'DSH_CLARIFICATION_TIMEOUT_MS'
+    | 'DSH_ARTIFACT_TIMEOUT_MS'
+    | 'DSH_HR_BRIEF_TIMEOUT_MS'
+  >,
+): number => {
+  if (task === 'ROUTER') return config.DSH_ROUTER_TIMEOUT_MS
+  if (task === 'CLARIFY_MESSAGE' || task === 'EXTRACT_CANDIDATES') {
+    return config.DSH_CLARIFICATION_TIMEOUT_MS
+  }
+  if (task === 'GENERATE_HR_BRIEF') return config.DSH_HR_BRIEF_TIMEOUT_MS
+  return config.DSH_ARTIFACT_TIMEOUT_MS
+}
+
 export const assertTaskToolPolicy = (
   task: HarnessTask,
   calledTools: string[],
@@ -265,6 +283,7 @@ export class HarnessExecutor {
     }
     const model = this.config.DEEPSEEK_FLASH_MODEL
     const reasoning = reasoningForTask('ROUTER')
+    const timeoutMs = timeoutMsForTask('ROUTER', this.config)
     const sessionRoot = await mkdtemp(join(tmpdir(), 'role-router-dsh-'))
     const runtime = this.runtimeFactory({
       runtimeBin: this.config.DSH_RUNTIME_BIN,
@@ -285,7 +304,7 @@ export class HarnessExecutor {
       model,
       provider: 'deepseek-official',
       maxTokens: Math.min(this.config.DSH_MAX_TOKENS, 4_096),
-      requestTimeoutMs: this.config.DSH_RUN_TIMEOUT_MS,
+      requestTimeoutMs: timeoutMs,
     })
     const sessionId = `route-${request.role_state.id}`
     const turns: RuntimeTurn[] = []
@@ -293,7 +312,7 @@ export class HarnessExecutor {
     let repaired = false
     const runSignal = AbortSignal.any([
       signal,
-      AbortSignal.timeout(this.config.DSH_RUN_TIMEOUT_MS),
+      AbortSignal.timeout(timeoutMs),
     ])
     try {
       const initialPrompt = buildRoutePrompt(request)
@@ -370,6 +389,7 @@ export class HarnessExecutor {
       ? this.config.DEEPSEEK_FLASH_MODEL
       : this.config.DEEPSEEK_PRO_MODEL
     const reasoning = reasoningForTask(request.task)
+    const timeoutMs = timeoutMsForTask(request.task, this.config)
     const sessionRoot = await mkdtemp(join(tmpdir(), 'role-clarifier-dsh-'))
     const createRuntime = (runtimeSessionRoot: string): ExecutorRuntime =>
       this.runtimeFactory({
@@ -391,7 +411,7 @@ export class HarnessExecutor {
         model,
         provider: 'deepseek-official',
         maxTokens: maxTokensForTask(request.task, this.config.DSH_MAX_TOKENS),
-        requestTimeoutMs: this.config.DSH_RUN_TIMEOUT_MS,
+        requestTimeoutMs: timeoutMs,
       })
     const runtime = createRuntime(sessionRoot)
     const sessionId = `role-${request.execution_context.role_session_id}`
@@ -402,7 +422,7 @@ export class HarnessExecutor {
     let usedBoundedRecovery = false
     const runSignal = AbortSignal.any([
       signal,
-      AbortSignal.timeout(this.config.DSH_RUN_TIMEOUT_MS),
+      AbortSignal.timeout(timeoutMs),
     ])
     const handleClarificationFailure = async (
       exhaustedTurn: RuntimeTurn,

@@ -56,10 +56,15 @@ Browser -> web (public HTTPS)
 - `DEEPSEEK_FLASH_MODEL=deepseek-v4-flash`
 - `DEEPSEEK_PRO_MODEL=deepseek-v4-pro`
 - `DSH_MAX_TOKENS=16384`
-- `DSH_RUN_TIMEOUT_MS=90000`
+- `DSH_ROUTER_TIMEOUT_MS=60000`
+- `DSH_CLARIFICATION_TIMEOUT_MS=180000`
+- `DSH_ARTIFACT_TIMEOUT_MS=360000`
+- `DSH_HR_BRIEF_TIMEOUT_MS=480000`
 - `SIDECAR_CONCURRENCY=4`
 - `HARNESS_SIDECAR_TOKEN=<same shared secret as api>`
 - `ROLE_AGENT_TOOL_TOKEN=<same shared secret as api>`
+
+超时按任务分档：Router 使用 60 秒；普通澄清和候选人提取使用 180 秒；岗位画像、评估方案、JD、校准建议和版本对比使用 360 秒；HR Brief 使用 480 秒。每个档位覆盖完整 Harness Turn，包括可能发生的一次结构化修复。
 
 ## 发布门禁
 

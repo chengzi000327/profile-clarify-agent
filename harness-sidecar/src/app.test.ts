@@ -20,6 +20,7 @@ import {
   reasoningForTask,
   recoverResultFromTool,
   resolveIncompleteTurnResult,
+  timeoutMsForTask,
 } from './executor.js'
 import {
   buildContextSnapshot,
@@ -959,6 +960,18 @@ describe('Harness sidecar', () => {
     expect(reasoningForTask('ROUTER')).toEqual({ thinking: 'disabled', effort: 'off' })
     expect(reasoningForTask('CLARIFY_MESSAGE')).toEqual({ thinking: 'disabled', effort: 'off' })
     expect(reasoningForTask('GENERATE_JD')).toEqual({ thinking: 'enabled', effort: 'high' })
+  })
+
+  it('assigns independent doubled timeout budgets by task class', () => {
+    expect(timeoutMsForTask('ROUTER', config)).toBe(60_000)
+    expect(timeoutMsForTask('CLARIFY_MESSAGE', config)).toBe(180_000)
+    expect(timeoutMsForTask('EXTRACT_CANDIDATES', config)).toBe(180_000)
+    expect(timeoutMsForTask('GENERATE_ROLE_PROFILE', config)).toBe(360_000)
+    expect(timeoutMsForTask('GENERATE_ASSESSMENT', config)).toBe(360_000)
+    expect(timeoutMsForTask('GENERATE_JD', config)).toBe(360_000)
+    expect(timeoutMsForTask('CALIBRATION_ADVICE', config)).toBe(360_000)
+    expect(timeoutMsForTask('VERSION_COMPARISON', config)).toBe(360_000)
+    expect(timeoutMsForTask('GENERATE_HR_BRIEF', config)).toBe(480_000)
   })
 
   it('does not fabricate a canned conversation when model output is invalid', () => {

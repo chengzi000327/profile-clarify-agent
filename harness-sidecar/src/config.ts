@@ -37,7 +37,10 @@ const ConfigSchema = z.object({
     resolve(projectRoot, '.harness/deepseek-harness/packages/external/role-clarifier/cordis.yml'),
   ),
   DSH_MAX_TOKENS: z.coerce.number().int().positive().max(65_536).default(16_384),
-  DSH_RUN_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(300_000).default(90_000),
+  DSH_ROUTER_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(900_000).default(60_000),
+  DSH_CLARIFICATION_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(900_000).default(180_000),
+  DSH_ARTIFACT_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(900_000).default(360_000),
+  DSH_HR_BRIEF_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(900_000).default(480_000),
   SIDECAR_CONCURRENCY: z.coerce.number().int().min(1).max(16).default(4),
 })
 
