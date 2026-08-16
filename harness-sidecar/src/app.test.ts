@@ -76,8 +76,8 @@ describe('Harness sidecar', () => {
     })
     expect(context.short_term_memory.messages).toHaveLength(1)
     expect(context.long_term_memory.role_state).toMatchObject({
-      title: '商业化产品负责人',
-      revision: 1,
+      role: { title: '商业化产品负责人' },
+      state_revision: 1,
     })
     expect(context.task_state).toMatchObject({
       task: 'CLARIFY_MESSAGE',
@@ -92,6 +92,23 @@ describe('Harness sidecar', () => {
     expect(result.kind).toBe('CLARIFICATION')
   })
 
+  it.each(['BACKGROUND', 'CONSTRAINT'] as const)(
+    'accepts %s clarification facts supported by save_fact_draft',
+    (category) => {
+      const result = parseHarnessResult(JSON.stringify({
+        kind: 'CLARIFICATION',
+        persistence: 'TOOL',
+        answer: '已记录',
+        question: '接下来最需要澄清什么？',
+        fact_draft: { category, statement: '这是一条待确认的岗位事实。' },
+      }))
+      expect(result).toMatchObject({
+        kind: 'CLARIFICATION',
+        fact_draft: { category },
+      })
+    },
+  )
+
   it('accepts a direct conversation result without a write tool', () => {
     const result = parseHarnessResult(
       '{"kind":"CONVERSATION","persistence":"NONE","answer":"我在，可以帮你澄清岗位。"}',
@@ -105,6 +122,28 @@ describe('Harness sidecar', () => {
     expect(prompt).toContain('不要套用固定模板')
     expect(prompt).toContain('不要调用 read_role_state 或其他领域工具')
     expect(prompt).toContain('"kind":"CONVERSATION"')
+  })
+
+  it('keeps artifact content out of the initial model prompt and only exposes references', () => {
+    const prompt = buildTaskPrompt({
+      ...request,
+      role_state: {
+        ...state,
+        latest_artifacts: {
+          ROLE_PROFILE: {
+            id: 'artifact-profile-v1',
+            version: 1,
+            status: 'CONFIRMED',
+            content_hash: '1234567890abcdef',
+            content: { secret_marker: 'FULL_ARTIFACT_CONTENT_MUST_NOT_BE_IN_PROMPT' },
+          },
+        },
+      },
+    })
+
+    expect(prompt).toContain('artifact-profile-v1')
+    expect(prompt).toContain('1234567890abcdef')
+    expect(prompt).not.toContain('FULL_ARTIFACT_CONTENT_MUST_NOT_BE_IN_PROMPT')
   })
 
   it('caps Flash token budgets without shrinking Pro artifact generation', () => {

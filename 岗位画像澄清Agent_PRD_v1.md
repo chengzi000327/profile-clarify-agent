@@ -20,7 +20,7 @@
 | 测试负责人 | [待补充：需确认测试负责人] |
 | 计划 | 两天内完成可交互原型；可接真实系统的 MVP 排期另行评估 |
 | 首发终端 | 桌面 Web，推荐视口宽度不低于 1280px |
-| 当前状态 | 可运行MVP已完成：React工作台、业务API、PostgreSQL、测试登录、SSE、确定性Mock Harness与DeepSeek Harness Bundle；真实DeepSeek Smoke Test待上游rc.5发布物可用后执行 |
+| 当前状态 | 可运行MVP已完成：React工作台、业务API、PostgreSQL、测试登录、SSE，以及固定通过 Sidecar 运行的 DeepSeek Harness Bundle |
 
 ## 2. 更新记录
 

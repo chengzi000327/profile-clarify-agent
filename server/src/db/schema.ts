@@ -1,11 +1,5 @@
 import type {
-  AgentEvent,
-  AgentRun,
-  ArtifactEnvelope,
   CandidateEvidence,
-  ClarificationPolicy,
-  ClarificationRound,
-  ConversationMessage,
   RoleState,
 } from '@role-clarifier/contracts'
 import {
@@ -50,7 +44,20 @@ export const roleSessions = pgTable(
     department: text('department').notNull(),
     stage: text('stage').notNull(),
     revision: integer('revision').notNull().default(0),
-    state: jsonb('state').$type<RoleState>().notNull(),
+    businessState: jsonb('business_state')
+      .$type<Omit<RoleState, 'id' | 'tenant_id' | 'title' | 'department' | 'stage' | 'revision' | 'created_at' | 'updated_at'>>()
+      .notNull(),
+    clarificationInitialBudget: integer('clarification_initial_budget').notNull().default(6),
+    clarificationGrantedRounds: integer('clarification_granted_rounds').notNull().default(0),
+    clarificationExtensionSize: integer('clarification_extension_size').notNull().default(2),
+    clarificationCompletedRounds: integer('clarification_completed_rounds').notNull().default(0),
+    clarificationOpenedRounds: integer('clarification_opened_rounds').notNull().default(0),
+    clarificationOpenRoundId: uuid('clarification_open_round_id'),
+    clarificationStatus: text('clarification_status').notNull().default('ACTIVE'),
+    clarificationUpdatedBy: text('clarification_updated_by'),
+    clarificationUpdatedAt: timestamp('clarification_updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -85,7 +92,11 @@ export const artifacts = pgTable(
     version: integer('version').notNull(),
     status: text('status').notNull(),
     contentHash: text('content_hash').notNull(),
-    envelope: jsonb('envelope').$type<ArtifactEnvelope>().notNull(),
+    content: jsonb('content').$type<unknown>().notNull(),
+    basedOnHash: text('based_on_hash'),
+    createdBy: text('created_by').notNull(),
+    confirmedBy: text('confirmed_by'),
+    confirmedAt: timestamp('confirmed_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
@@ -117,42 +128,32 @@ export const candidates = pgTable(
   ],
 )
 
-export const calibrationSignals = pgTable(
-  'calibration_signals',
+export const calibrationCases = pgTable(
+  'calibration_cases',
   {
     id: uuid('id').primaryKey(),
     roleSessionId: uuid('role_session_id')
       .notNull()
       .references(() => roleSessions.id, { onDelete: 'cascade' }),
-    status: text('status').notNull(),
+    signalStatus: text('signal_status').notNull(),
     proposedChange: jsonb('proposed_change').$type<Record<string, unknown>>().notNull(),
     evidenceSummary: jsonb('evidence_summary').$type<Record<string, unknown>>().notNull(),
     reviewedBy: text('reviewed_by'),
     reviewReason: text('review_reason'),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-  },
-  (table) => [index('calibration_signals_role_idx').on(table.roleSessionId, table.createdAt)],
-)
-
-export const managerTasks = pgTable(
-  'manager_tasks',
-  {
-    id: uuid('id').primaryKey(),
-    roleSessionId: uuid('role_session_id')
-      .notNull()
-      .references(() => roleSessions.id, { onDelete: 'cascade' }),
-    signalId: uuid('signal_id')
-      .notNull()
-      .references(() => calibrationSignals.id, { onDelete: 'cascade' }),
-    assigneeUserId: text('assignee_user_id').notNull(),
-    status: text('status').notNull(),
+    managerTaskId: uuid('manager_task_id').unique(),
+    assigneeUserId: text('assignee_user_id'),
+    managerTaskStatus: text('manager_task_status'),
     decisionReason: text('decision_reason'),
-    dueAt: timestamp('due_at', { withTimezone: true }).notNull(),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    dueAt: timestamp('due_at', { withTimezone: true }),
+    signalCreatedAt: timestamp('signal_created_at', { withTimezone: true }).notNull().defaultNow(),
+    signalUpdatedAt: timestamp('signal_updated_at', { withTimezone: true }).notNull().defaultNow(),
+    taskCreatedAt: timestamp('task_created_at', { withTimezone: true }),
     completedAt: timestamp('completed_at', { withTimezone: true }),
   },
-  (table) => [index('manager_tasks_assignee_idx').on(table.assigneeUserId, table.status)],
+  (table) => [
+    index('calibration_cases_role_idx').on(table.roleSessionId, table.signalCreatedAt),
+    index('calibration_cases_assignee_idx').on(table.assigneeUserId, table.managerTaskStatus),
+  ],
 )
 
 export const agentRuns = pgTable(
@@ -164,7 +165,19 @@ export const agentRuns = pgTable(
       .references(() => roleSessions.id, { onDelete: 'cascade' }),
     actorUserId: text('actor_user_id').notNull(),
     status: text('status').notNull(),
-    run: jsonb('run').$type<AgentRun>().notNull(),
+    modelTier: text('model_tier').notNull(),
+    task: text('task').notNull(),
+    harnessSessionId: text('harness_session_id'),
+    promptVersion: text('prompt_version').notNull(),
+    modelName: text('model_name').notNull(),
+    toolCount: integer('tool_count').notNull().default(0),
+    inputTokens: integer('input_tokens').notNull().default(0),
+    outputTokens: integer('output_tokens').notNull().default(0),
+    startedAt: timestamp('started_at', { withTimezone: true }),
+    completedAt: timestamp('completed_at', { withTimezone: true }),
+    errorCode: text('error_code'),
+    inputMessageId: uuid('input_message_id'),
+    outputMessageId: uuid('output_message_id'),
     cancelRequested: boolean('cancel_requested').notNull().default(false),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
@@ -184,7 +197,7 @@ export const agentRunEvents = pgTable(
       .references(() => agentRuns.id, { onDelete: 'cascade' }),
     sequence: bigint('sequence', { mode: 'number' }).notNull(),
     type: text('type').notNull(),
-    event: jsonb('event').$type<AgentEvent>().notNull(),
+    payload: jsonb('payload').$type<Record<string, unknown>>().notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
@@ -203,15 +216,13 @@ export const conversationMessages = pgTable(
       .references(() => roleSessions.id, { onDelete: 'cascade' }),
     runId: uuid('run_id').references(() => agentRuns.id, { onDelete: 'set null' }),
     clarificationRoundId: uuid('clarification_round_id'),
-    senderType: text('sender_type').notNull(),
+    senderKind: text('sender_kind').notNull(),
     senderUserId: text('sender_user_id'),
-    senderRole: text('sender_role'),
     senderName: text('sender_name').notNull(),
     content: text('content').notNull(),
     structuredContent: jsonb('structured_content').$type<Record<string, unknown> | null>(),
     status: text('status').notNull(),
     sequence: bigint('sequence', { mode: 'number' }).notNull(),
-    message: jsonb('message').$type<ConversationMessage>().notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     completedAt: timestamp('completed_at', { withTimezone: true }),
   },
@@ -221,22 +232,6 @@ export const conversationMessages = pgTable(
     index('conversation_messages_run_idx').on(table.runId),
   ],
 )
-
-export const clarificationPolicies = pgTable('clarification_policies', {
-  roleSessionId: uuid('role_session_id')
-    .primaryKey()
-    .references(() => roleSessions.id, { onDelete: 'cascade' }),
-  initialBudget: integer('initial_budget').notNull().default(6),
-  grantedRounds: integer('granted_rounds').notNull().default(0),
-  extensionSize: integer('extension_size').notNull().default(2),
-  completedRounds: integer('completed_rounds').notNull().default(0),
-  openedRounds: integer('opened_rounds').notNull().default(0),
-  openRoundId: uuid('open_round_id'),
-  status: text('status').notNull().default('ACTIVE'),
-  updatedBy: text('updated_by'),
-  policy: jsonb('policy').$type<ClarificationPolicy>().notNull(),
-  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-})
 
 export const clarificationRounds = pgTable(
   'clarification_rounds',
@@ -252,7 +247,6 @@ export const clarificationRounds = pgTable(
       .notNull()
       .references(() => agentRuns.id, { onDelete: 'cascade' }),
     resolvedByMessageId: uuid('resolved_by_message_id'),
-    round: jsonb('round').$type<ClarificationRound>().notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     completedAt: timestamp('completed_at', { withTimezone: true }),
   },
@@ -262,35 +256,22 @@ export const clarificationRounds = pgTable(
   ],
 )
 
-export const traceAccessAudits = pgTable(
-  'trace_access_audits',
+export const auditLogs = pgTable(
+  'audit_logs',
   {
     id: uuid('id').primaryKey(),
     tenantId: text('tenant_id').notNull(),
-    actorUserId: text('actor_user_id').notNull(),
-    runId: uuid('run_id')
-      .notNull()
-      .references(() => agentRuns.id, { onDelete: 'cascade' }),
-    action: text('action').notNull(),
-    reason: text('reason'),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-  },
-  (table) => [index('trace_access_audits_tenant_idx').on(table.tenantId, table.createdAt)],
-)
-
-export const decisionLogs = pgTable(
-  'decision_logs',
-  {
-    id: uuid('id').primaryKey(),
-    roleSessionId: uuid('role_session_id')
-      .notNull()
-      .references(() => roleSessions.id, { onDelete: 'cascade' }),
+    roleSessionId: uuid('role_session_id').references(() => roleSessions.id, { onDelete: 'cascade' }),
     actorUserId: text('actor_user_id').notNull(),
     action: text('action').notNull(),
     targetType: text('target_type').notNull(),
     targetId: text('target_id').notNull(),
-    metadata: jsonb('metadata').$type<Record<string, unknown>>().notNull(),
+    metadata: jsonb('metadata').$type<Record<string, unknown>>().notNull().default({}),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => [index('decision_logs_role_idx').on(table.roleSessionId, table.createdAt)],
+  (table) => [
+    index('audit_logs_tenant_idx').on(table.tenantId, table.createdAt),
+    index('audit_logs_role_idx').on(table.roleSessionId, table.createdAt),
+    index('audit_logs_target_idx').on(table.targetType, table.targetId),
+  ],
 )

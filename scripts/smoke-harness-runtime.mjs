@@ -3,6 +3,7 @@ import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { JsonRpcHarnessRuntime } from '../harness-sidecar/dist/protocol-client.js'
+import { ROLE_CLARIFIER_SYSTEM_PROMPT } from '../packages/agent-spec/dist/index.js'
 
 const root = resolve(import.meta.dirname, '..')
 const sessionRoot = await mkdtemp(resolve(tmpdir(), 'role-clarifier-runtime-smoke-'))
@@ -55,7 +56,7 @@ const modelServer = createServer((request, response) => {
 })
 await new Promise(resolve => modelServer.listen(0, '127.0.0.1', resolve))
 const address = modelServer.address()
-if (address === null || typeof address === 'string') throw new Error('Mock model server has no port')
+if (address === null || typeof address === 'string') throw new Error('Stub model server has no port')
 const businessServer = createServer((request, response) => {
   let body = ''
   request.setEncoding('utf8')
@@ -118,11 +119,23 @@ try {
     throw new Error(`Unexpected successful tools: ${JSON.stringify(turn.successfulToolNames)}`)
   }
   const modelRequest = requests[0]
+  const systemPrompt = Array.isArray(modelRequest?.messages)
+    ? modelRequest.messages
+        .filter(message => message?.role === 'system')
+        .map(message => message?.content)
+        .filter(content => typeof content === 'string')
+        .join('\n')
+    : ''
+  const sharedPromptOccurrences = systemPrompt.split(ROLE_CLARIFIER_SYSTEM_PROMPT).length - 1
+  if (sharedPromptOccurrences !== 1) {
+    throw new Error(`Expected shared system prompt exactly once, got ${sharedPromptOccurrences}`)
+  }
   const toolNames = Array.isArray(modelRequest?.tools)
     ? modelRequest.tools.map(tool => tool?.function?.name).filter(Boolean)
     : []
   const expected = [
     'read_role_state',
+    'update_role_identity_draft',
     'save_fact_draft',
     'save_artifact_draft',
     'save_candidate_evidence',

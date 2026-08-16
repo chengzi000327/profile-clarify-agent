@@ -74,8 +74,17 @@ importers:
         specifier: 'catalog:'
         version: 3.2.4(@types/node@24.3.0)(tsx@4.20.5)
 
+  packages/agent-spec:
+    devDependencies:
+      typescript:
+        specifier: 'catalog:'
+        version: 5.9.2
+
   packages/contracts:
     dependencies:
+      '@role-clarifier/agent-spec':
+        specifier: workspace:*
+        version: link:../agent-spec
       zod:
         specifier: 'catalog:'
         version: 4.1.5

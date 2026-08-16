@@ -8,6 +8,8 @@ const exec = promisify(execFile)
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const lock = JSON.parse(await readFile(resolve(root, 'harness-sidecar/runtime-lock.json'), 'utf8'))
 const checkout = resolve(root, '.harness/deepseek-harness')
+const agentSpecSource = resolve(root, 'packages/agent-spec')
+const agentSpecTarget = resolve(checkout, 'packages/external/agent-spec')
 const pluginSource = resolve(root, 'packages/dsh-role-clarifier')
 const pluginTarget = resolve(checkout, 'packages/external/role-clarifier')
 
@@ -43,6 +45,7 @@ if (!await exists(resolve(checkout, '.git'))) {
 if (!await hasGitObject(lock.commit, checkout)) {
   await run('git', ['fetch', '--depth', '1', 'origin', lock.commit], checkout)
 }
+await rm(agentSpecTarget, { recursive: true, force: true })
 await rm(pluginTarget, { recursive: true, force: true })
 await run('git', ['switch', '--detach', lock.commit], checkout)
 await run('git', ['restore', '--source=HEAD', '--worktree', 'pnpm-lock.yaml'], checkout)
@@ -59,6 +62,17 @@ if (upstreamManifest.version !== lock.sourceVersion) {
 // follows the official multi-entry layout.
 await run('corepack', ['pnpm', 'install', '--frozen-lockfile'], checkout)
 await run('corepack', ['pnpm', 'run', 'build:lib'], checkout)
+
+await run('corepack', ['pnpm', '--filter', '@role-clarifier/agent-spec', 'build'])
+await mkdir(dirname(agentSpecTarget), { recursive: true })
+await cp(agentSpecSource, agentSpecTarget, {
+  recursive: true,
+  filter: (path) => !path.includes('/node_modules/'),
+})
+const agentSpecManifestPath = resolve(agentSpecTarget, 'package.json')
+const agentSpecManifest = JSON.parse(await readFile(agentSpecManifestPath, 'utf8'))
+delete agentSpecManifest.devDependencies
+await writeFile(agentSpecManifestPath, `${JSON.stringify(agentSpecManifest, null, 2)}\n`)
 
 await mkdir(dirname(pluginTarget), { recursive: true })
 await cp(pluginSource, pluginTarget, {

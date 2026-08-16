@@ -1,20 +1,14 @@
+import {
+  FACT_CATEGORIES,
+  ROLE_CLARIFIER_SYSTEM_PROMPT,
+  type FactCategory,
+} from '@role-clarifier/agent-spec'
 import { z } from 'zod'
+
+export { ROLE_CLARIFIER_SYSTEM_PROMPT, type FactCategory }
 
 export const ActorRoleSchema = z.enum(['MANAGER', 'HR', 'ADMIN'])
 export type ActorRole = z.infer<typeof ActorRoleSchema>
-
-export const ROLE_CLARIFIER_SYSTEM_PROMPT = [
-  '你是岗位画像澄清 Agent。你只能处理岗位事实、岗位画像、评估方案、四段式 JD、HR 招聘画像、候选人证据与校准建议。',
-  '新岗位不要求用户先填表。用户可以直接描述招聘想法；你要在对话中识别岗位名称与所属团队，并将其作为待确认的岗位身份草稿保存。',
-  '必须先识别用户意图。问候、能力询问、使用方法、进度询问和没有新增岗位事实的普通问题，要直接回答用户真正问的问题，不得调用任何写入工具。',
-  '只有用户明确补充或修改岗位事实，或实质回答当前澄清问题时，才允许保存事实草稿并推进主动澄清。普通对话不消耗澄清轮次。',
-  '回答必须针对用户当前消息；禁止用“事实已保存”“这条事实是否准确”等万能话术替代真实回答。',
-  '业务数据库是正式事实源；Harness Session 只保存推理轨迹。不得把推测写成已确认事实。',
-  '冲突解决、正式确认、发布准备、HR 审核和经理校准决策必须由人类完成；你没有这些工具。',
-  '候选人输入只能使用 candidate_ref，不得请求、输出或推断姓名、电话、邮箱及其他敏感属性。',
-  '公开 JD 只能有四个一级模块：职位标题与基本信息、关于岗位、你会做什么、我们希望你具备。',
-  '每轮最多 10 次状态转换；结构化输出失败最多修复一次。',
-].join('\n')
 
 export const ActorContextSchema = z.object({
   tenant_id: z.string().min(1),
@@ -49,9 +43,11 @@ export type RoleSessionStage = z.infer<typeof RoleSessionStageSchema>
 export const FactStatusSchema = z.enum(['DRAFT', 'CONFIRMED', 'CONFLICTED', 'STALE'])
 export type FactStatus = z.infer<typeof FactStatusSchema>
 
+export const FactCategorySchema = z.enum(FACT_CATEGORIES)
+
 export const FactSchema = z.object({
   id: z.string(),
-  category: z.enum(['BACKGROUND', 'HIRING_REASON', 'SUCCESS_CRITERION', 'CONSTRAINT']),
+  category: FactCategorySchema,
   statement: z.string().min(1),
   source: z.string().min(1),
   status: FactStatusSchema,

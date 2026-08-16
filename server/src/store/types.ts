@@ -58,6 +58,14 @@ export interface RoleAggregate {
   manager_tasks: ManagerTaskRecord[]
 }
 
+export interface RoleAggregateReadOptions {
+  members?: boolean
+  artifacts?: boolean
+  candidates?: boolean
+  calibration_signals?: boolean
+  manager_tasks?: boolean
+}
+
 export interface RunRecord {
   run: AgentRun
   cancel_requested: boolean
@@ -88,7 +96,11 @@ export interface ApplicationStore {
   saveUser(user: StoredUser): Promise<void>
   claimExternalEvent(channel: string, eventId: string): Promise<boolean>
   listRoleStates(actor: ActorContext): Promise<RoleState[]>
-  getRoleAggregate(roleSessionId: string, actor: ActorContext): Promise<RoleAggregate | null>
+  getRoleAggregate(
+    roleSessionId: string,
+    actor: ActorContext,
+    options?: RoleAggregateReadOptions,
+  ): Promise<RoleAggregate | null>
   createRoleAggregate(aggregate: RoleAggregate): Promise<void>
   saveRoleState(state: RoleState, expectedRevision: number): Promise<boolean>
   insertArtifact(artifact: ArtifactEnvelope): Promise<void>

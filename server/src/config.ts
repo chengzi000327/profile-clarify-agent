@@ -21,7 +21,6 @@ const ConfigSchema = z.object({
   DATABASE_URL: z.string().url().optional(),
   SESSION_SECRET: z.string().min(32).default('development-only-session-secret-change-me'),
   WEB_ORIGIN: z.string().url().default('http://localhost:5173'),
-  HARNESS_MODE: z.enum(['mock', 'sidecar']).default('mock'),
   HARNESS_BASE_URL: z.string().url().default('http://localhost:4110'),
   HARNESS_SIDECAR_TOKEN: z.string().min(24).default('development-sidecar-token'),
   ROLE_AGENT_TOOL_TOKEN: z.string().min(24).default('development-harness-tool-token'),

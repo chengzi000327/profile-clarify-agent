@@ -1,6 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { FastifyInstance } from 'fastify'
+import {
+  ROLE_CLARIFIER_SYSTEM_PROMPT,
+  type ArtifactType,
+  type CandidateEvidence,
+} from '@role-clarifier/contracts'
 import { buildApp, visibleAgentEvent } from './app.js'
+import type {
+  HarnessAdapter,
+  HarnessHooks,
+  HarnessRequest,
+  HarnessResult,
+} from './agent/harness-adapter.js'
 import { loadConfig } from './config.js'
 import { MemoryStore } from './store/memory-store.js'
 import { DEMO_ROLE_SESSION_ID } from './store/seed.js'
@@ -8,8 +19,173 @@ import { DEMO_ROLE_SESSION_ID } from './store/seed.js'
 const config = loadConfig({
   NODE_ENV: 'test',
   SESSION_SECRET: 'test-session-secret-that-is-long-enough',
-  HARNESS_MODE: 'mock',
 })
+
+class TestHarnessStub implements HarnessAdapter {
+  async run(request: HarnessRequest, hooks: HarnessHooks): Promise<HarnessResult> {
+    const { tenant_id: _tenantId, ...roleState } = request.role_state
+    let toolCount = 0
+    const tool = async (name: string, args: unknown, result: unknown): Promise<void> => {
+      toolCount += 1
+      await hooks.onToolStarted(name, args)
+      await hooks.onToolCompleted(name, `${name} completed by test stub`, result)
+    }
+    const finish = async (result: HarnessResult, visible: string): Promise<HarnessResult> => {
+      await hooks.onModelResponse(JSON.stringify(result))
+      await hooks.onDelta(visible)
+      await hooks.onTrace({
+        model: 'test-harness-stub',
+        provider: 'test-only',
+        tool_count: toolCount,
+        input_tokens: 1,
+        output_tokens: 1,
+        duration_ms: 1,
+        repaired: false,
+      })
+      return result
+    }
+
+    await hooks.onContextSnapshot({
+      system_prompt: {
+        section_name: 'role-clarifier:guardrails',
+        content: ROLE_CLARIFIER_SYSTEM_PROMPT,
+        provenance: 'HARNESS_SYSTEM_PROMPT',
+        harness_managed_base: {
+          included: false,
+          captured_as_text: false,
+          description: '测试替身仅验证 API 编排，不代表可运行的 Harness 模式。',
+        },
+      },
+      current_user_input: {
+        content: request.message === undefined
+          ? { candidate_data: request.candidates ?? [] }
+          : { message: request.message },
+        source: 'CURRENT_REQUEST',
+      },
+      short_term_memory: {
+        source: 'RECENT_CONVERSATION',
+        window_size: request.conversation_context?.recent_messages.length ?? 0,
+        messages: request.conversation_context?.recent_messages ?? [],
+      },
+      long_term_memory: { source: 'BUSINESS_DATABASE', role_state: roleState },
+      task_state: {
+        task: request.task,
+        current_user_role: request.conversation_context?.current_user_role ?? null,
+        open_clarification: request.conversation_context?.open_clarification ?? null,
+        maximum_transitions: request.maximum_transitions,
+      },
+    })
+    await hooks.onModelRequest(JSON.stringify({
+      task: request.task,
+      message: request.message,
+      role_state: roleState,
+    }))
+
+    const message = request.message?.trim() ?? ''
+    if (
+      request.task === 'CLARIFY_MESSAGE'
+      && /你在吗|在不在|干啥|做什么|怎么用|帮助|^(你好|您好|嗨|hi|hello)/i.test(message)
+    ) {
+      await hooks.onStatus('测试替身返回普通对话结果')
+      const answer = '我在，可以继续帮你澄清岗位和招聘问题。'
+      return finish({ kind: 'CONVERSATION', persistence: 'NONE', answer }, answer)
+    }
+
+    await hooks.onStatus('测试替身执行 Agent 任务')
+    await tool('read_role_state', {}, request.role_state)
+
+    if (request.task === 'CLARIFY_MESSAGE') {
+      const category: 'HIRING_REASON' | 'SUCCESS_CRITERION' = request.role_state.facts.some(
+        (fact) => fact.category === 'HIRING_REASON',
+      )
+        ? 'SUCCESS_CRITERION'
+        : 'HIRING_REASON'
+      const title = message.match(
+        /(?:招聘|招|找)(?:一名|一个|一位|位|个|名)?\s*([^，。！？\n]{2,30}?(?:经理|负责人|工程师|设计师|运营|销售|顾问|专家|总监|主管|HR|人力资源))/,
+      )?.[1]?.trim()
+      if (title) await tool('update_role_identity_draft', { title }, { saved: true })
+      const factDraft = { category, statement: message }
+      await tool('save_fact_draft', factDraft, { saved: true })
+      const answer = `已记录本轮${category === 'HIRING_REASON' ? '招聘原因' : '成功标准'}。`
+      return finish({
+        kind: 'CLARIFICATION',
+        answer,
+        question: category === 'HIRING_REASON'
+          ? '如果半年后证明招聘成功，最重要的业务结果是什么？'
+          : '这个结果由谁验收、如何判断达成？',
+        ...(title ? { role_identity: { title } } : {}),
+        fact_draft: factDraft,
+      }, answer)
+    }
+
+    if (request.task === 'EXTRACT_CANDIDATES') {
+      const candidates: CandidateEvidence[] = (request.candidates ?? []).map((candidate) => {
+        const text = typeof candidate.content === 'string'
+          ? candidate.content
+          : JSON.stringify(candidate.content)
+        const businessGap = /业务判断/.test(text) && /不足|缺少|较弱|未体现/.test(text)
+        return {
+          candidate_ref: candidate.candidate_ref,
+          channel: candidate.channel,
+          source_format: candidate.format,
+          evidence: [{
+            criterion: '业务判断',
+            signal: /业务|商业|增长/.test(text) ? 'MIXED' : 'MISSING',
+            excerpt: businessGap ? '业务判断证据不足，需要面试验证。' : '存在业务相关经历。',
+          }],
+          bottlenecks: businessGap ? ['业务判断证据不足'] : [],
+        }
+      })
+      await tool('save_candidate_evidence', { candidates }, { saved: true })
+      const summary = `已完成 ${candidates.length} 份候选人证据分析。`
+      return finish({ kind: 'CANDIDATE_EVIDENCE', candidates, summary }, summary)
+    }
+
+    if (request.task === 'CALIBRATION_ADVICE') {
+      const proposedChange = { action: 'REVIEW_CAPABILITY_ANCHORS' }
+      await tool('propose_calibration_signal', {
+        focus: '能力锚点',
+        evidence_summary: {},
+        proposed_change: proposedChange,
+      }, { saved: true })
+      const summary = '建议复核岗位画像中的能力锚点。'
+      return finish({
+        kind: 'CALIBRATION_ADVICE',
+        summary,
+        proposed_change: proposedChange,
+      }, summary)
+    }
+
+    const artifactTypeByTask: Record<
+      Exclude<HarnessRequest['task'], 'CLARIFY_MESSAGE' | 'EXTRACT_CANDIDATES' | 'CALIBRATION_ADVICE'>,
+      ArtifactType
+    > = {
+      GENERATE_ROLE_PROFILE: 'ROLE_PROFILE',
+      GENERATE_ASSESSMENT: 'ASSESSMENT_SCORECARD',
+      GENERATE_JD: 'PUBLIC_JD',
+      GENERATE_HR_BRIEF: 'HR_RECRUITING_BRIEF',
+    }
+    const artifactType = artifactTypeByTask[request.task]
+    const content = artifactType === 'PUBLIC_JD'
+      ? {
+          title_and_basics: {
+            title: request.role_state.title,
+            location: '上海 / 可协商',
+            employment_type: '全职',
+            reporting_line: `${request.role_state.department}负责人`,
+          },
+          about_the_role: '负责围绕关键业务目标推动方案落地。',
+          what_you_will_do: ['澄清目标并推动交付'],
+          what_we_look_for: ['具备结构化分析和协作能力'],
+        }
+      : { title: request.role_state.title, generated_for: artifactType }
+    await tool('save_artifact_draft', { artifact_type: artifactType, content }, { saved: true })
+    const summary = artifactType === 'ROLE_PROFILE' ? '岗位画像草稿已生成。' : '产物草稿已生成。'
+    return finish({ kind: 'ARTIFACT', artifact_type: artifactType, content, summary }, summary)
+  }
+}
+
+const testHarness = new TestHarnessStub()
 
 const cookieFrom = (response: {
   headers: Record<string, string | string[] | number | undefined>
@@ -47,7 +223,7 @@ describe('Role Clarifier API', () => {
   let app: FastifyInstance
 
   beforeEach(async () => {
-    app = await buildApp(config, { store: new MemoryStore() })
+    app = await buildApp(config, { store: new MemoryStore(), harness: testHarness })
   })
 
   it('普通成员的 SSE 不暴露内部错误，企业管理员 Trace 保留诊断信息', () => {
@@ -195,7 +371,6 @@ describe('Role Clarifier API', () => {
     const feishuConfig = loadConfig({
       NODE_ENV: 'test',
       SESSION_SECRET: 'test-session-secret-that-is-long-enough',
-      HARNESS_MODE: 'mock',
       FEISHU_ENABLED: 'true',
       FEISHU_APP_ID: 'cli_test',
       FEISHU_APP_SECRET: 'test-secret',
@@ -204,6 +379,7 @@ describe('Role Clarifier API', () => {
     })
     const feishuApp = await buildApp(feishuConfig, {
       store: new MemoryStore(),
+      harness: testHarness,
       feishuClient: {
         configured: () => true,
         sendText: async (chatId, text) => {
@@ -770,7 +946,7 @@ describe('Role Clarifier API', () => {
       completed_at: createdAt,
     })
 
-    const recoveringApp = await buildApp(config, { store })
+    const recoveringApp = await buildApp(config, { store, harness: testHarness })
     const recovered = await store.getRun('22222222-2222-4222-8222-222222222222')
     const messages = await store.listConversationMessages(DEMO_ROLE_SESSION_ID)
     const events = await store.listRunEvents('22222222-2222-4222-8222-222222222222')

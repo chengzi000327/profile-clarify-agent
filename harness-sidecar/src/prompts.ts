@@ -8,6 +8,57 @@ const artifactByTask: Partial<Record<HarnessTask, string>> = {
   GENERATE_HR_BRIEF: 'HR_RECRUITING_BRIEF',
 }
 
+const projectInitialRoleState = (request: HarnessRequest): Record<string, unknown> => {
+  const state = request.role_state
+  const artifactRefs = Object.entries(state.latest_artifacts).flatMap(([type, artifact]) =>
+    artifact
+      ? [{
+          type,
+          id: artifact.id,
+          version: artifact.version,
+          status: artifact.status,
+          content_hash: artifact.content_hash,
+        }]
+      : [],
+  )
+  const base = {
+    state_revision: state.revision,
+    role: {
+      id: state.id,
+      title: state.title,
+      department: state.department,
+      stage: state.stage,
+      hc_status: state.hc_status,
+    },
+    artifact_refs: artifactRefs,
+  }
+  if (request.task !== 'CLARIFY_MESSAGE') return base
+
+  return {
+    ...base,
+    facts: state.facts.map((fact) => ({
+      category: fact.category,
+      statement: fact.statement,
+      source: fact.source,
+      status: fact.status,
+      evidence_refs: fact.evidence_refs,
+    })),
+    conflicts: state.conflicts.map((conflict) => ({
+      field: conflict.field,
+      left_value: conflict.left_value,
+      right_value: conflict.right_value,
+      source_refs: conflict.source_refs,
+      status: conflict.status,
+      ...(conflict.resolution === undefined ? {} : { resolution: conflict.resolution }),
+    })),
+    recruiting_status: {
+      candidate_count: state.candidate_count,
+      candidate_channels: state.candidate_channels,
+      calibration_status: state.calibration_status,
+    },
+  }
+}
+
 const taskInstructions = (request: HarnessRequest): string => {
   if (request.task === 'CLARIFY_MESSAGE') {
     return [
@@ -15,7 +66,7 @@ const taskInstructions = (request: HarnessRequest): string => {
       '如果用户在打招呼、确认你是否在线、询问你能做什么、询问使用方法/进度/已有信息，或提出没有新增岗位事实的普通问题：直接回答用户真正问的问题；不得调用任何写入工具；返回 {"kind":"CONVERSATION","persistence":"NONE","answer":"..."}。',
       '纯问候、致谢、确认是否在线或能力询问要由模型结合上下文自然、简洁地回复；不要套用固定模板，也不要调用 read_role_state 或其他领域工具。',
       '只有当用户明确补充/修改了招聘原因、成功标准、岗位约束，或实质回答了 open_clarification 时，才进入 CLARIFICATION。',
-      '如果岗位状态中的 title 或 department 仍是“待识别/待确认”，而用户本轮明确说出了岗位名称或所属团队：调用 update_role_identity_draft 保存岗位身份草稿；最终 CLARIFICATION JSON 的 role_identity 必须与工具参数一致。没有明确说出的字段不要猜。',
+      '如果岗位状态中的 role.title 或 role.department 仍是“待识别/待确认”，而用户本轮明确说出了岗位名称或所属团队：调用 update_role_identity_draft 保存岗位身份草稿；最终 CLARIFICATION JSON 的 role_identity 必须与工具参数一致。没有明确说出的字段不要猜。',
       '进入 CLARIFICATION 后先调用 read_role_state，再调用 save_fact_draft 保存一条忠实、完整、可独立理解的事实草稿，禁止把它标记为已确认。',
       'CLARIFICATION 的 answer 必须具体复述本轮真正记录的内容，question 只能追问一个仍缺失的业务要素；禁止使用“这条事实是否准确”“等待你的确认”等万能套话。',
       '用户提出了直接问题时必须先直接回答，不能答非所问；普通问答不消耗主动澄清轮次，也不要虚构已经保存事实。',
@@ -49,7 +100,6 @@ const taskInstructions = (request: HarnessRequest): string => {
 }
 
 export const buildContextSnapshot = (request: HarnessRequest): AgentContextSnapshot => {
-  const { tenant_id: _tenantId, ...roleState } = request.role_state
   const currentInput = request.message !== undefined
     ? { message: request.message }
     : request.candidates !== undefined
@@ -77,7 +127,7 @@ export const buildContextSnapshot = (request: HarnessRequest): AgentContextSnaps
     },
     long_term_memory: {
       source: 'BUSINESS_DATABASE',
-      role_state: roleState,
+      role_state: projectInitialRoleState(request),
     },
     task_state: {
       task: request.task,

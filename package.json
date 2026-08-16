@@ -10,7 +10,6 @@
     "build": "pnpm -r --if-present build",
     "predev": "pnpm --filter @role-clarifier/contracts build && pnpm --filter @role-clarifier/domain build && pnpm harness:prepare",
     "dev": "pnpm --parallel --filter @role-clarifier/api --filter @role-clarifier/web --filter @role-clarifier/harness-sidecar dev",
-    "dev:mock": "HARNESS_MODE=mock pnpm --parallel --filter @role-clarifier/api --filter @role-clarifier/web dev",
     "predev:api": "pnpm --filter @role-clarifier/contracts build && pnpm --filter @role-clarifier/domain build",
     "dev:api": "pnpm --filter @role-clarifier/api dev",
     "dev:web": "pnpm --filter @role-clarifier/web dev",

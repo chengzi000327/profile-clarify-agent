@@ -17,6 +17,7 @@ import type {
   EventSubscriber,
   ManagerTaskRecord,
   RoleAggregate,
+  RoleAggregateReadOptions,
   RunRecord,
   StoredUser,
   TraceAccessAuditRecord,
@@ -73,7 +74,11 @@ export class MemoryStore implements ApplicationStore {
       .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
   }
 
-  async getRoleAggregate(roleSessionId: string, actor: ActorContext): Promise<RoleAggregate | null> {
+  async getRoleAggregate(
+    roleSessionId: string,
+    actor: ActorContext,
+    options?: RoleAggregateReadOptions,
+  ): Promise<RoleAggregate | null> {
     const aggregate = this.roles.get(roleSessionId)
     if (
       !aggregate ||
@@ -82,7 +87,13 @@ export class MemoryStore implements ApplicationStore {
     ) {
       return null
     }
-    return clone(aggregate)
+    const selected = clone(aggregate)
+    if (options?.members === false) selected.member_ids = []
+    if (options?.artifacts === false) selected.artifacts = []
+    if (options?.candidates === false) selected.candidates = []
+    if (options?.calibration_signals === false) selected.calibration_signals = []
+    if (options?.manager_tasks === false) selected.manager_tasks = []
+    return selected
   }
 
   async createRoleAggregate(aggregate: RoleAggregate): Promise<void> {

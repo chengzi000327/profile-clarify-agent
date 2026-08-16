@@ -9,7 +9,7 @@
 3. 领域 Bundle 能以 Profile 最后一层覆盖 dsh-base，将工具展示模式固定为 native。
 4. Bundle 的七个工具使用闭合 Schema，身份字段不在模型参数中。
 5. 静态 Profile 门禁会检查精确版本、危险工具禁用和领域工具完整性。
-6. API 通过 HarnessAdapter 隔离运行时；mock 与 sidecar 使用同一业务状态和事件契约。
+6. API 通过 HarnessAdapter 隔离运行时，并固定使用 Sidecar 执行真实 Harness；测试替身只通过测试依赖注入使用。
 7. Harness 故障不会影响业务库中的正式产物读取；新 Run 会重新读取 RoleState。
 8. 官方 TypeScript SDK 通过 stdio JSON-RPC 驱动 Session；Sidecar 已完成 `initialize` 启动验收。
 9. Flash/Pro 已映射为官方 `deepseek-v4-flash` / `deepseek-v4-pro`，两者都支持工具调用。

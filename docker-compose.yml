@@ -23,7 +23,6 @@ services:
       DATABASE_URL: postgres://role_agent:role_agent@db:5432/role_agent
       SESSION_SECRET: test-environment-session-secret-change-before-shared-use
       WEB_ORIGIN: http://localhost:8080
-      HARNESS_MODE: sidecar
       HARNESS_BASE_URL: http://harness-sidecar:4110
       HARNESS_SIDECAR_TOKEN: test-environment-sidecar-token
       AGENT_CONCURRENCY: 4

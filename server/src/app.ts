@@ -15,6 +15,7 @@ import {
   ClarificationExtendRequestSchema,
   ClarificationPolicySchema,
   ConversationMessageSchema,
+  FactCategorySchema,
   HumanDecisionSchema,
   LoginRequestSchema,
   MessageRequestSchema,
@@ -28,7 +29,7 @@ import {
 } from '@role-clarifier/contracts'
 import { DomainError } from '@role-clarifier/domain'
 import { AgentRunner } from './agent/runner.js'
-import { createHarnessAdapter } from './agent/harness-adapter.js'
+import { SidecarHarnessAdapter, type HarnessAdapter } from './agent/harness-adapter.js'
 import type { AppConfig } from './config.js'
 import { RoleService } from './services/role-service.js'
 import { createStore, type ApplicationStore } from './store/index.js'
@@ -106,6 +107,7 @@ export const visibleAgentEvent = (event: AgentEvent, actor: ActorContext): Agent
 export interface AppDependencies {
   store?: ApplicationStore
   feishuClient?: FeishuClientLike
+  harness?: HarnessAdapter
 }
 
 const recoverInterruptedRuns = async (store: ApplicationStore): Promise<void> => {
@@ -194,7 +196,12 @@ export const buildApp = async (
   await store.initialize()
   await recoverInterruptedRuns(store)
   const roleService = new RoleService(store)
-  const runner = new AgentRunner(store, roleService, createHarnessAdapter(config), config)
+  const runner = new AgentRunner(
+    store,
+    roleService,
+    dependencies.harness ?? new SidecarHarnessAdapter(config),
+    config,
+  )
   const feishu = new FeishuGateway(
     config,
     store,
@@ -311,7 +318,7 @@ export const buildApp = async (
 
   app.get('/healthz', async () => ({
     status: 'ok',
-    harness_mode: config.HARNESS_MODE,
+    harness_mode: 'sidecar',
     integrations: { feishu: feishu.status() },
   }))
 
@@ -354,14 +361,12 @@ export const buildApp = async (
     const { tool_name } = z.object({ tool_name: z.string() }).parse(request.params)
     const body = request.body ?? {}
     if (tool_name === 'read_role_state') {
-      const view = await roleService.get(roleSessionId, actor)
-      const { tenant_id: _tenantId, ...state } = view.state
-      return { ...view, state }
+      return roleService.readStateForTask(roleSessionId, actor, activeRun.run.task)
     }
     if (tool_name === 'save_fact_draft') {
       const input = z
         .object({
-          category: z.enum(['BACKGROUND', 'HIRING_REASON', 'SUCCESS_CRITERION', 'CONSTRAINT']),
+          category: FactCategorySchema,
           statement: z.string().min(1).max(2_000),
           source_refs: z.array(z.string()).max(20).optional(),
         })

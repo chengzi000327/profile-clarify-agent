@@ -28,6 +28,7 @@ import type {
   EventSubscriber,
   ManagerTaskRecord,
   RoleAggregate,
+  RoleAggregateReadOptions,
   RunRecord,
   StoredUser,
   TraceAccessAuditRecord,
@@ -35,6 +36,144 @@ import type {
 
 const iso = (value: Date | string): string =>
   value instanceof Date ? value.toISOString() : new Date(value).toISOString()
+
+type RoleSessionRow = typeof schema.roleSessions.$inferSelect
+type ArtifactRow = typeof schema.artifacts.$inferSelect
+type AgentRunRow = typeof schema.agentRuns.$inferSelect
+type AgentEventRow = typeof schema.agentRunEvents.$inferSelect
+type ConversationMessageRow = typeof schema.conversationMessages.$inferSelect
+type ClarificationRoundRow = typeof schema.clarificationRounds.$inferSelect
+type CalibrationCaseRow = typeof schema.calibrationCases.$inferSelect
+
+const roleBusinessState = (
+  state: RoleState,
+): RoleSessionRow['businessState'] => ({
+  hc_status: state.hc_status,
+  facts: state.facts,
+  conflicts: state.conflicts,
+  latest_artifacts: state.latest_artifacts,
+  candidate_count: state.candidate_count,
+  candidate_channels: state.candidate_channels,
+  calibration_status: state.calibration_status,
+})
+
+const roleStateFromRow = (row: RoleSessionRow): RoleState => ({
+  ...row.businessState,
+  id: row.id,
+  tenant_id: row.tenantId,
+  title: row.title,
+  department: row.department,
+  stage: row.stage as RoleState['stage'],
+  revision: row.revision,
+  created_at: iso(row.createdAt),
+  updated_at: iso(row.updatedAt),
+})
+
+const artifactFromRow = (row: ArtifactRow): ArtifactEnvelope => ({
+  id: row.id,
+  role_session_id: row.roleSessionId,
+  type: row.type as ArtifactEnvelope['type'],
+  version: row.version,
+  status: row.status as ArtifactEnvelope['status'],
+  content: row.content,
+  content_hash: row.contentHash,
+  based_on_hash: row.basedOnHash,
+  created_by: row.createdBy,
+  created_at: iso(row.createdAt),
+  confirmed_by: row.confirmedBy,
+  confirmed_at: row.confirmedAt ? iso(row.confirmedAt) : null,
+})
+
+const agentRunFromRow = (row: AgentRunRow): AgentRun => ({
+  id: row.id,
+  role_session_id: row.roleSessionId,
+  actor_user_id: row.actorUserId,
+  status: row.status as AgentRun['status'],
+  model_tier: row.modelTier as AgentRun['model_tier'],
+  task: row.task,
+  harness_session_id: row.harnessSessionId,
+  prompt_version: row.promptVersion,
+  model_name: row.modelName,
+  tool_count: row.toolCount,
+  input_tokens: row.inputTokens,
+  output_tokens: row.outputTokens,
+  started_at: row.startedAt ? iso(row.startedAt) : null,
+  completed_at: row.completedAt ? iso(row.completedAt) : null,
+  error_code: row.errorCode,
+  input_message_id: row.inputMessageId,
+  output_message_id: row.outputMessageId,
+})
+
+const agentEventFromRow = (row: AgentEventRow): AgentEvent => ({
+  id: row.id,
+  run_id: row.runId,
+  sequence: row.sequence,
+  type: row.type as AgentEvent['type'],
+  payload: row.payload,
+  created_at: iso(row.createdAt),
+})
+
+const conversationMessageFromRow = (row: ConversationMessageRow): ConversationMessage => {
+  const humanRole = ['MANAGER', 'HR', 'ADMIN'].includes(row.senderKind)
+    ? row.senderKind as ConversationMessage['sender_role']
+    : null
+  return {
+    id: row.id,
+    tenant_id: row.tenantId,
+    role_session_id: row.roleSessionId,
+    run_id: row.runId,
+    clarification_round_id: row.clarificationRoundId,
+    sender_type: humanRole ? 'HUMAN' : row.senderKind as ConversationMessage['sender_type'],
+    sender_user_id: row.senderUserId,
+    sender_role: humanRole,
+    sender_name: row.senderName,
+    content: row.content,
+    structured_content: row.structuredContent,
+    status: row.status as ConversationMessage['status'],
+    sequence: row.sequence,
+    created_at: iso(row.createdAt),
+    completed_at: row.completedAt ? iso(row.completedAt) : null,
+  }
+}
+
+const clarificationRoundFromRow = (row: ClarificationRoundRow): ClarificationRound => ({
+  id: row.id,
+  role_session_id: row.roleSessionId,
+  ordinal: row.ordinal,
+  status: row.status as ClarificationRound['status'],
+  question: row.question,
+  opened_by_run_id: row.openedByRunId,
+  resolved_by_message_id: row.resolvedByMessageId,
+  created_at: iso(row.createdAt),
+  completed_at: row.completedAt ? iso(row.completedAt) : null,
+})
+
+const calibrationSignalFromRow = (row: CalibrationCaseRow): CalibrationSignalRecord => ({
+  id: row.id,
+  role_session_id: row.roleSessionId,
+  status: row.signalStatus as CalibrationSignalRecord['status'],
+  proposed_change: row.proposedChange,
+  evidence_summary: row.evidenceSummary,
+  reviewed_by: row.reviewedBy,
+  review_reason: row.reviewReason,
+  created_at: iso(row.signalCreatedAt),
+  updated_at: iso(row.signalUpdatedAt),
+})
+
+const managerTaskFromRow = (row: CalibrationCaseRow): ManagerTaskRecord | null =>
+  row.managerTaskId && row.assigneeUserId && row.managerTaskStatus && row.dueAt && row.taskCreatedAt
+    ? {
+        id: row.managerTaskId,
+        role_session_id: row.roleSessionId,
+        signal_id: row.id,
+        assignee_user_id: row.assigneeUserId,
+        status: row.managerTaskStatus as ManagerTaskRecord['status'],
+        decision_reason: row.decisionReason,
+        due_at: iso(row.dueAt),
+        created_at: iso(row.taskCreatedAt),
+        completed_at: row.completedAt ? iso(row.completedAt) : null,
+      }
+    : null
 
 export class PostgresStore implements ApplicationStore {
   private readonly client: Sql
@@ -47,14 +186,7 @@ export class PostgresStore implements ApplicationStore {
   }
 
   async initialize(): Promise<void> {
-    const roleRows = await this.db.select({ id: schema.roleSessions.id }).from(schema.roleSessions)
-    for (const role of roleRows) {
-      const policy = this.makeDefaultPolicy(role.id)
-      await this.db
-        .insert(schema.clarificationPolicies)
-        .values(this.toPolicyRow(policy))
-        .onConflictDoNothing()
-    }
+    await this.db.select({ id: schema.roleSessions.id }).from(schema.roleSessions).limit(1)
   }
 
   async close(): Promise<void> {
@@ -104,14 +236,14 @@ export class PostgresStore implements ApplicationStore {
   async listRoleStates(actor: ActorContext): Promise<RoleState[]> {
     if (actor.role === 'ADMIN') {
       const rows = await this.db
-        .select({ state: schema.roleSessions.state })
+        .select()
         .from(schema.roleSessions)
         .where(eq(schema.roleSessions.tenantId, actor.tenant_id))
         .orderBy(desc(schema.roleSessions.updatedAt))
-      return rows.map((row) => row.state)
+      return rows.map(roleStateFromRow)
     }
     const rows = await this.db
-      .select({ state: schema.roleSessions.state })
+      .select({ role: schema.roleSessions })
       .from(schema.roleSessions)
       .innerJoin(
         schema.roleMembers,
@@ -124,13 +256,17 @@ export class PostgresStore implements ApplicationStore {
         ),
       )
       .orderBy(desc(schema.roleSessions.updatedAt))
-    return rows.map((row) => row.state)
+    return rows.map((row) => roleStateFromRow(row.role))
   }
 
-  async getRoleAggregate(roleSessionId: string, actor: ActorContext): Promise<RoleAggregate | null> {
+  async getRoleAggregate(
+    roleSessionId: string,
+    actor: ActorContext,
+    options?: RoleAggregateReadOptions,
+  ): Promise<RoleAggregate | null> {
     const [access] = actor.role === 'ADMIN'
       ? await this.db
-          .select({ state: schema.roleSessions.state })
+          .select()
           .from(schema.roleSessions)
           .where(
             and(
@@ -140,7 +276,7 @@ export class PostgresStore implements ApplicationStore {
           )
           .limit(1)
       : await this.db
-          .select({ state: schema.roleSessions.state })
+          .select({ role: schema.roleSessions })
           .from(schema.roleSessions)
           .innerJoin(
             schema.roleMembers,
@@ -156,64 +292,59 @@ export class PostgresStore implements ApplicationStore {
           .limit(1)
     if (!access) return null
 
+    const roleRow = 'role' in access ? access.role : access
+
     const [memberRows, artifactRows, candidateRows, signalRows, taskRows] = await Promise.all([
-      this.db
-        .select({ userId: schema.roleMembers.userId })
-        .from(schema.roleMembers)
-        .where(eq(schema.roleMembers.roleSessionId, roleSessionId)),
-      this.db
-        .select({ envelope: schema.artifacts.envelope })
-        .from(schema.artifacts)
-        .where(eq(schema.artifacts.roleSessionId, roleSessionId))
-        .orderBy(asc(schema.artifacts.type), asc(schema.artifacts.version)),
-      this.db
-        .select({ evidence: schema.candidates.evidence })
-        .from(schema.candidates)
-        .where(eq(schema.candidates.roleSessionId, roleSessionId)),
-      this.db
-        .select()
-        .from(schema.calibrationSignals)
-        .where(eq(schema.calibrationSignals.roleSessionId, roleSessionId))
-        .orderBy(desc(schema.calibrationSignals.createdAt)),
-      this.db
-        .select()
-        .from(schema.managerTasks)
-        .where(eq(schema.managerTasks.roleSessionId, roleSessionId))
-        .orderBy(desc(schema.managerTasks.createdAt)),
+      options?.members === false
+        ? Promise.resolve([])
+        : this.db
+            .select({ userId: schema.roleMembers.userId })
+            .from(schema.roleMembers)
+            .where(eq(schema.roleMembers.roleSessionId, roleSessionId)),
+      options?.artifacts === false
+        ? Promise.resolve([])
+        : this.db
+            .select()
+            .from(schema.artifacts)
+            .where(eq(schema.artifacts.roleSessionId, roleSessionId))
+            .orderBy(asc(schema.artifacts.type), asc(schema.artifacts.version)),
+      options?.candidates === false
+        ? Promise.resolve([])
+        : this.db
+            .select({ evidence: schema.candidates.evidence })
+            .from(schema.candidates)
+            .where(eq(schema.candidates.roleSessionId, roleSessionId)),
+      options?.calibration_signals === false
+        ? Promise.resolve([])
+        : this.db
+            .select()
+            .from(schema.calibrationCases)
+            .where(eq(schema.calibrationCases.roleSessionId, roleSessionId))
+            .orderBy(desc(schema.calibrationCases.signalCreatedAt)),
+      options?.manager_tasks === false
+        ? Promise.resolve([])
+        : this.db
+            .select()
+            .from(schema.calibrationCases)
+            .where(eq(schema.calibrationCases.roleSessionId, roleSessionId))
+            .orderBy(desc(schema.calibrationCases.taskCreatedAt)),
     ])
 
     return {
-      state: access.state,
+      state: roleStateFromRow(roleRow),
       member_ids: memberRows.map((row) => row.userId),
-      artifacts: artifactRows.map((row) => row.envelope),
+      artifacts: artifactRows.map(artifactFromRow),
       candidates: candidateRows.map((row) => row.evidence),
-      calibration_signals: signalRows.map((row) => ({
-        id: row.id,
-        role_session_id: row.roleSessionId,
-        status: row.status as CalibrationSignalRecord['status'],
-        proposed_change: row.proposedChange,
-        evidence_summary: row.evidenceSummary,
-        reviewed_by: row.reviewedBy,
-        review_reason: row.reviewReason,
-        created_at: iso(row.createdAt),
-        updated_at: iso(row.updatedAt),
-      })),
-      manager_tasks: taskRows.map((row) => ({
-        id: row.id,
-        role_session_id: row.roleSessionId,
-        signal_id: row.signalId,
-        assignee_user_id: row.assigneeUserId,
-        status: row.status as ManagerTaskRecord['status'],
-        decision_reason: row.decisionReason,
-        due_at: iso(row.dueAt),
-        created_at: iso(row.createdAt),
-        completed_at: row.completedAt ? iso(row.completedAt) : null,
-      })),
+      calibration_signals: signalRows.map(calibrationSignalFromRow),
+      manager_tasks: taskRows
+        .map(managerTaskFromRow)
+        .filter((task): task is ManagerTaskRecord => task !== null),
     }
   }
 
   async createRoleAggregate(aggregate: RoleAggregate): Promise<void> {
     await this.db.transaction(async (tx) => {
+      const policy = this.makeDefaultPolicy(aggregate.state.id)
       await tx.insert(schema.roleSessions).values({
         id: aggregate.state.id,
         tenantId: aggregate.state.tenant_id,
@@ -221,12 +352,11 @@ export class PostgresStore implements ApplicationStore {
         department: aggregate.state.department,
         stage: aggregate.state.stage,
         revision: aggregate.state.revision,
-        state: aggregate.state,
+        businessState: roleBusinessState(aggregate.state),
+        ...this.toPolicyColumns(policy),
         createdAt: new Date(aggregate.state.created_at),
         updatedAt: new Date(aggregate.state.updated_at),
       })
-      const policy = this.makeDefaultPolicy(aggregate.state.id)
-      await tx.insert(schema.clarificationPolicies).values(this.toPolicyRow(policy))
       if (aggregate.member_ids.length > 0) {
         await tx.insert(schema.roleMembers).values(
           aggregate.member_ids.map((userId) => ({
@@ -244,7 +374,11 @@ export class PostgresStore implements ApplicationStore {
             version: artifact.version,
             status: artifact.status,
             contentHash: artifact.content_hash,
-            envelope: artifact,
+            content: artifact.content,
+            basedOnHash: artifact.based_on_hash,
+            createdBy: artifact.created_by,
+            confirmedBy: artifact.confirmed_by,
+            confirmedAt: artifact.confirmed_at ? new Date(artifact.confirmed_at) : null,
             createdAt: new Date(artifact.created_at),
           })),
         )
@@ -260,7 +394,7 @@ export class PostgresStore implements ApplicationStore {
         department: state.department,
         stage: state.stage,
         revision: state.revision,
-        state,
+        businessState: roleBusinessState(state),
         updatedAt: new Date(state.updated_at),
       })
       .where(
@@ -281,7 +415,11 @@ export class PostgresStore implements ApplicationStore {
       version: artifact.version,
       status: artifact.status,
       contentHash: artifact.content_hash,
-      envelope: artifact,
+      content: artifact.content,
+      basedOnHash: artifact.based_on_hash,
+      createdBy: artifact.created_by,
+      confirmedBy: artifact.confirmed_by,
+      confirmedAt: artifact.confirmed_at ? new Date(artifact.confirmed_at) : null,
       createdAt: new Date(artifact.created_at),
     })
   }
@@ -292,7 +430,10 @@ export class PostgresStore implements ApplicationStore {
       .set({
         status: artifact.status,
         contentHash: artifact.content_hash,
-        envelope: artifact,
+        content: artifact.content,
+        basedOnHash: artifact.based_on_hash,
+        confirmedBy: artifact.confirmed_by,
+        confirmedAt: artifact.confirmed_at ? new Date(artifact.confirmed_at) : null,
       })
       .where(eq(schema.artifacts.id, artifact.id))
   }
@@ -321,67 +462,81 @@ export class PostgresStore implements ApplicationStore {
   }
 
   async insertCalibrationSignal(signal: CalibrationSignalRecord): Promise<void> {
-    await this.db.insert(schema.calibrationSignals).values({
+    await this.db.insert(schema.calibrationCases).values({
       id: signal.id,
       roleSessionId: signal.role_session_id,
-      status: signal.status,
+      signalStatus: signal.status,
       proposedChange: signal.proposed_change,
       evidenceSummary: signal.evidence_summary,
       reviewedBy: signal.reviewed_by,
       reviewReason: signal.review_reason,
-      createdAt: new Date(signal.created_at),
-      updatedAt: new Date(signal.updated_at),
+      signalCreatedAt: new Date(signal.created_at),
+      signalUpdatedAt: new Date(signal.updated_at),
     })
   }
 
   async updateCalibrationSignal(signal: CalibrationSignalRecord): Promise<void> {
     await this.db
-      .update(schema.calibrationSignals)
+      .update(schema.calibrationCases)
       .set({
-        status: signal.status,
+        signalStatus: signal.status,
         proposedChange: signal.proposed_change,
         evidenceSummary: signal.evidence_summary,
         reviewedBy: signal.reviewed_by,
         reviewReason: signal.review_reason,
-        updatedAt: new Date(signal.updated_at),
+        signalUpdatedAt: new Date(signal.updated_at),
       })
-      .where(eq(schema.calibrationSignals.id, signal.id))
+      .where(eq(schema.calibrationCases.id, signal.id))
   }
 
   async insertManagerTask(task: ManagerTaskRecord): Promise<void> {
-    await this.db.insert(schema.managerTasks).values({
-      id: task.id,
-      roleSessionId: task.role_session_id,
-      signalId: task.signal_id,
-      assigneeUserId: task.assignee_user_id,
-      status: task.status,
-      decisionReason: task.decision_reason,
-      dueAt: new Date(task.due_at),
-      createdAt: new Date(task.created_at),
-      completedAt: task.completed_at ? new Date(task.completed_at) : null,
-    })
+    const rows = await this.db
+      .update(schema.calibrationCases)
+      .set({
+        managerTaskId: task.id,
+        assigneeUserId: task.assignee_user_id,
+        managerTaskStatus: task.status,
+        decisionReason: task.decision_reason,
+        dueAt: new Date(task.due_at),
+        taskCreatedAt: new Date(task.created_at),
+        completedAt: task.completed_at ? new Date(task.completed_at) : null,
+      })
+      .where(
+        and(
+          eq(schema.calibrationCases.id, task.signal_id),
+          eq(schema.calibrationCases.roleSessionId, task.role_session_id),
+        ),
+      )
+      .returning({ id: schema.calibrationCases.id })
+    if (rows.length !== 1) throw new Error('CALIBRATION_CASE_NOT_FOUND')
   }
 
   async updateManagerTask(task: ManagerTaskRecord): Promise<void> {
     await this.db
-      .update(schema.managerTasks)
+      .update(schema.calibrationCases)
       .set({
-        status: task.status,
+        managerTaskStatus: task.status,
         decisionReason: task.decision_reason,
         completedAt: task.completed_at ? new Date(task.completed_at) : null,
       })
-      .where(eq(schema.managerTasks.id, task.id))
+      .where(eq(schema.calibrationCases.managerTaskId, task.id))
   }
 
   async appendDecision(record: DecisionRecord): Promise<void> {
-    await this.db.insert(schema.decisionLogs).values({
+    const role = await this.db.query.roleSessions.findFirst({
+      where: eq(schema.roleSessions.id, record.role_session_id),
+      columns: { tenantId: true },
+    })
+    if (!role) throw new Error('ROLE_SESSION_NOT_FOUND')
+    await this.db.insert(schema.auditLogs).values({
       id: record.id,
+      tenantId: role.tenantId,
       roleSessionId: record.role_session_id,
       actorUserId: record.actor_user_id,
       action: record.action,
       targetType: record.target_type,
       targetId: record.target_id,
-      metadata: record.metadata,
+      metadata: { ...record.metadata, audit_kind: 'HUMAN_DECISION' },
       createdAt: new Date(record.created_at),
     })
   }
@@ -392,7 +547,19 @@ export class PostgresStore implements ApplicationStore {
       roleSessionId: run.role_session_id,
       actorUserId: run.actor_user_id,
       status: run.status,
-      run,
+      modelTier: run.model_tier,
+      task: run.task,
+      harnessSessionId: run.harness_session_id,
+      promptVersion: run.prompt_version,
+      modelName: run.model_name,
+      toolCount: run.tool_count,
+      inputTokens: run.input_tokens,
+      outputTokens: run.output_tokens,
+      startedAt: run.started_at ? new Date(run.started_at) : null,
+      completedAt: run.completed_at ? new Date(run.completed_at) : null,
+      errorCode: run.error_code,
+      inputMessageId: run.input_message_id,
+      outputMessageId: run.output_message_id,
     })
   }
 
@@ -400,7 +567,7 @@ export class PostgresStore implements ApplicationStore {
     const row = await this.db.query.agentRuns.findFirst({
       where: eq(schema.agentRuns.id, runId),
     })
-    return row ? { run: row.run, cancel_requested: row.cancelRequested } : null
+    return row ? { run: agentRunFromRow(row), cancel_requested: row.cancelRequested } : null
   }
 
   async listActiveRuns(): Promise<RunRecord[]> {
@@ -409,7 +576,7 @@ export class PostgresStore implements ApplicationStore {
       .from(schema.agentRuns)
       .where(inArray(schema.agentRuns.status, ['QUEUED', 'RUNNING']))
       .orderBy(asc(schema.agentRuns.createdAt))
-    return rows.map((row) => ({ run: row.run, cancel_requested: row.cancelRequested }))
+    return rows.map((row) => ({ run: agentRunFromRow(row), cancel_requested: row.cancelRequested }))
   }
 
   async findActiveRunByRole(roleSessionId: string): Promise<RunRecord | null> {
@@ -424,13 +591,29 @@ export class PostgresStore implements ApplicationStore {
       )
       .orderBy(desc(schema.agentRuns.createdAt))
       .limit(1)
-    return row ? { run: row.run, cancel_requested: row.cancelRequested } : null
+    return row ? { run: agentRunFromRow(row), cancel_requested: row.cancelRequested } : null
   }
 
   async updateRun(run: AgentRun): Promise<void> {
     await this.db
       .update(schema.agentRuns)
-      .set({ status: run.status, run, updatedAt: new Date() })
+      .set({
+        status: run.status,
+        modelTier: run.model_tier,
+        task: run.task,
+        harnessSessionId: run.harness_session_id,
+        promptVersion: run.prompt_version,
+        modelName: run.model_name,
+        toolCount: run.tool_count,
+        inputTokens: run.input_tokens,
+        outputTokens: run.output_tokens,
+        startedAt: run.started_at ? new Date(run.started_at) : null,
+        completedAt: run.completed_at ? new Date(run.completed_at) : null,
+        errorCode: run.error_code,
+        inputMessageId: run.input_message_id,
+        outputMessageId: run.output_message_id,
+        updatedAt: new Date(),
+      })
       .where(eq(schema.agentRuns.id, run.id))
   }
 
@@ -449,7 +632,7 @@ export class PostgresStore implements ApplicationStore {
       runId: event.run_id,
       sequence: event.sequence,
       type: event.type,
-      event,
+      payload: event.payload,
       createdAt: new Date(event.created_at),
     })
     for (const subscriber of this.subscribers.get(event.run_id) ?? []) subscriber(event)
@@ -457,7 +640,7 @@ export class PostgresStore implements ApplicationStore {
 
   async listRunEvents(runId: string, afterSequence = 0): Promise<AgentEvent[]> {
     const rows = await this.db
-      .select({ event: schema.agentRunEvents.event })
+      .select()
       .from(schema.agentRunEvents)
       .where(
         and(
@@ -466,7 +649,7 @@ export class PostgresStore implements ApplicationStore {
         ),
       )
       .orderBy(asc(schema.agentRunEvents.sequence))
-    return rows.map((row) => row.event)
+    return rows.map(agentEventFromRow)
   }
 
   subscribeToRun(runId: string, subscriber: EventSubscriber): () => void {
@@ -484,7 +667,7 @@ export class PostgresStore implements ApplicationStore {
     afterSequence = 0,
   ): Promise<ConversationMessage[]> {
     const rows = await this.db
-      .select({ message: schema.conversationMessages.message })
+      .select()
       .from(schema.conversationMessages)
       .where(
         and(
@@ -493,7 +676,7 @@ export class PostgresStore implements ApplicationStore {
         ),
       )
       .orderBy(asc(schema.conversationMessages.sequence))
-    return rows.map((row) => row.message)
+    return rows.map(conversationMessageFromRow)
   }
 
   async appendConversationMessage(message: ConversationMessage): Promise<void> {
@@ -503,15 +686,15 @@ export class PostgresStore implements ApplicationStore {
       roleSessionId: message.role_session_id,
       runId: message.run_id,
       clarificationRoundId: message.clarification_round_id,
-      senderType: message.sender_type,
+      senderKind: message.sender_type === 'HUMAN'
+        ? message.sender_role ?? 'HUMAN'
+        : message.sender_type,
       senderUserId: message.sender_user_id,
-      senderRole: message.sender_role,
       senderName: message.sender_name,
       content: message.content,
       structuredContent: message.structured_content,
       status: message.status,
       sequence: message.sequence,
-      message,
       createdAt: new Date(message.created_at),
       completedAt: message.completed_at ? new Date(message.completed_at) : null,
     })
@@ -526,30 +709,26 @@ export class PostgresStore implements ApplicationStore {
         content: message.content,
         structuredContent: message.structured_content,
         status: message.status,
-        message,
         completedAt: message.completed_at ? new Date(message.completed_at) : null,
       })
       .where(eq(schema.conversationMessages.id, message.id))
   }
 
   async getClarificationPolicy(roleSessionId: string): Promise<ClarificationPolicy> {
-    const row = await this.db.query.clarificationPolicies.findFirst({
-      where: eq(schema.clarificationPolicies.roleSessionId, roleSessionId),
+    const row = await this.db.query.roleSessions.findFirst({
+      where: eq(schema.roleSessions.id, roleSessionId),
     })
-    if (row) return row.policy
-    const policy = this.makeDefaultPolicy(roleSessionId)
-    await this.db.insert(schema.clarificationPolicies).values(this.toPolicyRow(policy))
-    return policy
+    if (!row) throw new Error('ROLE_SESSION_NOT_FOUND')
+    return this.policyFromRoleRow(row)
   }
 
   async saveClarificationPolicy(policy: ClarificationPolicy): Promise<void> {
-    await this.db
-      .insert(schema.clarificationPolicies)
-      .values(this.toPolicyRow(policy))
-      .onConflictDoUpdate({
-        target: schema.clarificationPolicies.roleSessionId,
-        set: this.toPolicyRow(policy),
-      })
+    const rows = await this.db
+      .update(schema.roleSessions)
+      .set(this.toPolicyColumns(policy))
+      .where(eq(schema.roleSessions.id, policy.role_session_id))
+      .returning({ id: schema.roleSessions.id })
+    if (rows.length !== 1) throw new Error('ROLE_SESSION_NOT_FOUND')
   }
 
   async getOpenClarificationRound(roleSessionId: string): Promise<ClarificationRound | null> {
@@ -559,7 +738,7 @@ export class PostgresStore implements ApplicationStore {
         eq(schema.clarificationRounds.status, 'OPEN'),
       ),
     })
-    return row?.round ?? null
+    return row ? clarificationRoundFromRow(row) : null
   }
 
   async insertClarificationRound(round: ClarificationRound): Promise<void> {
@@ -571,7 +750,6 @@ export class PostgresStore implements ApplicationStore {
       question: round.question,
       openedByRunId: round.opened_by_run_id,
       resolvedByMessageId: round.resolved_by_message_id,
-      round,
       createdAt: new Date(round.created_at),
       completedAt: round.completed_at ? new Date(round.completed_at) : null,
     })
@@ -584,7 +762,6 @@ export class PostgresStore implements ApplicationStore {
         status: round.status,
         question: round.question,
         resolvedByMessageId: round.resolved_by_message_id,
-        round,
         completedAt: round.completed_at ? new Date(round.completed_at) : null,
       })
       .where(eq(schema.clarificationRounds.id, round.id))
@@ -593,7 +770,7 @@ export class PostgresStore implements ApplicationStore {
   async listRunsForTenant(tenantId: string): Promise<AdminRunRecord[]> {
     const rows = await this.db
       .select({
-        run: schema.agentRuns.run,
+        run: schema.agentRuns,
         cancelRequested: schema.agentRuns.cancelRequested,
         roleTitle: schema.roleSessions.title,
         actorDisplayName: schema.users.displayName,
@@ -606,7 +783,7 @@ export class PostgresStore implements ApplicationStore {
       .orderBy(desc(schema.agentRuns.createdAt))
       .limit(200)
     return rows.map((row) => ({
-      run: row.run,
+      run: agentRunFromRow(row.run),
       cancel_requested: row.cancelRequested,
       role_title: row.roleTitle,
       actor_display_name: row.actorDisplayName,
@@ -615,13 +792,20 @@ export class PostgresStore implements ApplicationStore {
   }
 
   async appendTraceAccessAudit(record: TraceAccessAuditRecord): Promise<void> {
-    await this.db.insert(schema.traceAccessAudits).values({
+    const run = await this.db.query.agentRuns.findFirst({
+      where: eq(schema.agentRuns.id, record.run_id),
+      columns: { roleSessionId: true },
+    })
+    if (!run) throw new Error('AGENT_RUN_NOT_FOUND')
+    await this.db.insert(schema.auditLogs).values({
       id: record.id,
       tenantId: record.tenant_id,
+      roleSessionId: run.roleSessionId,
       actorUserId: record.actor_user_id,
-      runId: record.run_id,
       action: record.action,
-      reason: record.reason,
+      targetType: 'AGENT_RUN',
+      targetId: record.run_id,
+      metadata: { audit_kind: 'TRACE_ACCESS', reason: record.reason },
       createdAt: new Date(record.created_at),
     })
   }
@@ -629,17 +813,22 @@ export class PostgresStore implements ApplicationStore {
   async listTraceAccessAudits(tenantId: string): Promise<TraceAccessAuditRecord[]> {
     const rows = await this.db
       .select()
-      .from(schema.traceAccessAudits)
-      .where(eq(schema.traceAccessAudits.tenantId, tenantId))
-      .orderBy(desc(schema.traceAccessAudits.createdAt))
+      .from(schema.auditLogs)
+      .where(
+        and(
+          eq(schema.auditLogs.tenantId, tenantId),
+          eq(schema.auditLogs.targetType, 'AGENT_RUN'),
+        ),
+      )
+      .orderBy(desc(schema.auditLogs.createdAt))
       .limit(200)
     return rows.map((row) => ({
       id: row.id,
       tenant_id: row.tenantId,
       actor_user_id: row.actorUserId,
-      run_id: row.runId,
+      run_id: row.targetId,
       action: row.action as TraceAccessAuditRecord['action'],
-      reason: row.reason,
+      reason: typeof row.metadata.reason === 'string' ? row.metadata.reason : null,
       created_at: iso(row.createdAt),
     }))
   }
@@ -659,19 +848,32 @@ export class PostgresStore implements ApplicationStore {
     }
   }
 
-  private toPolicyRow(policy: ClarificationPolicy) {
+  private policyFromRoleRow(row: RoleSessionRow): ClarificationPolicy {
     return {
-      roleSessionId: policy.role_session_id,
-      initialBudget: policy.initial_budget,
-      grantedRounds: policy.granted_rounds,
-      extensionSize: policy.extension_size,
-      completedRounds: policy.completed_rounds,
-      openedRounds: policy.opened_rounds,
-      openRoundId: policy.open_round_id,
-      status: policy.status,
-      updatedBy: policy.updated_by,
-      policy,
-      updatedAt: new Date(policy.updated_at),
+      role_session_id: row.id,
+      initial_budget: row.clarificationInitialBudget,
+      granted_rounds: row.clarificationGrantedRounds,
+      extension_size: row.clarificationExtensionSize,
+      completed_rounds: row.clarificationCompletedRounds,
+      opened_rounds: row.clarificationOpenedRounds,
+      open_round_id: row.clarificationOpenRoundId,
+      status: row.clarificationStatus as ClarificationPolicy['status'],
+      updated_by: row.clarificationUpdatedBy,
+      updated_at: iso(row.clarificationUpdatedAt),
+    }
+  }
+
+  private toPolicyColumns(policy: ClarificationPolicy) {
+    return {
+      clarificationInitialBudget: policy.initial_budget,
+      clarificationGrantedRounds: policy.granted_rounds,
+      clarificationExtensionSize: policy.extension_size,
+      clarificationCompletedRounds: policy.completed_rounds,
+      clarificationOpenedRounds: policy.opened_rounds,
+      clarificationOpenRoundId: policy.open_round_id,
+      clarificationStatus: policy.status,
+      clarificationUpdatedBy: policy.updated_by,
+      clarificationUpdatedAt: new Date(policy.updated_at),
     }
   }
 }

@@ -7,6 +7,7 @@ import {
   type ArtifactEnvelope,
   type ArtifactType,
   type CandidateEvidence,
+  type FactCategory,
   type RoleState,
 } from '@role-clarifier/contracts'
 import {
@@ -25,7 +26,12 @@ import type {
   DecisionRecord,
   ManagerTaskRecord,
   RoleAggregate,
+  RoleAggregateReadOptions,
 } from '../store/index.js'
+import {
+  projectRoleStateForTask,
+  type RoleStateProjection,
+} from './role-state-projection.js'
 
 const nowIso = (): string => new Date().toISOString()
 
@@ -48,6 +54,26 @@ export class RoleService {
   async get(roleSessionId: string, actor: ActorContext): Promise<RoleView> {
     const aggregate = await this.requireAggregate(roleSessionId, actor)
     return this.toView(aggregate, actor)
+  }
+
+  async readStateForTask(
+    roleSessionId: string,
+    actor: ActorContext,
+    task: string,
+  ): Promise<RoleStateProjection> {
+    const includeCandidates = task === 'CALIBRATION_ADVICE' && ['HR', 'ADMIN'].includes(actor.role)
+    const aggregate = await this.requireAggregate(roleSessionId, actor, {
+      members: false,
+      artifacts: false,
+      candidates: includeCandidates,
+      calibration_signals: false,
+      manager_tasks: false,
+    })
+    return projectRoleStateForTask(
+      this.filterState(aggregate.state, actor),
+      task,
+      includeCandidates ? aggregate.candidates : [],
+    )
   }
 
   async create(
@@ -187,7 +213,7 @@ export class RoleService {
     roleSessionId: string,
     actor: ActorContext,
     statement: string,
-    category: 'BACKGROUND' | 'HIRING_REASON' | 'SUCCESS_CRITERION' | 'CONSTRAINT',
+    category: FactCategory,
   ): Promise<RoleState> {
     const aggregate = await this.requireAggregate(roleSessionId, actor)
     if (aggregate.state.hc_status !== 'APPROVED') {
@@ -671,8 +697,9 @@ export class RoleService {
   private async requireAggregate(
     roleSessionId: string,
     actor: ActorContext,
+    options?: RoleAggregateReadOptions,
   ): Promise<RoleAggregate> {
-    const aggregate = await this.store.getRoleAggregate(roleSessionId, actor)
+    const aggregate = await this.store.getRoleAggregate(roleSessionId, actor, options)
     if (!aggregate) throw new DomainError('ROLE_SESSION_NOT_FOUND', '岗位会话不存在', 404)
     return aggregate
   }

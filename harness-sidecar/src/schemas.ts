@@ -1,6 +1,7 @@
 import {
   ArtifactTypeSchema,
   CandidateEvidenceSchema,
+  FactCategorySchema,
   RoleStateSchema,
   ToolExecutionContextSchema,
 } from '@role-clarifier/contracts'
@@ -69,7 +70,7 @@ export const HarnessResultSchema = z.discriminatedUnion('kind', [
       department: z.string().min(1).max(120).optional(),
     }).refine((value) => Boolean(value.title || value.department)).optional(),
     fact_draft: z.object({
-      category: z.enum(['HIRING_REASON', 'SUCCESS_CRITERION']),
+      category: FactCategorySchema,
       statement: z.string().min(1),
     }),
   }),

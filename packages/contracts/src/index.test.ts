@@ -1,5 +1,25 @@
 import { describe, expect, it } from 'vitest'
-import { PublicJDSchema } from './index.js'
+import { ROLE_CLARIFIER_SYSTEM_PROMPT as SHARED_SYSTEM_PROMPT } from '@role-clarifier/agent-spec'
+import {
+  FactCategorySchema,
+  PublicJDSchema,
+  ROLE_CLARIFIER_SYSTEM_PROMPT,
+} from './index.js'
+
+describe('共享 Agent 规范', () => {
+  it('从单一事实源导出 System Prompt', () => {
+    expect(ROLE_CLARIFIER_SYSTEM_PROMPT).toBe(SHARED_SYSTEM_PROMPT)
+  })
+
+  it('统一支持四类岗位事实', () => {
+    expect(FactCategorySchema.options).toEqual([
+      'BACKGROUND',
+      'HIRING_REASON',
+      'SUCCESS_CRITERION',
+      'CONSTRAINT',
+    ])
+  })
+})
 
 describe('PublicJDSchema', () => {
   it('只接受四段式公开 JD', () => {

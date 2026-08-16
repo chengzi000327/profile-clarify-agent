@@ -22,6 +22,20 @@ if (!reasoningEffort || !['off', 'high', 'max'].includes(reasoningEffort)) {
 }
 const patch = await readFile(resolve(root, 'cordis.patch.yml'), 'utf8')
 const source = await readFile(resolve(root, 'src/index.ts'), 'utf8')
+const sharedSpec = await readFile(
+  resolve(repositoryRoot, 'packages/agent-spec/src/index.ts'),
+  'utf8',
+)
+
+if (!source.includes("from '@role-clarifier/agent-spec'")) {
+  throw new Error('Harness bundle must import its system prompt from @role-clarifier/agent-spec')
+}
+if (source.includes('你是岗位画像澄清 Agent')) {
+  throw new Error('Harness bundle must not contain a duplicate system prompt literal')
+}
+if (!sharedSpec.includes('export const ROLE_CLARIFIER_SYSTEM_PROMPT')) {
+  throw new Error('Shared agent spec must export the role clarifier system prompt')
+}
 
 for (const [packageName, version] of Object.entries(manifest.dependencies)) {
   if (packageName.startsWith('@deepseek-ai/') && packageName !== '@deepseek-ai/cordis' && version !== '0.1.0-rc.5') {

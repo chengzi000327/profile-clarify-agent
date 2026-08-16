@@ -29,7 +29,6 @@ Browser -> web (public HTTPS)
 - `PORT=4100`
 - `DATABASE_URL=${{Postgres.DATABASE_URL}}`
 - `WEB_ORIGIN=https://<web service public domain>`
-- `HARNESS_MODE=sidecar`
 - `HARNESS_BASE_URL=http://harness-sidecar.railway.internal:4110`
 - `DEEPSEEK_FLASH_MODEL=deepseek-v4-flash`
 - `DEEPSEEK_PRO_MODEL=deepseek-v4-pro`

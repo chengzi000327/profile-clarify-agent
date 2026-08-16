@@ -29,7 +29,7 @@
 
 空工作台的输入框可以直接发送招聘背景，不需要先创建岗位。第一条消息发送成功后，系统才建立岗位会话；如果消息明确包含职位名称和团队，Agent 会把它们写入岗位身份草稿。
 
-在 `.env` 中填写 `DEEPSEEK_API_KEY` 后，`pnpm dev` 会同时启动 Web、API 和真实 Harness Sidecar。若暂时不配置 `DATABASE_URL`，API 会使用带兼容测试夹具的内存 Store；动态注册的新账号仍按成员关系隔离。若只想运行不产生模型费用的确定性模式，可执行 `corepack pnpm dev:mock`。
+在 `.env` 中填写 `DEEPSEEK_API_KEY` 后，`pnpm dev` 会同时启动 Web、API 和真实 Harness Sidecar。若暂时不配置 `DATABASE_URL`，API 会使用带兼容测试夹具的内存 Store；动态注册的新账号仍按成员关系隔离。所有 Agent 请求都会通过 Sidecar 调用真实 Harness。
 
 ## Docker Compose 测试环境
 

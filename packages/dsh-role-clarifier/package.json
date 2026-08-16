@@ -21,6 +21,7 @@
     "verify-profile": "node scripts/verify-profile.mjs"
   },
   "dependencies": {
+    "@role-clarifier/agent-spec": "workspace:^",
     "@deepseek-ai/cordis": "4.0.1",
     "@deepseek-ai/dsh-agent": "0.1.0-rc.5",
     "@deepseek-ai/dsh-agent-spine-demo": "0.1.0-rc.5",
