@@ -3,8 +3,8 @@
   "deploy": {
     "healthcheckPath": "/healthz",
     "healthcheckTimeout": 300,
-    "overlapSeconds": "60",
-    "drainingSeconds": "600",
+    "overlapSeconds": 60,
+    "drainingSeconds": 600,
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 10
   }
