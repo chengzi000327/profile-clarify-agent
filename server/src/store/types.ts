@@ -86,6 +86,7 @@ export interface ApplicationStore {
   close(): Promise<void>
   getUser(userId: string): Promise<StoredUser | null>
   saveUser(user: StoredUser): Promise<void>
+  claimExternalEvent(channel: string, eventId: string): Promise<boolean>
   listRoleStates(actor: ActorContext): Promise<RoleState[]>
   getRoleAggregate(roleSessionId: string, actor: ActorContext): Promise<RoleAggregate | null>
   createRoleAggregate(aggregate: RoleAggregate): Promise<void>

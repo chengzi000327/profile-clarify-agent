@@ -51,10 +51,10 @@ export const api = {
   getMessages(id, afterSequence = 0) {
     return request(`/api/v1/role-sessions/${id}/messages?after_sequence=${afterSequence}`);
   },
-  createRoleSession(input) {
-    return request('/api/v1/role-sessions', {
+  startIntake(content) {
+    return request('/api/v1/intake/messages', {
       method: 'POST',
-      body: JSON.stringify(input),
+      body: JSON.stringify({ content }),
     });
   },
   syncContext(id, expectedRevision) {

@@ -8,7 +8,8 @@
 - 新普通账号进入空工作台，只能看到自己创建或被加入的岗位；同一账号重新登录恢复历史内容。企业管理员按企业空间查看全部岗位。
 - 三种角色都能以真实身份和 Agent 对话，消息、回复与主动澄清轮次持久化保存；普通对话不限轮数。
 - 企业管理员拥有租户级最高权限，并可在完整 Trace 控制台查看全岗位运行、用户原文、模型输入输出、工具调用和审计记录。
-- 创建岗位会话、同步 Mock HC/组织背景、多轮澄清并实时接收 SSE。
+- 新账号无需先建岗位或填写表单：第一条自然语言消息会建立待识别岗位，Agent 再从对话中提取职位、团队和招聘原因，并通过 SSE 持续回复。
+- 同一岗位可从 Web 或飞书机器人单聊继续澄清；飞书可用卡片返回 Agent 问题、岗位画像、评估方案、四段式 JD 和 HR 招聘画像。
 - 生成、版本化和确认岗位画像、评分卡、四段式公开 JD、HR 内部招聘画像。
 - 导入 JSON/纯文本脱敏候选人；手机号、邮箱和显式姓名在进入模型前被拒绝。
 - 候选人达到“10 名＋2 个渠道＋2 次同类卡点”后进入 HR 审核；HR 通过后才创建经理任务。
@@ -25,6 +26,8 @@
     corepack pnpm dev
 
 访问 http://localhost:5173。登录页要求填写企业空间 ID、账号和姓名，并选择本账号的角色。账号第一次出现时完成 Demo 注册并进入空工作台；相同企业空间和账号再次登录时恢复原身份与岗位。账号首次绑定角色后不能在登录页提权或切换角色。
+
+空工作台的输入框可以直接发送招聘背景，不需要先创建岗位。第一条消息发送成功后，系统才建立岗位会话；如果消息明确包含职位名称和团队，Agent 会把它们写入岗位身份草稿。
 
 在 `.env` 中填写 `DEEPSEEK_API_KEY` 后，`pnpm dev` 会同时启动 Web、API 和真实 Harness Sidecar。若暂时不配置 `DATABASE_URL`，API 会使用带兼容测试夹具的内存 Store；动态注册的新账号仍按成员关系隔离。若只想运行不产生模型费用的确定性模式，可执行 `corepack pnpm dev:mock`。
 
@@ -44,13 +47,13 @@
 - `api`: `RAILWAY_DOCKERFILE_PATH=/server/Dockerfile`，`PORT=4100`，`DATABASE_URL=${{Postgres.DATABASE_URL}}`，`HARNESS_BASE_URL=http://harness-sidecar.railway.internal:4110`
 - `harness-sidecar`: `RAILWAY_DOCKERFILE_PATH=/harness-sidecar/Dockerfile`，`SIDECAR_PORT=4110`，`ROLE_AGENT_INTERNAL_URL=http://api.railway.internal:4100`
 
-`SESSION_SECRET`、`HARNESS_SIDECAR_TOKEN`、`ROLE_AGENT_TOOL_TOKEN` 和 `DEEPSEEK_API_KEY` 只写入 Railway Secret，不提交 Git。详细变量和验收步骤见 `docs/railway-deployment.md`。
+`SESSION_SECRET`、`HARNESS_SIDECAR_TOKEN`、`ROLE_AGENT_TOOL_TOKEN` 和 `DEEPSEEK_API_KEY` 只写入 Railway Secret，不提交 Git。飞书连接的变量与配置步骤见 `docs/feishu-integration.md`；完整 Railway 变量和验收步骤见 `docs/railway-deployment.md`。
 
 ## DeepSeek Harness
 
 领域 Bundle 位于 `packages/dsh-role-clarifier`，真实 Sidecar 位于 `harness-sidecar`。Bundle：
 
-- 注册 read_role_state、save_fact_draft、save_artifact_draft、save_candidate_evidence、propose_calibration_signal、read_version_diff 六个工具。
+- 注册 read_role_state、update_role_identity_draft、save_fact_draft、save_artifact_draft、save_candidate_evidence、propose_calibration_signal、read_version_diff 七个工具。
 - 禁用 Shell、PowerShell、文件读写/搜索、Web、任务、工作流、Skill 和子 Agent 工具。
 - 工具 Schema 不接受角色、用户或租户参数；服务端通过当前 Agent Run 和 Harness Session 注入身份。
 - Flash 执行事实/问题/候选人证据提取，Pro 执行正式产物与校准建议。
@@ -81,7 +84,7 @@ Flash/Pro 分别映射到官方 `deepseek-v4-flash` 和 `deepseek-v4-pro`。Side
     server/                        Fastify API、Agent Runner、PostgreSQL Store
     packages/contracts/            共享 Zod Schema 与 API 类型
     packages/domain/               状态机、哈希、PII、校准和失效规则
-    packages/dsh-role-clarifier/   Cordis Bundle 与六个领域工具
+    packages/dsh-role-clarifier/   Cordis Bundle 与七个领域工具
     packages/dsh-profile/          dsh-base + dsh-headless + 领域 Bundle Profile
     harness-sidecar/               官方 JSON-RPC runtime 桥接、模型路由与 Trace
     scripts/prepare-harness-runtime.mjs  精确提交源码准备器

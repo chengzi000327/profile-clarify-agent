@@ -108,6 +108,144 @@ describe('Role Clarifier API', () => {
     expect(roleMismatch.response.json().error.code).toBe('ACCOUNT_ROLE_MISMATCH')
   })
 
+  it('空账号发送第一条消息后自动建立岗位并由 Agent 识别岗位名称', async () => {
+    const loginResponse = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: {
+        workspace_id: 'conversation-first-demo',
+        account_id: 'manager-one',
+        display_name: '对话经理',
+        role: 'MANAGER',
+      },
+    })
+    const cookie = cookieFrom(loginResponse)
+    const intake = await app.inject({
+      method: 'POST',
+      url: '/api/v1/intake/messages',
+      headers: { cookie },
+      payload: { content: '我想招聘一位企业产品经理，请从招聘原因开始帮我澄清。' },
+    })
+    expect(intake.statusCode, intake.body).toBe(202)
+    expect(intake.json().role.state).toMatchObject({
+      title: '待识别岗位',
+      department: '待确认团队',
+      stage: 'REASON_CLARIFYING',
+    })
+
+    const runId = intake.json().run_id
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const status = await app.inject({
+        method: 'GET',
+        url: `/api/v1/agent-runs/${runId}`,
+        headers: { cookie },
+      })
+      if (status.json().run.status === 'COMPLETED') break
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    const roles = await app.inject({
+      method: 'GET',
+      url: '/api/v1/role-sessions',
+      headers: { cookie },
+    })
+    expect(roles.json().items).toHaveLength(1)
+    expect(roles.json().items[0].title).toBe('企业产品经理')
+    const messages = await app.inject({
+      method: 'GET',
+      url: `/api/v1/role-sessions/${intake.json().role.state.id}/messages`,
+      headers: { cookie },
+    })
+    expect(messages.json().items.map((item: { sender_type: string }) => item.sender_type))
+      .toEqual(['HUMAN', 'AGENT'])
+  })
+
+  it('飞书事件可开启同一岗位澄清链路并回传 Agent 与岗位画像卡片', async () => {
+    const cards: Array<{ chatId: string; card: Record<string, unknown> }> = []
+    const feishuConfig = loadConfig({
+      NODE_ENV: 'test',
+      SESSION_SECRET: 'test-session-secret-that-is-long-enough',
+      HARNESS_MODE: 'mock',
+      FEISHU_ENABLED: 'true',
+      FEISHU_APP_ID: 'cli_test',
+      FEISHU_APP_SECRET: 'test-secret',
+      FEISHU_VERIFICATION_TOKEN: 'verification-token',
+      FEISHU_WORKSPACE_ID: 'conversation-first-demo',
+    })
+    const feishuApp = await buildApp(feishuConfig, {
+      store: new MemoryStore(),
+      feishuClient: {
+        configured: () => true,
+        sendCard: async (chatId, card) => {
+          cards.push({ chatId, card })
+        },
+      },
+    })
+    const challenge = await feishuApp.inject({
+      method: 'POST',
+      url: '/api/v1/integrations/feishu/events',
+      payload: {
+        type: 'url_verification',
+        challenge: 'challenge-code',
+        token: 'verification-token',
+      },
+    })
+    expect(challenge.statusCode).toBe(200)
+    expect(challenge.json()).toEqual({ challenge: 'challenge-code' })
+
+    const event = (messageId: string, text: string) => ({
+      schema: '2.0',
+      header: {
+        event_id: `event-${messageId}`,
+        event_type: 'im.message.receive_v1',
+        token: 'verification-token',
+        tenant_key: 'tenant-key',
+      },
+      event: {
+        sender: {
+          sender_id: { open_id: 'ou_manager_one' },
+          sender_type: 'user',
+        },
+        message: {
+          message_id: messageId,
+          chat_id: 'oc_p2p_chat',
+          chat_type: 'p2p',
+          message_type: 'text',
+          content: JSON.stringify({ text }),
+        },
+      },
+    })
+    const first = await feishuApp.inject({
+      method: 'POST',
+      url: '/api/v1/integrations/feishu/events',
+      payload: event('om_001', '我想招聘一位企业产品经理，请从招聘原因开始帮我澄清。'),
+    })
+    expect(first.statusCode, first.body).toBe(200)
+    for (let attempt = 0; attempt < 60 && cards.length < 1; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    expect(cards).toHaveLength(1)
+    expect(JSON.stringify(cards[0]?.card)).toContain('企业产品经理')
+
+    await feishuApp.inject({
+      method: 'POST',
+      url: '/api/v1/integrations/feishu/events',
+      payload: event('om_002', '生成岗位画像'),
+    })
+    for (let attempt = 0; attempt < 60 && cards.length < 2; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    expect(cards).toHaveLength(2)
+    expect(JSON.stringify(cards[1]?.card)).toContain('岗位画像')
+
+    const duplicate = await feishuApp.inject({
+      method: 'POST',
+      url: '/api/v1/integrations/feishu/events',
+      payload: event('om_002', '生成岗位画像'),
+    })
+    expect(duplicate.json()).toMatchObject({ ok: true, duplicate: true })
+    await feishuApp.close()
+  })
+
   afterEach(async () => {
     await app.close()
   })

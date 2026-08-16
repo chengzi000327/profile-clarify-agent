@@ -417,6 +417,13 @@ export class AgentRunner {
       return message
     }
     if (result.kind === 'CLARIFICATION') {
+      if (result.role_identity && result.persistence !== 'TOOL') {
+        await this.roleService.updateRoleIdentityDraft(
+          run.role_session_id,
+          actor,
+          result.role_identity,
+        )
+      }
       if (result.persistence !== 'TOOL') {
         await this.roleService.saveFactDraft(
           run.role_session_id,

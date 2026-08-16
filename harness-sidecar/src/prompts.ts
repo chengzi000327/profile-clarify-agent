@@ -14,6 +14,7 @@ const taskInstructions = (request: HarnessRequest): string => {
       '先判断用户当前意图，只能在 CONVERSATION 与 CLARIFICATION 中二选一。',
       '如果用户在打招呼、确认你是否在线、询问你能做什么、询问使用方法/进度/已有信息，或提出没有新增岗位事实的普通问题：直接回答用户真正问的问题；不得调用任何写入工具；返回 {"kind":"CONVERSATION","persistence":"NONE","answer":"..."}。',
       '只有当用户明确补充/修改了招聘原因、成功标准、岗位约束，或实质回答了 open_clarification 时，才进入 CLARIFICATION。',
+      '如果岗位状态中的 title 或 department 仍是“待识别/待确认”，而用户本轮明确说出了岗位名称或所属团队：调用 update_role_identity_draft 保存岗位身份草稿；最终 CLARIFICATION JSON 的 role_identity 必须与工具参数一致。没有明确说出的字段不要猜。',
       '进入 CLARIFICATION 后先调用 read_role_state，再调用 save_fact_draft 保存一条忠实、完整、可独立理解的事实草稿，禁止把它标记为已确认。',
       'CLARIFICATION 的 answer 必须具体复述本轮真正记录的内容，question 只能追问一个仍缺失的业务要素；禁止使用“这条事实是否准确”“等待你的确认”等万能套话。',
       '用户提出了直接问题时必须先直接回答，不能答非所问；普通问答不消耗主动澄清轮次，也不要虚构已经保存事实。',

@@ -6,6 +6,7 @@
 - users、role_sessions、成员、会话消息、澄清策略/轮次、产物、候选人、校准信号、经理任务、Agent Run/Event 和决策日志。
 - 内存/PostgreSQL 双 Store；Docker 测试环境使用 PostgreSQL。
 - 动态 Demo 账号：用户填写企业空间、账号和姓名并选择经理/HR/企业管理员；新账号为空、同账号恢复历史，角色首次绑定后不可在登录时切换；管理员拥有企业空间内最高权限。
+- 对话优先的新岗位入口：空账号直接使用会话输入框，第一条消息才建立待识别岗位；Agent 从明确表述中保存职位名称和团队草稿，不再要求先填创建表单。
 - 消息 202 + run_id、固定事件 SSE、取消、企业管理员完整执行 Trace。
 - 单岗位 Run 串行、全局默认并发 4、最多 10 次工具转换、结构化输出修复预算 1。
 - Flash/Pro 任务路由和确定性 CI 模型。
@@ -18,6 +19,7 @@
 - 官方 Harness `0.1.0-rc.5` 精确源码提交锁、本地构建器和 JSON-RPC Sidecar。
 - 真实 `deepseek-v4-flash` / `deepseek-v4-pro` 路由、工具回调、一次结构修复和真实 Token/延迟 Trace 回传。
 - Sidecar/API 双 Token 边界，模型不可提供 actor、tenant 或 user 身份。
+- 飞书机器人单聊接入：URL 验证、Verification Token 校验、事件去重、Web/飞书身份映射、同一 Agent Run、岗位澄清回复与四类产物卡片。
 
 ## 明确不在首期
 
@@ -26,6 +28,7 @@
 - 外部招聘渠道发布；当前只到 READY_TO_PUBLISH。
 - 生产通知服务；当前只存站内经理任务。
 - 未脱敏的真实候选人数据。
+- 飞书群聊、多媒体消息和 Encrypt Key 加密回调；当前 MVP 只启用经过 Verification Token 校验的单聊文字事件。
 
 ## 仍需外部环境完成
 
@@ -33,3 +36,4 @@
 - 用 Playwright 把 PRD S-01 至 S-12 固化为浏览器端 E2E；当前 P0 权限与 Run 流程在 API 集成测试覆盖。
 - 在目标环境执行 50 并发读取、Flash 首事件和 Pro 产物 P95 压测。
 - 法务确认真实候选人数据的保留、删除、跨境与审计策略后，才能关闭合成数据门禁。
+- 在目标企业的飞书自建应用配置权限、事件订阅、App Secret、Verification Token 和用户身份映射；凭据不进入代码库。

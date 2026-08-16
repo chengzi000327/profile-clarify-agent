@@ -84,6 +84,60 @@ export class RoleService {
     return this.toView(aggregate, actor)
   }
 
+  async createIntake(actor: ActorContext): Promise<RoleView> {
+    const timestamp = nowIso()
+    const state: RoleState = {
+      id: randomUUID(),
+      tenant_id: actor.tenant_id,
+      title: '待识别岗位',
+      department: '待确认团队',
+      stage: 'REASON_CLARIFYING',
+      revision: 0,
+      hc_status: 'APPROVED',
+      facts: [],
+      conflicts: [],
+      latest_artifacts: {},
+      candidate_count: 0,
+      candidate_channels: [],
+      calibration_status: 'OBSERVING',
+      created_at: timestamp,
+      updated_at: timestamp,
+    }
+    const aggregate: RoleAggregate = {
+      state,
+      member_ids: [actor.user_id],
+      artifacts: [],
+      candidates: [],
+      calibration_signals: [],
+      manager_tasks: [],
+    }
+    await this.store.createRoleAggregate(aggregate)
+    return this.toView(aggregate, actor)
+  }
+
+  async updateRoleIdentityDraft(
+    roleSessionId: string,
+    actor: ActorContext,
+    identity: { title?: string; department?: string },
+  ): Promise<RoleState> {
+    const aggregate = await this.requireAggregate(roleSessionId, actor)
+    const title = identity.title?.trim()
+    const department = identity.department?.trim()
+    if (!title && !department) {
+      throw new DomainError('ROLE_IDENTITY_EMPTY', '岗位名称与所属团队不能同时为空', 400)
+    }
+    const timestamp = nowIso()
+    const state: RoleState = {
+      ...aggregate.state,
+      ...(title ? { title } : {}),
+      ...(department ? { department } : {}),
+      revision: aggregate.state.revision + 1,
+      updated_at: timestamp,
+    }
+    await this.persistState(state, aggregate.state.revision)
+    return this.filterState(state, actor)
+  }
+
   async syncMockContext(
     roleSessionId: string,
     actor: ActorContext,

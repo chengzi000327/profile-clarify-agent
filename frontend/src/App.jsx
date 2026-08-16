@@ -117,11 +117,11 @@ function App() {
   const [booting, setBooting] = useState(true);
   const [roleSessions, setRoleSessions] = useState([]);
   const [activeRoleId, setActiveRoleId] = useState(null);
+  const [newConversationMode, setNewConversationMode] = useState(false);
   const [roleDetail, setRoleDetail] = useState(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [activeView, setActiveView] = useState('conversation');
   const [evidenceId, setEvidenceId] = useState(null);
-  const [createOpen, setCreateOpen] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [selectedOutcome, setSelectedOutcome] = useState('diagnosis');
   const [outcomeConfirmed, setOutcomeConfirmed] = useState(false);
@@ -134,8 +134,10 @@ function App() {
   const viewerRole = actor?.role === 'ADMIN' ? 'admin' : actor?.role === 'HR' ? 'hr' : 'manager';
 
   const activeRole = useMemo(
-    () => roleSessions.find((role) => role.id === activeRoleId) ?? roleSessions[0],
-    [roleSessions, activeRoleId],
+    () => newConversationMode
+      ? undefined
+      : roleSessions.find((role) => role.id === activeRoleId) ?? roleSessions[0],
+    [roleSessions, activeRoleId, newConversationMode],
   );
   const evidence = evidenceId ? evidenceById[evidenceId] : null;
 
@@ -182,18 +184,23 @@ function App() {
     };
   }, [actor, activeRoleId]);
 
-  async function loadRoleSessions(cancelled = false) {
+  async function loadRoleSessions(cancelled = false, preferredRoleId = null) {
     const result = await api.listRoleSessions();
     if (cancelled) return;
     const cards = result.items.map(toRoleCard);
     setRoleSessions(cards);
-    setActiveRoleId((current) => cards.some((item) => item.id === current) ? current : cards[0]?.id ?? null);
+    setActiveRoleId((current) => {
+      if (preferredRoleId && cards.some((item) => item.id === preferredRoleId)) return preferredRoleId;
+      return cards.some((item) => item.id === current) ? current : cards[0]?.id ?? null;
+    });
+    if (cards.length === 0) setNewConversationMode(true);
   }
 
   async function handleLogin(credentials) {
     const session = await api.login(credentials);
     setActor(session.actor);
     setActiveView('conversation');
+    setNewConversationMode(false);
     setRequestError('');
     await loadRoleSessions();
   }
@@ -204,6 +211,7 @@ function App() {
     setActor(null);
     setRoleSessions([]);
     setActiveRoleId(null);
+    setNewConversationMode(false);
     setRoleDetail(null);
     setMessages([]);
     setClarificationPolicy(null);
@@ -212,6 +220,7 @@ function App() {
   }
 
   function chooseRole(roleId) {
+    setNewConversationMode(false);
     setActiveRoleId(roleId);
     setActiveView('conversation');
     setEvidenceId(null);
@@ -222,41 +231,36 @@ function App() {
     setOutcomeConfirmed(false);
   }
 
-  async function createRoleSession(event) {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    const roleName = form.get('roleName')?.toString().trim() || '未命名岗位';
-    const team = form.get('team')?.toString().trim() || '待补充团队';
-    try {
-      const created = await api.createRoleSession({ title: roleName, department: team });
-      const synced = await api.syncContext(created.state.id, created.state.revision);
-      setRoleDetail({ ...created, state: synced.state });
-      await loadRoleSessions();
-      setActiveRoleId(created.state.id);
-      setActiveView('conversation');
-      setCreateOpen(false);
-    } catch (error) {
-      setRequestError(error.message);
-    }
+  function startNewConversation() {
+    streamStopRef.current?.();
+    setNewConversationMode(true);
+    setActiveRoleId(null);
+    setRoleDetail(null);
+    setMessages([]);
+    setClarificationPolicy(null);
+    setAgentEvents([]);
+    setAgentStatus('idle');
+    setActiveView('conversation');
+    setRequestError('');
   }
 
-  async function refreshActiveRole() {
-    if (!activeRoleId) return;
+  async function refreshActiveRole(roleId = activeRoleId) {
+    if (!roleId) return;
     const [detail] = await Promise.all([
-      api.getRoleSession(activeRoleId),
-      loadRoleSessions(),
+      api.getRoleSession(roleId),
+      loadRoleSessions(false, roleId),
     ]);
     setRoleDetail(detail);
   }
 
-  async function refreshConversation() {
-    if (!activeRoleId) return;
-    const conversation = await api.getMessages(activeRoleId);
+  async function refreshConversation(roleId = activeRoleId) {
+    if (!roleId) return;
+    const conversation = await api.getMessages(roleId);
     setMessages(conversation.items);
     setClarificationPolicy(conversation.policy);
   }
 
-  function connectRun(runInfo) {
+  function connectRun(runInfo, roleId = activeRoleId) {
     streamStopRef.current?.();
     setAgentEvents([]);
     setAgentStatus('running');
@@ -267,16 +271,16 @@ function App() {
         if (event.type === 'agent.status') setAgentStatus(event.payload.status);
         if (event.type === 'run.completed') {
           setAgentStatus('completed');
-          Promise.all([refreshActiveRole(), refreshConversation()])
+          Promise.all([refreshActiveRole(roleId), refreshConversation(roleId)])
             .catch((error) => setRequestError(error.message));
         }
         if (event.type === 'assistant.completed' || event.type === 'clarification.limit.reached') {
-          refreshConversation().catch((error) => setRequestError(error.message));
+          refreshConversation(roleId).catch((error) => setRequestError(error.message));
         }
         if (event.type === 'run.failed') {
           setAgentStatus('failed');
           setRequestError(event.payload.message ?? 'Agent Run 失败');
-          refreshConversation().catch(() => {});
+          refreshConversation(roleId).catch(() => {});
         }
       },
       () => setAgentStatus((current) => current === 'running' ? 'reconnecting' : current),
@@ -292,6 +296,28 @@ function App() {
         ? current
         : [...current, run.message]);
       connectRun(run);
+    } catch (error) {
+      setAgentStatus('failed');
+      setRequestError(error.message);
+    }
+  }
+
+  async function sendIntakeMessage(content) {
+    setRequestError('');
+    setAgentStatus('running');
+    try {
+      const result = await api.startIntake(content);
+      const roleId = result.role.state.id;
+      setNewConversationMode(false);
+      setActiveRoleId(roleId);
+      setRoleDetail(result.role);
+      setMessages([result.message]);
+      setActiveView('conversation');
+      connectRun(result, roleId);
+      Promise.all([
+        loadRoleSessions(false, roleId),
+        refreshConversation(roleId),
+      ]).catch((error) => setRequestError(error.message));
     } catch (error) {
       setAgentStatus('failed');
       setRequestError(error.message);
@@ -341,13 +367,18 @@ function App() {
       <EmptyWorkspace
         actor={actor}
         activeView={activeView}
+        roleSessions={roleSessions}
+        agentEvents={agentEvents}
+        agentStatus={agentStatus}
+        requestError={requestError}
+        onDismissError={() => setRequestError('')}
+        onChooseRole={chooseRole}
+        onSend={sendIntakeMessage}
         onOpenConversation={() => setActiveView('conversation')}
         onOpenTrace={() => setActiveView('admin-trace')}
-        onOpenCreate={() => setCreateOpen(true)}
+        onStartNew={startNewConversation}
         onLogout={handleLogout}
-      >
-        {createOpen && <CreateRoleModal onClose={() => setCreateOpen(false)} onSubmit={createRoleSession} />}
-      </EmptyWorkspace>
+      />
     );
   }
 
@@ -373,9 +404,9 @@ function App() {
           </button>
         </div>
 
-        <button className="new-project-button" onClick={() => setCreateOpen(true)}>
+        <button className="new-project-button" onClick={startNewConversation}>
           <Plus size={17} />
-          {!sidebarCollapsed && <span>新建岗位澄清</span>}
+          {!sidebarCollapsed && <span>开始新岗位对话</span>}
         </button>
 
         {!sidebarCollapsed && (
@@ -523,12 +554,25 @@ function App() {
       </main>
 
       {evidence && <EvidenceDrawer evidence={evidence} onClose={() => setEvidenceId(null)} />}
-      {createOpen && <CreateRoleModal onClose={() => setCreateOpen(false)} onSubmit={createRoleSession} />}
     </div>
   );
 }
 
-function EmptyWorkspace({ actor, activeView, onOpenConversation, onOpenTrace, onOpenCreate, onLogout, children }) {
+function EmptyWorkspace({
+  actor,
+  activeView,
+  roleSessions,
+  agentEvents,
+  agentStatus,
+  requestError,
+  onDismissError,
+  onChooseRole,
+  onSend,
+  onOpenConversation,
+  onOpenTrace,
+  onStartNew,
+  onLogout,
+}) {
   const [profileOpen, setProfileOpen] = useState(false);
   const viewerRole = actor.role === 'ADMIN' ? 'admin' : actor.role === 'HR' ? 'hr' : 'manager';
   return (
@@ -540,15 +584,31 @@ function EmptyWorkspace({ actor, activeView, onOpenConversation, onOpenTrace, on
             <span className="brand-copy"><strong>画像澄清 Agent</strong><small>ROLE CLARIFIER</small></span>
           </div>
         </div>
-        <button className="new-project-button" onClick={onOpenCreate}>
-          <Plus size={17} /><span>新建岗位澄清</span>
+        <button className="new-project-button" onClick={onStartNew}>
+          <Plus size={17} /><span>开始新岗位对话</span>
         </button>
-        <div className="sidebar-section-title"><span>最近会话</span></div>
-        <nav className="role-session-list empty-role-session-list" aria-label="岗位澄清会话列表">
-          <div className="empty-session-list">
-            <span className="session-icon"><MessageSquare size={15} /></span>
-            <span><strong>暂无岗位会话</strong><small>点击上方按钮创建</small></span>
+        <div className="sidebar-section-title">
+          <span>最近会话</span>
+          <div>
+            <button className="icon-button tiny" aria-label="搜索会话"><Search size={15} /></button>
+            <button className="icon-button tiny" aria-label="会话筛选"><SlidersHorizontal size={15} /></button>
           </div>
+        </div>
+        <nav className="role-session-list empty-role-session-list" aria-label="岗位澄清会话列表">
+          {roleSessions.length === 0 ? (
+            <div className="empty-session-list">
+              <span className="session-icon"><MessageSquare size={15} /></span>
+              <span><strong>还没有岗位会话</strong><small>直接在右侧和 Agent 聊聊</small></span>
+            </div>
+          ) : roleSessions.map((role) => (
+            <button className="role-session-row" key={role.id} onClick={() => onChooseRole(role.id)}>
+              <span className="session-icon"><MessageSquare size={15} /></span>
+              <span className="role-session-copy">
+                <span className="role-session-title"><strong>{role.name}</strong><small>{role.updatedAt}</small></span>
+                <span className="role-session-meta"><em className={role.stageTone}>{role.stage}</em><i>·</i><small>{role.meta}</small></span>
+              </span>
+            </button>
+          ))}
         </nav>
         <div className="sidebar-footer">
           {actor.role === 'ADMIN' && (
@@ -580,13 +640,13 @@ function EmptyWorkspace({ actor, activeView, onOpenConversation, onOpenTrace, on
         <header className="workspace-header">
           <div className="title-stack">
             <div className="title-line">
-              <strong>新岗位澄清</strong>
-              <span className="role-stage-badge empty">尚未创建</span>
+              <strong>新岗位对话</strong>
+              <span className="role-stage-badge empty">等待识别</span>
             </div>
             <div className="preset-line">
               <span className="preset-badge"><ClarifierMark size={16} />画像澄清 Agent</span>
               <span className="phase-dot" />
-              <span>等待岗位信息</span>
+              <span>直接描述招聘需求</span>
               <span className="phase-dot" />
               <span>未生成画像</span>
             </div>
@@ -615,6 +675,8 @@ function EmptyWorkspace({ actor, activeView, onOpenConversation, onOpenTrace, on
           )}
         </div>
 
+        {requestError && <div className="workspace-error"><AlertTriangle size={14} />{requestError}<button onClick={onDismissError}><X size={13} /></button></div>}
+
         {activeView === 'admin-trace' && actor.role === 'ADMIN' ? (
           <AdminTraceConsole />
         ) : (
@@ -624,53 +686,38 @@ function EmptyWorkspace({ actor, activeView, onOpenConversation, onOpenTrace, on
                 <div className="session-intro">
                   <ClarifierMark size={40} plate />
                   <div>
-                    <h1>开始新的岗位澄清</h1>
-                    <p>创建岗位后，用人经理、HR 和企业管理员可以在这里与 Agent 对话，并持续生成岗位画像、评估方案和 JD。</p>
+                    <h1>先聊聊你为什么想招人</h1>
+                    <p>不用先创建岗位或填写表单。直接描述业务问题，Agent 会在对话中识别岗位、补齐事实并逐步建立岗位画像。</p>
                   </div>
                 </div>
 
                 <div className="conversation-policy-strip empty-policy-strip">
-                  <span><CircleDot size={13} />主动澄清 <strong>尚未开始</strong></span>
-                  <span>创建岗位后，Agent 才会围绕关键问题主动追问</span>
+                  <span><CircleDot size={13} />岗位建立 <strong>从第一句话开始</strong></span>
+                  <span>岗位名称、团队和成功标准会在对话中逐步补全</span>
                 </div>
 
                 <div className="message message-agent empty-onboarding-message">
                   <span className="agent-avatar"><ClarifierMark size={25} /></span>
                   <div className="message-body">
                     <div className="message-label">画像澄清 Agent</div>
-                    <p>你好，{actor.display_name}。这个账号目前还没有岗位。</p>
-                    <p>先创建一个岗位，我会在同一个会话里帮你澄清招聘原因、成功标准、岗位画像和 JD。</p>
-                    <div className="empty-create-card">
-                      <span><Sparkles size={14} />准备好岗位基本信息了吗？</span>
-                      <strong>你准备招聘什么岗位？</strong>
-                      <small>只需先填写职位名称、所属部门和 HC 状态，后续信息可以和 Agent 边聊边补充。</small>
-                      <button className="primary-action" type="button" onClick={onOpenCreate}><Plus size={16} />新建岗位澄清</button>
+                    <p>你好，{actor.display_name}。我们不用从一张表单开始。</p>
+                    <p>你可以直接说：“最近业务遇到了什么问题，所以想招什么样的人？”我会边聊边帮你建立岗位。</p>
+                    <div className="empty-chat-starters">
+                      <span><Sparkles size={14} />你可以这样开始</span>
+                      <button type="button" onClick={() => onSend('我们有一个新的业务目标，但还不确定应该招聘什么岗位，你先帮我梳理一下。')}>有业务目标，但岗位还没想清楚</button>
+                      <button type="button" onClick={() => onSend('我想招聘一位企业产品经理，请从招聘原因开始帮我澄清。')}>已经知道想招什么岗位</button>
                     </div>
                   </div>
                 </div>
+                {(agentStatus === 'running' || agentStatus === 'reconnecting') && (
+                  <LiveAgentRun events={agentEvents} status={agentStatus} />
+                )}
               </div>
             </div>
-
-            <div className="composer-dock empty-composer-dock">
-              <div className="composer empty-composer" aria-disabled="true">
-                <textarea placeholder="创建岗位后即可开始和 Agent 对话…" rows={1} disabled />
-                <div className="composer-toolbar">
-                  <div>
-                    <button className="icon-button tiny" aria-label="添加资料" disabled><Plus size={17} /></button>
-                    <button className="composer-setting" disabled><ShieldCheck size={14} />会话资料可读</button>
-                  </div>
-                  <div>
-                    <button className="composer-setting" disabled>Flash / Pro 自动路由<ChevronDown size={13} /></button>
-                    <button className="send-button" aria-label="发送" disabled><ArrowUp size={17} /></button>
-                  </div>
-                </div>
-              </div>
-              <p className="composer-caption">创建岗位后，消息和产物会保存到当前账号与企业空间。</p>
-            </div>
+            <Composer onSend={onSend} pending={agentStatus === 'running' || agentStatus === 'reconnecting'} />
           </section>
         )}
       </main>
-      {children}
     </div>
   );
 }
@@ -1496,31 +1543,6 @@ function EvidenceDrawer({ evidence, onClose }) {
         <div className="support-block"><span>支持画像字段</span><div>{evidence.supports.map((item) => <button key={item}>{item}<ChevronRight size={13} /></button>)}</div></div>
         <div className="drawer-trace"><span><CheckCircle2 size={15} />来源与原文已保留</span><span><ShieldCheck size={15} />人工确认后写入正式画像</span></div>
       </aside>
-    </div>
-  );
-}
-
-function CreateRoleModal({ onClose, onSubmit }) {
-  return (
-    <div className="modal-layer" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <form className="create-modal" onSubmit={onSubmit}>
-        <div className="modal-header">
-          <ClarifierMark size={40} plate />
-          <div><h2>新建岗位澄清</h2><p>一个具体招聘需求对应一条持续会话。</p></div>
-          <button type="button" className="icon-button" onClick={onClose} aria-label="关闭"><X size={18} /></button>
-        </div>
-        <label><span>招聘岗位</span><input name="roleName" placeholder="例如：企业产品经理" autoFocus required /></label>
-        <label><span>所属团队</span><input name="team" placeholder="例如：企业服务产品部" /></label>
-        <label><span>为什么现在需要招聘</span><textarea name="reason" placeholder="描述当前业务问题、变化或不招聘的影响即可…" rows={3} /></label>
-        <div className="auto-fetch-panel">
-          <div><Sparkles size={16} /><strong>创建后自动准备</strong></div>
-          <span>组织背景</span><span>旧 JD</span><span>历史案例</span><span>人才供给</span>
-        </div>
-        <div className="modal-actions">
-          <button type="button" className="quiet-button" onClick={onClose}>取消</button>
-          <button type="submit" className="primary-action">创建并开始澄清<ChevronRight size={16} /></button>
-        </div>
-      </form>
     </div>
   );
 }

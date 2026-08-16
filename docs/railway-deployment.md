@@ -38,6 +38,12 @@ Browser -> web (public HTTPS)
 - `SESSION_SECRET=<secret>`
 - `HARNESS_SIDECAR_TOKEN=<shared secret>`
 - `ROLE_AGENT_TOOL_TOKEN=<shared secret>`
+- `FEISHU_ENABLED=false`（连接飞书时改为 `true`）
+- `FEISHU_APP_ID=<Feishu App ID>`
+- `FEISHU_APP_SECRET=<secret>`
+- `FEISHU_VERIFICATION_TOKEN=<secret>`
+- `FEISHU_WORKSPACE_ID=<与 Web 登录一致的企业空间 ID>`
+- `FEISHU_USER_MAPPINGS_JSON=<可选，飞书 open_id 到 Web 账号的映射>`
 
 ### harness-sidecar
 
@@ -61,7 +67,8 @@ Browser -> web (public HTTPS)
 1. 三个 Docker 镜像构建成功。
 2. `api` 和 `harness-sidecar` 的 `/healthz` 在私网可访问。
 3. `web` 的公开 `/healthz` 返回 200。
-4. 新账号选择角色后进入空工作台；创建岗位后，同一账号重新登录可恢复，不同普通账号不可读取；经理可提交消息并收到完整 SSE。
+4. 新账号选择角色后进入空工作台；直接发送第一条消息即可建立岗位，同一账号重新登录可恢复，不同普通账号不可读取；经理可提交消息并收到完整 SSE。
 5. HR 账号看得到内部招聘画像，经理账号不可见。
 6. 真实 DeepSeek Flash 澄清和 Pro 产物各跑一次。
 7. 企业管理员 Trace 将 System Prompt、当前输入、短期会话记忆、长期岗位记忆和任务状态分层展示，同时保留完整用户原文、实际模型输入输出和工具数据；确认其中不出现 API Key、Cookie 或内部令牌。
+8. 若启用飞书，完成回调 URL 验证；机器人单聊第一条消息能够建立岗位，重复事件不产生重复 Run，并能用卡片返回岗位画像。

@@ -33,6 +33,11 @@ import type { AppConfig } from './config.js'
 import { RoleService } from './services/role-service.js'
 import { createStore, type ApplicationStore } from './store/index.js'
 import { writeSseEvent } from './http/sse.js'
+import {
+  FeishuGateway,
+  FeishuOpenApiClient,
+  type FeishuClientLike,
+} from './integrations/feishu.js'
 
 const IdParamsSchema = z.object({ id: z.string().uuid() })
 const RunParamsSchema = z.object({ run_id: z.string().uuid() })
@@ -88,6 +93,7 @@ const toCandidateEvidencePlaceholder = (
 
 export interface AppDependencies {
   store?: ApplicationStore
+  feishuClient?: FeishuClientLike
 }
 
 const recoverInterruptedRuns = async (store: ApplicationStore): Promise<void> => {
@@ -177,6 +183,14 @@ export const buildApp = async (
   await recoverInterruptedRuns(store)
   const roleService = new RoleService(store)
   const runner = new AgentRunner(store, roleService, createHarnessAdapter(config), config)
+  const feishu = new FeishuGateway(
+    config,
+    store,
+    roleService,
+    runner,
+    dependencies.feishuClient ?? new FeishuOpenApiClient(config),
+    (error) => app.log.error({ err: error }, 'Feishu message processing failed'),
+  )
 
   await app.register(cookie, {
     secret: config.SESSION_SECRET,
@@ -235,7 +249,8 @@ export const buildApp = async (
     if (
       request.url === '/healthz' ||
       request.url === '/api/v1/auth/login' ||
-      request.url === '/api/v1/openapi.json'
+      request.url === '/api/v1/openapi.json' ||
+      request.url === '/api/v1/integrations/feishu/events'
     ) {
       return
     }
@@ -282,7 +297,26 @@ export const buildApp = async (
     })
   })
 
-  app.get('/healthz', async () => ({ status: 'ok', harness_mode: config.HARNESS_MODE }))
+  app.get('/healthz', async () => ({
+    status: 'ok',
+    harness_mode: config.HARNESS_MODE,
+    integrations: { feishu: feishu.status() },
+  }))
+
+  app.post('/api/v1/integrations/feishu/events', async (request) => {
+    try {
+      return await feishu.receive(request.body)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Feishu webhook failed'
+      if (message.includes('verification token')) {
+        throw new DomainError('FEISHU_UNAUTHORIZED', '飞书回调校验失败', 401)
+      }
+      if (message.includes('not configured')) {
+        throw new DomainError('FEISHU_NOT_CONFIGURED', '飞书连接尚未配置', 503)
+      }
+      throw error
+    }
+  })
 
   app.post('/internal/v1/harness/tools/:tool_name', async (request) => {
     const bearer = request.headers.authorization
@@ -328,6 +362,26 @@ export const buildApp = async (
         input.category,
       )
       return { saved: true, revision: state.revision }
+    }
+    if (tool_name === 'update_role_identity_draft') {
+      const input = z
+        .object({
+          title: z.string().trim().min(1).max(120).optional(),
+          department: z.string().trim().min(1).max(120).optional(),
+        })
+        .strict()
+        .refine((value) => Boolean(value.title || value.department))
+        .parse(body)
+      const identity = {
+        ...(input.title ? { title: input.title } : {}),
+        ...(input.department ? { department: input.department } : {}),
+      }
+      const state = await roleService.updateRoleIdentityDraft(roleSessionId, actor, identity)
+      return {
+        saved: true,
+        revision: state.revision,
+        role_identity: { title: state.title, department: state.department },
+      }
     }
     if (tool_name === 'save_artifact_draft') {
       const input = z
@@ -463,6 +517,18 @@ export const buildApp = async (
     const body = CreateRoleSessionSchema.parse(request.body)
     const result = await roleService.create(request.actor, body)
     return reply.status(201).send(result)
+  })
+
+  app.post('/api/v1/intake/messages', async (request, reply) => {
+    const body = MessageRequestSchema.parse(request.body)
+    const role = await roleService.createIntake(request.actor)
+    const result = await runner.submitMessage(role.state.id, request.actor, body.content)
+    return reply.status(202).send({
+      role,
+      run_id: result.run.id,
+      message: result.message,
+      stream_url: `/api/v1/agent-runs/${result.run.id}/events`,
+    })
   })
 
   app.get('/api/v1/role-sessions/:id', async (request) => {
@@ -781,6 +847,12 @@ export const buildApp = async (
     openapi: '3.1.0',
     info: { title: 'Role Clarifier Agent API', version: '0.1.0' },
     paths: {
+      '/api/v1/intake/messages': {
+        post: { summary: '以第一条自然语言消息建立岗位并创建异步 Agent Run' },
+      },
+      '/api/v1/integrations/feishu/events': {
+        post: { summary: '接收飞书 URL 验证与 im.message.receive_v1 事件' },
+      },
       '/api/v1/role-sessions/{id}/messages': {
         get: { summary: '读取持久化多角色对话和澄清策略' },
         post: { summary: '保存人类消息并创建异步 Agent Run' },

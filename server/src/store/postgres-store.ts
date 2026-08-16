@@ -92,6 +92,15 @@ export class PostgresStore implements ApplicationStore {
       })
   }
 
+  async claimExternalEvent(channel: string, eventId: string): Promise<boolean> {
+    const rows = await this.db
+      .insert(schema.externalEventReceipts)
+      .values({ channel, eventId })
+      .onConflictDoNothing()
+      .returning({ eventId: schema.externalEventReceipts.eventId })
+    return rows.length === 1
+  }
+
   async listRoleStates(actor: ActorContext): Promise<RoleState[]> {
     if (actor.role === 'ADMIN') {
       const rows = await this.db

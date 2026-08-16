@@ -31,6 +31,16 @@ export const users = pgTable('users', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 })
 
+export const externalEventReceipts = pgTable(
+  'external_event_receipts',
+  {
+    channel: text('channel').notNull(),
+    eventId: text('event_id').notNull(),
+    receivedAt: timestamp('received_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [primaryKey({ columns: [table.channel, table.eventId] })],
+)
+
 export const roleSessions = pgTable(
   'role_sessions',
   {

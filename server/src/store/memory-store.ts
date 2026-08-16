@@ -36,6 +36,7 @@ export class MemoryStore implements ApplicationStore {
   private readonly subscribers = new Map<string, Set<EventSubscriber>>()
   private readonly decisions: DecisionRecord[] = []
   private readonly traceAudits: TraceAccessAuditRecord[] = []
+  private readonly externalEvents = new Set<string>()
 
   async initialize(): Promise<void> {
     for (const user of demoUsers) this.users.set(user.user_id, clone(user))
@@ -52,6 +53,13 @@ export class MemoryStore implements ApplicationStore {
 
   async saveUser(user: StoredUser): Promise<void> {
     this.users.set(user.user_id, clone(user))
+  }
+
+  async claimExternalEvent(channel: string, eventId: string): Promise<boolean> {
+    const key = `${channel}:${eventId}`
+    if (this.externalEvents.has(key)) return false
+    this.externalEvents.add(key)
+    return true
   }
 
   async listRoleStates(actor: ActorContext): Promise<RoleState[]> {

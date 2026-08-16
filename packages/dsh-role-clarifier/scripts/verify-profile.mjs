@@ -72,6 +72,7 @@ for (const packageName of [
 
 const allowed = [
   'read_role_state',
+  'update_role_identity_draft',
   'save_fact_draft',
   'save_artifact_draft',
   'save_candidate_evidence',

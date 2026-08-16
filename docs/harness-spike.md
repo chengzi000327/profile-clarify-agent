@@ -7,7 +7,7 @@
 1. 官方架构使用 Cordis Profile/Bundle；自定义工具通过 ctx.tools.register(defineTool(...)) 注册。
 2. 官方仓库根版本为 0.1.0-rc.5，要求 Node 22.19 或 24 以上。
 3. 领域 Bundle 能以 Profile 最后一层覆盖 dsh-base，将工具展示模式固定为 native。
-4. Bundle 的六个工具使用闭合 Schema，身份字段不在模型参数中。
+4. Bundle 的七个工具使用闭合 Schema，身份字段不在模型参数中。
 5. 静态 Profile 门禁会检查精确版本、危险工具禁用和领域工具完整性。
 6. API 通过 HarnessAdapter 隔离运行时；mock 与 sidecar 使用同一业务状态和事件契约。
 7. Harness 故障不会影响业务库中的正式产物读取；新 Run 会重新读取 RoleState。
@@ -35,7 +35,7 @@
     corepack pnpm harness:verify
     corepack pnpm harness:smoke:runtime
 
-结果：官方 rc.5 JSON-RPC Runtime 能加载模型适配器、Agent Spine、JSONL Session 和六个领域工具，并通过本地 OpenAI 兼容模型桩完成一次完整 Turn。测试断言发送给模型的工具恰好是六个领域工具，不访问外网、不产生模型费用。
+结果：官方 rc.5 JSON-RPC Runtime 能加载模型适配器、Agent Spine、JSONL Session 和七个领域工具，并通过本地 OpenAI 兼容模型桩完成一次完整 Turn。测试断言发送给模型的工具恰好是七个领域工具，不访问外网、不产生模型费用。
 
 ## 有效密钥后的模型 Smoke Test
 
@@ -43,7 +43,7 @@
 
 验收：
 
-1. 模型可见工具恰好是六个领域工具；Runtime 配置没有加载 Shell、文件、Web、Skill 或子 Agent 包。
+1. 模型可见工具恰好是七个领域工具；Runtime 配置没有加载 Shell、文件、Web、Skill 或子 Agent 包。
 2. Flash 澄清能调用读取状态和保存事实草稿。
 3. Pro JD 只能产出四段结构并通过业务 Schema。
 4. Sidecar 中断后重启，使用业务 RoleState 重建摘要并绑定 role-{role_session_id} Session。

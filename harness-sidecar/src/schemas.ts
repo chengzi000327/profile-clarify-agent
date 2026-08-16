@@ -64,6 +64,10 @@ export const HarnessResultSchema = z.discriminatedUnion('kind', [
     persistence: ToolPersistenceSchema,
     answer: z.string().min(1),
     question: z.string().min(1),
+    role_identity: z.object({
+      title: z.string().min(1).max(120).optional(),
+      department: z.string().min(1).max(120).optional(),
+    }).refine((value) => Boolean(value.title || value.department)).optional(),
     fact_draft: z.object({
       category: z.enum(['HIRING_REASON', 'SUCCESS_CRITERION']),
       statement: z.string().min(1),

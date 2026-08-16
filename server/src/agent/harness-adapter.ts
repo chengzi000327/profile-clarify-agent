@@ -54,6 +54,10 @@ export type HarnessResult =
       persistence?: 'CALLER' | 'TOOL'
       answer: string
       question: string
+      role_identity?: {
+        title?: string
+        department?: string
+      }
       fact_draft: {
         category: 'HIRING_REASON' | 'SUCCESS_CRITERION'
         statement: string
@@ -130,6 +134,16 @@ const deterministicConversationReply = (message: string): string | null => {
     return '你好，我在。你可以直接提问，也可以补充招聘原因、成功标准或岗位约束。'
   }
   return null
+}
+
+const inferRoleIdentity = (message: string): { title?: string; department?: string } | undefined => {
+  const title = message.match(
+    /(?:想|要|需要|计划)?(?:招聘|招|找)(?:一名|一个|一位|位|个|名)?\s*([^，。！？\n]{2,30}?(?:经理|负责人|工程师|设计师|运营|销售|顾问|专家|总监|主管|HR|人力资源))/,
+  )?.[1]?.trim()
+  const department = message.match(
+    /(?:属于|归属|加入|放在|在)\s*([^，。！？\n]{2,24}?(?:部门|部|团队|中心))/,
+  )?.[1]?.trim()
+  return title || department ? { ...(title ? { title } : {}), ...(department ? { department } : {}) } : undefined
 }
 
 const extractCandidate = (item: CandidateImportItem): CandidateEvidence => {
@@ -253,6 +267,16 @@ export class DeterministicHarnessAdapter implements HarnessAdapter {
           ? '如果这个岗位半年后招聘成功，最重要的一个可观察业务结果是什么？'
           : '这个结果由谁验收、用什么指标判断达成？'
       const factDraft = { category, statement: message }
+      const roleIdentity = inferRoleIdentity(message)
+      if (roleIdentity) {
+        await hooks.onToolStarted('update_role_identity_draft', roleIdentity)
+        await abortablePause(hooks.signal)
+        await hooks.onToolCompleted(
+          'update_role_identity_draft',
+          '岗位身份草稿已保存',
+          { saved: true, role_identity: roleIdentity },
+        )
+      }
       await hooks.onToolStarted('save_fact_draft', factDraft)
       await abortablePause(hooks.signal)
       await hooks.onToolCompleted(
@@ -260,12 +284,19 @@ export class DeterministicHarnessAdapter implements HarnessAdapter {
         '事实草稿已通过领域校验',
         { saved: true, fact_draft: factDraft },
       )
-      await hooks.onModelResponse(JSON.stringify({ kind: 'CLARIFICATION', answer, question, fact_draft: factDraft }))
+      await hooks.onModelResponse(JSON.stringify({
+        kind: 'CLARIFICATION',
+        answer,
+        question,
+        ...(roleIdentity ? { role_identity: roleIdentity } : {}),
+        fact_draft: factDraft,
+      }))
       await hooks.onDelta(answer)
       return {
         kind: 'CLARIFICATION',
         answer,
         question,
+        ...(roleIdentity ? { role_identity: roleIdentity } : {}),
         fact_draft: {
           category,
           statement: message,

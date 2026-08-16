@@ -5,6 +5,7 @@ import type {} from '@deepseek-ai/dsh-system-prompt'
 
 const ROLE_CLARIFIER_SYSTEM_PROMPT = [
   '你是岗位画像澄清 Agent。你只能处理岗位事实、岗位画像、评估方案、四段式 JD、HR 招聘画像、候选人证据与校准建议。',
+  '新岗位不要求用户先填表。用户可以直接描述招聘想法；你要在对话中识别岗位名称与所属团队，并将其作为待确认的岗位身份草稿保存。',
   '必须先识别用户意图。问候、能力询问、使用方法、进度询问和没有新增岗位事实的普通问题，要直接回答用户真正问的问题，不得调用任何写入工具。',
   '只有用户明确补充或修改岗位事实，或实质回答当前澄清问题时，才允许保存事实草稿并推进主动澄清。普通对话不消耗澄清轮次。',
   '回答必须针对用户当前消息；禁止用“事实已保存”“这条事实是否准确”等万能话术替代真实回答。',
@@ -25,6 +26,7 @@ export const inject = ['tools', 'systemPrompt'] as const
 
 const allowedToolNames = [
   'read_role_state',
+  'update_role_identity_draft',
   'save_fact_draft',
   'save_artifact_draft',
   'save_candidate_evidence',
@@ -94,6 +96,28 @@ export const apply = (ctx: Context, input: Config = {}): void => {
         return callBusinessTool(
           config,
           'read_role_state',
+          args,
+          exec.signal,
+          String(exec.agent?.session.id ?? ''),
+        )
+      },
+    }),
+  )
+
+  ctx.tools.register(
+    defineTool({
+      name: 'update_role_identity_draft',
+      description: '从对话中保存待确认的岗位名称或所属团队草稿；未明确提及的字段不得猜测。',
+      parameters: {
+        title: { type: 'string' },
+        department: { type: 'string' },
+      },
+      output: toolOutput,
+      timeoutMs: config.timeoutMs,
+      async execute(args, exec) {
+        return callBusinessTool(
+          config,
+          'update_role_identity_draft',
           args,
           exec.signal,
           String(exec.agent?.session.id ?? ''),

@@ -1605,8 +1605,7 @@ textarea:focus-visible {
   font-style: normal;
 }
 
-.drawer-layer,
-.modal-layer {
+.drawer-layer {
   position: fixed;
   inset: 0;
   z-index: 50;
@@ -1790,126 +1789,6 @@ textarea:focus-visible {
 
 .drawer-trace svg {
   color: #22a06b;
-}
-
-.modal-layer {
-  display: grid;
-  place-items: center;
-  padding: 24px;
-}
-
-.create-modal {
-  width: min(520px, calc(100vw - 48px));
-  padding: 22px;
-  border: 1px solid var(--line);
-  border-radius: 13px;
-  background: white;
-  box-shadow: var(--shadow);
-  animation: modal-in 150ms ease-out;
-}
-
-@keyframes modal-in {
-  from { transform: translateY(6px); opacity: .7; }
-  to { transform: translateY(0); opacity: 1; }
-}
-
-.modal-header {
-  display: grid;
-  grid-template-columns: 40px minmax(0, 1fr) auto;
-  gap: 11px;
-  align-items: start;
-  margin-bottom: 21px;
-}
-
-.modal-icon {
-  display: grid;
-  width: 40px;
-  height: 40px;
-  place-items: center;
-  border-radius: 9px;
-  color: var(--blue);
-  background: var(--blue-soft);
-}
-
-.modal-header h2 {
-  margin: 0 0 4px;
-  font-size: 17px;
-  font-weight: 600;
-}
-
-.modal-header p {
-  margin: 0;
-  color: var(--text-2);
-  font-size: 10px;
-  line-height: 16px;
-}
-
-.create-modal > label {
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-  margin-top: 14px;
-}
-
-.create-modal > label > span {
-  font-size: 10px;
-  font-weight: 600;
-}
-
-.create-modal input,
-.create-modal textarea {
-  width: 100%;
-  padding: 10px 11px;
-  resize: none;
-  border: 1px solid var(--line-strong);
-  border-radius: 8px;
-  outline: none;
-  color: var(--text);
-  background: white;
-  font-size: 12px;
-  line-height: 19px;
-}
-
-.create-modal input:focus,
-.create-modal textarea:focus {
-  border-color: #8ba9f5;
-  box-shadow: 0 0 0 3px rgba(20,86,240,.06);
-}
-
-.auto-fetch-panel {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 7px;
-  margin-top: 17px;
-  padding: 11px 12px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #fafbfc;
-}
-
-.auto-fetch-panel > div {
-  display: flex;
-  width: 100%;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 2px;
-  color: var(--blue);
-  font-size: 10px;
-}
-
-.auto-fetch-panel > span {
-  padding: 4px 7px;
-  border-radius: 5px;
-  color: var(--text-2);
-  background: #eef0f3;
-  font-size: 9px;
-}
-
-.modal-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  margin-top: 22px;
 }
 
 @media (max-width: 1180px) {
@@ -2213,7 +2092,7 @@ textarea:focus-visible {
   margin-top: 34px;
 }
 
-.empty-create-card {
+.empty-chat-starters {
   display: flex;
   align-items: flex-start;
   flex-direction: column;
@@ -2225,7 +2104,7 @@ textarea:focus-visible {
   background: #f8faff;
 }
 
-.empty-create-card > span {
+.empty-chat-starters > span {
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -2234,32 +2113,21 @@ textarea:focus-visible {
   font-weight: 600;
 }
 
-.empty-create-card > strong {
-  color: var(--text);
-  font-size: 15px;
-}
-
-.empty-create-card > small {
-  color: var(--text-2);
+.empty-chat-starters > button {
+  padding: 7px 10px;
+  border: 1px solid #d8e2fb;
+  border-radius: 7px;
+  color: #40557e;
+  background: #fff;
   font-size: 11px;
-  line-height: 18px;
+  text-align: left;
+  cursor: pointer;
 }
 
-.empty-create-card .primary-action {
-  margin-top: 5px;
-}
-
-.empty-composer textarea:disabled {
-  color: var(--text-3);
-  cursor: default;
-}
-
-.empty-composer button:disabled {
-  cursor: default;
-}
-
-.empty-composer-dock {
-  border-top: 1px solid rgba(229, 230, 235, .72);
+.empty-chat-starters > button:hover {
+  border-color: #a9bff7;
+  color: var(--blue);
+  background: #f4f7ff;
 }
 
 .sidebar-utility.active {
