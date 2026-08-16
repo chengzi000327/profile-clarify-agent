@@ -1,100 +1,203 @@
-# 岗位画像澄清 Agent MVP
+# 岗位画像澄清 Agent
 
-一个可运行的招聘岗位澄清工作台：React 前端、Fastify API、PostgreSQL 业务事实层、异步 Agent Run/SSE，以及锁定官方源码的 DeepSeek Harness Sidecar。
+一个可运行的招聘岗位澄清工作台。系统把用人经理和 HR 的零散招聘需求沉淀为可追溯、可确认、可版本化的岗位事实，并进一步生成岗位画像、评估方案、四段式公开 JD 和 HR 内部招聘画像。
 
-## 当前可以跑通
+> 当前运行方式只有 **DeepSeek Harness Sidecar**。项目没有 `HARNESS_MODE`，也没有可切换的 Mock Agent 运行模式；测试中的本地模型桩只用于验证 Harness 协议和工具隔离，不参与产品请求。
 
-- 登录时填写企业空间、账号和姓名并选择用人经理、HR 或企业管理员；不存在固定用户名，权限来自签名 HttpOnly Cookie。
-- 新普通账号进入空工作台，只能看到自己创建或被加入的岗位；同一账号重新登录恢复历史内容。企业管理员按企业空间查看全部岗位。
-- 三种角色都能以真实身份和 Agent 对话，消息、回复与主动澄清轮次持久化保存；普通对话不限轮数。
-- 企业管理员拥有租户级最高权限，并可在完整 Trace 控制台查看全岗位运行、用户原文、模型输入输出、工具调用和审计记录。
-- 新账号无需先建岗位或填写表单：第一条自然语言消息会建立待识别岗位，Agent 再从对话中提取职位、团队和招聘原因，并通过 SSE 持续回复。
-- 同一岗位可从 Web 或飞书机器人单聊继续澄清；飞书可用卡片返回 Agent 问题、岗位画像、评估方案、四段式 JD 和 HR 招聘画像。
-- 生成、版本化和确认岗位画像、评分卡、四段式公开 JD、HR 内部招聘画像。
-- 导入 JSON/纯文本脱敏候选人；手机号、邮箱和显式姓名在进入模型前被拒绝。
-- 候选人达到“10 名＋2 个渠道＋2 次同类卡点”后进入 HR 审核；HR 通过后才创建经理任务。
-- 正式产物使用只追加版本、content_hash、乐观锁和下游确认失效。
-- 完整 Trace 将注入上下文拆成 System Prompt、当前用户输入、短期会话记忆、长期岗位记忆和任务状态，并保存实际模型 Prompt、最终输出、工具入参与返回、Token 和延迟；API Key、Cookie、内部令牌与模型未提供的隐藏思维链不采集。
+## 当前能力
+
+- React 工作台、Fastify API、PostgreSQL/内存 Store、异步 Agent Run 和 SSE 流式响应。
+- 用人经理、HR、企业管理员三种真实服务端身份；权限来自签名 HttpOnly Cookie，而不是前端参数。
+- 自由文本先由无工具 Router 调用 Flash 模型理解，再决定直接回答、追问，或交接领域任务。
+- 问候、致谢、能力询问、岗位状态查询和越界说明都由模型自然生成，不使用固定回复。
+- 生成并版本化岗位画像、评估方案、四段式公开 JD 和 HR 内部招聘画像。
+- 通过独立入口导入脱敏候选人 JSON/文本；手机号、邮箱和显式姓名会在进入模型前被拒绝。
+- 候选人达到“至少 10 名、至少 2 个渠道、至少 2 次同类卡点”后，才允许提出待 HR 审核的校准信号。
+- Trace 保存分层上下文、实际模型输入输出、工具调用、Token、延迟和失败信息，但不采集密钥、Cookie、内部令牌或模型未提供的隐藏思维链。
+
+## 运行架构
+
+```mermaid
+flowchart LR
+    U["Web / 飞书 / API 用户"] --> API["Fastify API<br/>创建并保存 Agent Run"]
+
+    API -->|"自由文本消息"| R["无工具 Router<br/>DeepSeek Flash"]
+    R -->|"RESPOND"| MR["模型直接回答<br/>0 个工具"]
+    R -->|"ASK"| MQ["模型提出 1 个澄清问题<br/>0 个工具"]
+    R -->|"HANDOFF"| G["服务端权限与阶段门禁"]
+
+    API -->|"明确的产物生成 / 候选人导入 API"| G
+    G --> P["任务级工具策略"]
+    P --> D["领域 Agent<br/>Flash 或 Pro"]
+    D --> V["结构化结果校验<br/>工具白名单校验"]
+    V --> S["业务服务保存草稿 / 证据 / 信号"]
+
+    MR --> SSE["持久化回复并通过 SSE 返回"]
+    MQ --> SSE
+    S --> SSE
+```
+
+自由文本 Router 只输出三种动作，不写业务数据：
+
+| Router 动作 | 含义 | 是否调用领域工具 |
+| --- | --- | --- |
+| `RESPOND` | 直接回答问候、能力问题、状态查询、普通问题或边界说明 | 否 |
+| `ASK` | 意图不够明确时，只问一个能决定下一步的问题 | 否 |
+| `HANDOFF` | 将明确业务请求交给一个服务端领域任务 | 由下游任务策略决定 |
+
+`HANDOFF` 当前支持 7 个领域任务：`CLARIFY_MESSAGE`、`GENERATE_ROLE_PROFILE`、`GENERATE_ASSESSMENT`、`GENERATE_JD`、`GENERATE_HR_BRIEF`、`CALIBRATION_ADVICE`、`VERSION_COMPARISON`。`EXTRACT_CANDIDATES` 是第 8 个领域任务，但只能由候选人导入接口触发，不允许 Router 从普通聊天中启动。
+
+### 简单问候如何处理
+
+用户发送“你好”时，实际链路是：
+
+```text
+保存用户消息
+  → Flash Router 调用模型（可见工具为 0）
+  → 模型返回 {"action":"RESPOND","answer":"..."}
+  → API 保存模型回复
+  → SSE 返回给前端
+```
+
+因此回复不是正则命中的固定文案，也不会为了问候启动领域 Agent 或写入岗位事实。
+
+## 任务与工具白名单
+
+领域 Bundle 注册了 7 个业务工具，但每个任务只向模型暴露最小集合。注册不等于当前任务可见。
+
+| 领域任务 | 模型 | 模型可见工具 | 持久化方式 |
+| --- | --- | --- | --- |
+| `CLARIFY_MESSAGE` | Flash | `read_role_state`、`update_role_identity_draft`、`save_fact_draft` | 模型通过工具写入草稿 |
+| `GENERATE_ROLE_PROFILE` | Pro | 无 | 模型返回结构化结果，API 校验后保存 |
+| `GENERATE_ASSESSMENT` | Pro | 无 | 模型返回结构化结果，API 校验后保存 |
+| `GENERATE_JD` | Pro | 无 | 模型返回结构化结果，API 校验后保存 |
+| `GENERATE_HR_BRIEF` | Pro | 无 | 模型返回结构化结果，API 校验后保存 |
+| `EXTRACT_CANDIDATES` | Flash | 无 | 模型返回结构化证据，API 校验后保存 |
+| `CALIBRATION_ADVICE` | Pro | 无 | 服务端注入脱敏聚合与 10/2/2 结果；模型返回建议，API 校验后按边界保存 |
+| `VERSION_COMPARISON` | Pro | `read_version_diff` | 只读，不写入 |
+
+`CLARIFY_MESSAGE` 必须成功调用 `read_role_state` 和 `save_fact_draft`，`update_role_identity_draft` 仅在用户明确给出岗位名称或团队时使用。版本比较必须调用 `read_version_diff`。产物生成、候选人提取和校准建议的最大工具转换数均为 0。
+
+候选人导入会按候选人数、材料字符量和岗位要求数量自动分批，最多 3 个 Flash 批次并发；每个批次保持零工具，全部结果通过候选人对应、状态映射、上游引用、原文定位和敏感信息校验后再由 API 合并保存。单个候选人无法解析时只进入 `failed_candidates`，不丢弃同批次其他成功结果。
+
+### 七个自研工具
+
+| 工具 | 作用 | 当前使用方式 |
+| --- | --- | --- |
+| `read_role_state` | 读取当前任务所需、经过角色和字段过滤的最小岗位状态 | 仅澄清任务可见；校准上下文由服务端预先注入 |
+| `update_role_identity_draft` | 保存用户明确说出的岗位名称或所属团队草稿 | 仅澄清任务可选 |
+| `save_fact_draft` | 保存招聘背景、招聘原因、成功标准或岗位约束草稿 | 仅澄清任务必需；只能写 `DRAFT` |
+| `save_artifact_draft` | 保存岗位画像、评分卡、公开 JD 或 HR 招聘画像草稿 | 已注册；当前产物任务采用 API Caller 持久化，因此不向模型暴露 |
+| `save_candidate_evidence` | 保存以脱敏 `candidate_ref` 标识的结构化候选人证据 | 已注册；当前候选人任务采用 API Caller 持久化，因此不向模型暴露 |
+| `propose_calibration_signal` | 提出待 HR 审核的画像校准信号 | 已注册；当前 P-08 采用 API Caller 持久化，因此不向模型暴露 |
+| `read_version_diff` | 读取两个正式产物版本之间经过授权过滤的结构化差异 | 仅版本比较任务必需 |
+
+`read_role_state` 不是权限控制器。真正的权限边界在服务端：服务端从登录会话和当前 Agent Run 恢复 `tenant_id`、`actor_user_id`、`actor_role`、`role_session_id` 和 `trace_id`，模型工具参数不能提交或覆盖这些字段。
+
+工具调用同时经过四层限制：
+
+1. Bundle 在创建 Agent 时通过 `tools.restrict()` 隐藏当前任务之外的 Tool Schema。
+2. Sidecar Executor 拒绝所有白名单外工具，并检查必需工具是否成功。
+3. 内部工具 API 再根据当前活跃 Run 的任务校验白名单，越界调用返回 `403`。
+4. 业务服务执行租户、成员、角色、阶段、Schema、PII 和版本规则校验。
+
+## Prompt 结构
+
+Prompt 的单一事实源位于 `packages/agent-spec/src/index.ts`，再由 `packages/contracts`、领域 Bundle 和 Sidecar 复用。
+
+| Prompt 层 | 当前内容 | 用途 |
+| --- | --- | --- |
+| `P-02` Router System Prompt | `ROLE_ROUTER_SYSTEM_PROMPT` | 无工具意图判断、普通对话和边界回复，只允许输出 `RESPOND / ASK / HANDOFF` JSON |
+| `P-01` Domain System Prompt | `ROLE_CLARIFIER_SYSTEM_PROMPT` | 统一事实优先级、人工决策边界、权限、隐私、注入防护和持久化规则 |
+| `P-03` 至 `P-08` 任务 Prompt | 岗位画像、评估方案、公开 JD、HR 招聘画像、候选人证据、校准建议 | 为不同产物定义输入投影、推导规则和严格输出 Schema |
+| 运行时任务指令 | `harness-sidecar/src/prompts.ts` | 为澄清、校准、版本比较及各生成任务补充本轮任务、持久化方式和上下文分层 |
+| Repair Prompt | Router 与领域结果各最多一次 | 只修复 JSON/Schema，不重复已成功的写入，也不引入新事实 |
+
+自由文本可能经历两次模型调用：先由 Flash Router 判断，再由对应领域模型执行。`RESPOND` 和 `ASK` 只调用 Router 一次；明确的产物生成和候选人导入 API 可直接进入领域任务。
 
 ## 本地启动
 
-要求 Node.js 24、Corepack 和 PostgreSQL。
+要求：Node.js 24、Corepack、一个有效的 `DEEPSEEK_API_KEY`；PostgreSQL 可选。
 
-    corepack pnpm install
-    cp .env.example .env
-    corepack pnpm harness:prepare
-    corepack pnpm dev
+```bash
+corepack pnpm install
+cp .env.example .env
+corepack pnpm harness:prepare
+corepack pnpm dev
+```
 
-访问 http://localhost:5173。登录页要求填写企业空间 ID、账号和姓名，并选择本账号的角色。账号第一次出现时完成 Demo 注册并进入空工作台；相同企业空间和账号再次登录时恢复原身份与岗位。账号首次绑定角色后不能在登录页提权或切换角色。
+访问 [http://localhost:5173](http://localhost:5173)。登录页需要填写企业空间 ID、账号、姓名并选择角色。账号第一次出现时完成 Demo 注册；同一企业空间和账号再次登录会恢复原身份与岗位，首次绑定角色后不能通过登录页切换角色提权。
 
-空工作台的输入框可以直接发送招聘背景，不需要先创建岗位。第一条消息发送成功后，系统才建立岗位会话；如果消息明确包含职位名称和团队，Agent 会把它们写入岗位身份草稿。
+在 `.env` 中至少填写：
 
-在 `.env` 中填写 `DEEPSEEK_API_KEY` 后，`pnpm dev` 会同时启动 Web、API 和真实 Harness Sidecar。若暂时不配置 `DATABASE_URL`，API 会使用带兼容测试夹具的内存 Store；动态注册的新账号仍按成员关系隔离。所有 Agent 请求都会通过 Sidecar 调用真实 Harness。
+```dotenv
+DEEPSEEK_API_KEY=your-key
+SESSION_SECRET=replace-with-at-least-32-random-characters
+HARNESS_SIDECAR_TOKEN=replace-with-a-random-sidecar-token
+ROLE_AGENT_TOOL_TOKEN=replace-with-a-random-internal-tool-token
+```
 
-## Docker Compose 测试环境
+如果不配置 `DATABASE_URL`，API 使用内存 Store；配置 PostgreSQL 后使用持久化业务数据。没有有效 DeepSeek Key 时服务仍可启动和读取已有数据，但 Agent Run 会返回 `HARNESS_NOT_READY`。
 
-    docker compose up --build
+### 常用命令
 
-先在环境中设置 `DEEPSEEK_API_KEY`，再访问 http://localhost:8080。Compose 使用 PostgreSQL 和真实 Harness Sidecar；没有密钥时服务仍可启动和读取正式产物，但 Agent Run 会明确返回 `HARNESS_NOT_READY`。
+```bash
+corepack pnpm typecheck
+corepack pnpm test
+corepack pnpm build
+corepack pnpm harness:verify
+corepack pnpm harness:prepare
+corepack pnpm harness:smoke:runtime
+```
 
-## Railway 线上环境
+`harness:smoke:runtime` 使用本地模型桩验证官方 JSON-RPC runtime、System Prompt 注入和任务级工具可见性，不会切换产品运行模式。
 
-生产环境拆为 `web`、`api`、`harness-sidecar` 和 PostgreSQL 四个 Railway 服务。只有 `web` 生成公开域名；浏览器的 REST、登录 Cookie 和 SSE 都由 Caddy 同源转发到 API。API、Harness 和数据库使用 Railway 私网互联，不直接暴露公网。Caddy 会按 Railway DNS TTL 重新解析 API 私网地址，服务滚动重启后不会继续使用旧 IP。
+## Docker Compose
 
-三个应用服务都从仓库根目录构建，并分别设置：
+```bash
+docker compose up --build
+```
 
-- `web`: `RAILWAY_DOCKERFILE_PATH=/frontend/Dockerfile`，`PORT=80`，`API_UPSTREAM=http://api.railway.internal:4100`
-- `api`: `RAILWAY_DOCKERFILE_PATH=/server/Dockerfile`，`PORT=4100`，`DATABASE_URL=${{Postgres.DATABASE_URL}}`，`HARNESS_BASE_URL=http://harness-sidecar.railway.internal:4110`
-- `harness-sidecar`: `RAILWAY_DOCKERFILE_PATH=/harness-sidecar/Dockerfile`，`SIDECAR_PORT=4110`，`ROLE_AGENT_INTERNAL_URL=http://api.railway.internal:4100`
+设置 `DEEPSEEK_API_KEY` 后访问 [http://localhost:8080](http://localhost:8080)。Compose 启动 PostgreSQL、API、Web 和真实 Harness Sidecar。
 
-`SESSION_SECRET`、`HARNESS_SIDECAR_TOKEN`、`ROLE_AGENT_TOOL_TOKEN` 和 `DEEPSEEK_API_KEY` 只写入 Railway Secret，不提交 Git。飞书连接的变量与配置步骤见 `docs/feishu-integration.md`；完整 Railway 变量和验收步骤见 `docs/railway-deployment.md`。
+## Railway 部署
 
-## DeepSeek Harness
+生产环境拆为 `web`、`api`、`harness-sidecar` 和 PostgreSQL 四个服务。只有 Web 暴露公网；API、Sidecar 和数据库通过 Railway 私网互联。
 
-领域 Bundle 位于 `packages/dsh-role-clarifier`，真实 Sidecar 位于 `harness-sidecar`。Bundle：
+- `web`：`RAILWAY_DOCKERFILE_PATH=/frontend/Dockerfile`，`PORT=80`，`API_UPSTREAM=http://api.railway.internal:4100`
+- `api`：`RAILWAY_DOCKERFILE_PATH=/server/Dockerfile`，`PORT=4100`，`DATABASE_URL=${{Postgres.DATABASE_URL}}`，`HARNESS_BASE_URL=http://harness-sidecar.railway.internal:4110`
+- `harness-sidecar`：`RAILWAY_DOCKERFILE_PATH=/harness-sidecar/Dockerfile`，`SIDECAR_PORT=4110`，`ROLE_AGENT_INTERNAL_URL=http://api.railway.internal:4100`
 
-- 注册 read_role_state、update_role_identity_draft、save_fact_draft、save_artifact_draft、save_candidate_evidence、propose_calibration_signal、read_version_diff 七个工具。
-- 禁用 Shell、PowerShell、文件读写/搜索、Web、任务、工作流、Skill 和子 Agent 工具。
-- 工具 Schema 不接受角色、用户或租户参数；服务端通过当前 Agent Run 和 Harness Session 注入身份。
-- Flash 执行事实/问题/候选人证据提取，Pro 执行正式产物与校准建议。
+完整变量和验收步骤见 [Railway 部署说明](docs/railway-deployment.md)，飞书配置见 [飞书集成说明](docs/feishu-integration.md)。密钥只写入部署平台 Secret，不提交 Git。
 
-官方 npm 没有发布 `0.1.0-rc.5`，因此项目没有静默升级到 rc.6，而是把官方仓库精确锁定到提交 `47f943859bef60e4160492346772ded9b24f765a`。准备脚本校验该提交的根版本确实为 `0.1.0-rc.5`，构建官方 JSON-RPC runtime，再把领域 Bundle 作为外部 Cordis 插件编译进去。
+## Harness 版本
 
-    corepack pnpm harness:prepare
+官方 npm 没有发布项目所需的完整 `0.1.0-rc.5` 组合包，因此准备脚本将官方仓库锁定到提交 `47f943859bef60e4160492346772ded9b24f765a`，校验根版本后构建 JSON-RPC runtime，再把领域 Bundle 编译为外部 Cordis 插件。
 
-静态工具面门禁和不访问外部服务的 JSON-RPC 本地模型桩验收：
-
-    corepack pnpm harness:verify
-    corepack pnpm harness:smoke:runtime
-
-Flash/Pro 分别映射到官方 `deepseek-v4-flash` 和 `deepseek-v4-pro`。Sidecar 使用 Bearer Token 与 API 隔离；模型工具请求再使用独立内部 Token。真实模型 Smoke Test 需要使用者在本地 `.env` 写入有效 Key，密钥不提交 Git。详细记录见 `docs/harness-spike.md`。
-
-## 主要命令
-
-    corepack pnpm typecheck
-    corepack pnpm test
-    corepack pnpm build
-    corepack pnpm harness:verify
-    corepack pnpm harness:prepare
-    corepack pnpm harness:smoke:runtime
+Flash/Pro 默认映射到 `deepseek-v4-flash` 和 `deepseek-v4-pro`。Sidecar 使用 Bearer Token 与 API 隔离，模型工具请求使用另一枚内部 Token。详细记录见 [Harness Spike](docs/harness-spike.md)。
 
 ## 工程结构
 
-    frontend/                      React 招聘工作台、登录、API/SSE
-    server/                        Fastify API、Agent Runner、PostgreSQL Store
-    packages/contracts/            共享 Zod Schema 与 API 类型
-    packages/domain/               状态机、哈希、PII、校准和失效规则
-    packages/dsh-role-clarifier/   Cordis Bundle 与七个领域工具
-    packages/dsh-profile/          dsh-base + dsh-headless + 领域 Bundle Profile
-    harness-sidecar/               官方 JSON-RPC runtime 桥接、模型路由与 Trace
-    scripts/prepare-harness-runtime.mjs  精确提交源码准备器
-    docker-compose.yml             PostgreSQL + API + Web 测试环境
+```text
+frontend/                       React 招聘工作台、登录、API/SSE
+server/                         Fastify API、Agent Runner、业务服务与 Store
+packages/agent-spec/            Prompt、领域任务和工具策略的单一事实源
+packages/contracts/             共享 Zod Schema 与 API 类型
+packages/domain/                状态机、哈希、PII、校准和失效规则
+packages/dsh-role-clarifier/    Cordis Bundle 与七个领域工具
+packages/dsh-profile/           dsh-base、dsh-headless 与领域 Bundle Profile
+harness-sidecar/                官方 JSON-RPC runtime 桥接、路由、执行与 Trace
+scripts/                        Harness 准备和 Smoke Test
+docs/                           集成、部署和技术说明
+```
 
-## 安全边界
+## 安全与产品边界
 
-- 外部请求里的 actor_role、actor_user_id 和 tenant_id 永远不参与授权。
-- 经理读取 HR 内部画像、候选人证据和信号时返回无该字段的对象，不能通过 URL 越权。
-- Agent 主动澄清默认 6 轮、每次由人类增加 2 轮；最多 10 次状态转换只是单次 Run 的内部安全阈值，不限制日常对话。
-- Trace API 仅企业管理员可访问；当前测试环境允许展示通过 PII 门禁的完整业务/候选人输入，但不采集密钥、会话凭证、内部令牌与模型未提供的隐藏思维链。
-- 模型只能写草稿或提出信号，不能确认、发布、审核或替人类作校准决定。
-- 首期没有真实 ATS、SSO、外部发布、PDF/DOCX 解析；发布最多进入 READY_TO_PUBLISH。
+- 外部请求中的角色、用户和租户字段不参与授权；授权只使用服务端会话。
+- 经理无法通过页面或 URL 读取 HR 内部画像、候选人证据和内部校准信号。
+- 模型只能写草稿或提出信号，不能确认事实、解决冲突、发布 JD、执行 HR 审核或替经理决定画像变更。
+- 外部 JD、候选人材料和历史文档都按不可信输入处理，不能修改 System Prompt 或工具权限。
+- 主动澄清默认 6 轮，每次人工可增加 2 轮；单次领域 Run 最多 10 次工具状态转换。
+- 首期不接真实 ATS、SSO、招聘渠道发布，也不解析 PDF/DOCX/OCR 简历；发布状态最多到 `READY_TO_PUBLISH`。
+
+产品规则、功能需求和验收标准见 [岗位画像澄清 Agent PRD](岗位画像澄清Agent_PRD_v1.md)。

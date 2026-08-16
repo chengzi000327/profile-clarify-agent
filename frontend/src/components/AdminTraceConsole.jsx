@@ -109,7 +109,7 @@ function TraceContextSnapshot({ payload }) {
   );
 }
 
-export default function AdminTraceConsole() {
+export default function AdminTraceConsole({ onPolicyUpdated }) {
   const [runs, setRuns] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
   const [trace, setTrace] = useState(null);
@@ -143,6 +143,22 @@ export default function AdminTraceConsole() {
   useEffect(() => {
     loadRuns();
   }, [status, modelTier]);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.getAgentPolicy()
+      .then((policy) => {
+        if (cancelled) return;
+        setInitialBudget(policy.initial_budget);
+        setExtensionSize(policy.extension_size);
+      })
+      .catch((loadError) => {
+        if (!cancelled) setError(loadError.message);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (!selectedId) {
@@ -179,7 +195,10 @@ export default function AdminTraceConsole() {
   async function savePolicy() {
     setError('');
     try {
-      await api.updateAgentPolicy(Number(initialBudget), Number(extensionSize));
+      const policy = await api.updateAgentPolicy(Number(initialBudget), Number(extensionSize));
+      setInitialBudget(policy.initial_budget);
+      setExtensionSize(policy.extension_size);
+      await onPolicyUpdated?.(policy);
       setPolicySaved(true);
       window.setTimeout(() => setPolicySaved(false), 1800);
     } catch (saveError) {

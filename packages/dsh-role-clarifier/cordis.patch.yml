@@ -101,3 +101,5 @@
         apiBaseUrl: !!js process.env.ROLE_AGENT_INTERNAL_URL ?? 'http://api:4100'
         toolToken: !!js process.env.ROLE_AGENT_TOOL_TOKEN ?? ''
         timeoutMs: 5000
+        allowedTools: !!js JSON.parse(process.env.ROLE_AGENT_ALLOWED_TOOLS ?? '[]')
+        mode: !!js process.env.ROLE_AGENT_MODE ?? 'domain'

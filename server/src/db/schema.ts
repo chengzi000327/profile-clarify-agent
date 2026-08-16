@@ -275,3 +275,57 @@ export const auditLogs = pgTable(
     index('audit_logs_target_idx').on(table.targetType, table.targetId),
   ],
 )
+
+export const recruitingContextImports = pgTable(
+  'recruiting_context_imports',
+  {
+    id: text('id').primaryKey(),
+    tenantId: text('tenant_id').notNull(),
+    sourceRevision: text('source_revision').notNull(),
+    sourceFile: text('source_file').notNull(),
+    excludedSheets: jsonb('excluded_sheets').$type<string[]>().notNull().default([]),
+    recordCounts: jsonb('record_counts').$type<Record<string, number>>().notNull().default({}),
+    importedAt: timestamp('imported_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index('recruiting_context_imports_tenant_idx').on(table.tenantId, table.importedAt)],
+)
+
+export const recruitingContextRecords = pgTable(
+  'recruiting_context_records',
+  {
+    tenantId: text('tenant_id').notNull(),
+    recordType: text('record_type').notNull(),
+    externalId: text('external_id').notNull(),
+    teamId: text('team_id'),
+    roleTitle: text('role_title'),
+    conversationId: text('conversation_id'),
+    sourceSystem: text('source_system').notNull(),
+    dataClassification: text('data_classification').notNull(),
+    effectiveAt: timestamp('effective_at', { withTimezone: true }),
+    content: jsonb('content').$type<Record<string, unknown>>().notNull(),
+    importId: text('import_id')
+      .notNull()
+      .references(() => recruitingContextImports.id, { onDelete: 'restrict' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.tenantId, table.recordType, table.externalId] }),
+    index('recruiting_context_records_type_idx').on(table.tenantId, table.recordType),
+    index('recruiting_context_records_team_idx').on(
+      table.tenantId,
+      table.teamId,
+      table.recordType,
+    ),
+    index('recruiting_context_records_role_idx').on(
+      table.tenantId,
+      table.roleTitle,
+      table.recordType,
+    ),
+    index('recruiting_context_records_conversation_idx').on(
+      table.tenantId,
+      table.conversationId,
+      table.recordType,
+    ),
+  ],
+)

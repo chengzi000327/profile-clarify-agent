@@ -1,21 +1,22 @@
 import {
   type AgentContextSnapshot,
+  type AgentRouterAction,
+  type AgentRouteRequest,
+  type AgentRouteResult,
   type ArtifactType,
+  type CalibrationAdvice,
+  type CalibrationAdviceContext,
   type CandidateEvidence,
+  type CandidateEvidenceFailure,
   type FactCategory,
+  type HarnessDomainTask,
   type RoleState,
+  type RecruitingContextBundle,
   type ToolExecutionContext,
 } from '@role-clarifier/contracts'
 import type { AppConfig } from '../config.js'
 
-export type HarnessTask =
-  | 'CLARIFY_MESSAGE'
-  | 'GENERATE_ROLE_PROFILE'
-  | 'GENERATE_ASSESSMENT'
-  | 'GENERATE_JD'
-  | 'GENERATE_HR_BRIEF'
-  | 'EXTRACT_CANDIDATES'
-  | 'CALIBRATION_ADVICE'
+export type HarnessTask = HarnessDomainTask
 
 export interface CandidateImportItem {
   candidate_ref: string
@@ -38,8 +39,15 @@ export interface HarnessRequest {
     }>
   }
   candidates?: CandidateImportItem[]
+  calibration_context?: CalibrationAdviceContext
+  recruiting_context?: RecruitingContextBundle
+  version_comparison?: {
+    artifact_type: ArtifactType
+    from_version: number
+    to_version: number
+  }
   execution_context: ToolExecutionContext
-  maximum_transitions: 10
+  maximum_transitions: 0 | 10
   structured_output_repair_attempts: 1
 }
 
@@ -48,6 +56,8 @@ export type HarnessResult =
       kind: 'CONVERSATION'
       persistence: 'NONE'
       answer: string
+      route_action?: AgentRouterAction
+      route_task?: HarnessTask
     }
   | {
       kind: 'CLARIFICATION'
@@ -64,12 +74,26 @@ export type HarnessResult =
       }
     }
   | { kind: 'ARTIFACT'; persistence?: 'CALLER' | 'TOOL'; artifact_type: ArtifactType; content: unknown; summary: string }
-  | { kind: 'CANDIDATE_EVIDENCE'; persistence?: 'CALLER' | 'TOOL'; candidates: CandidateEvidence[]; summary: string }
+  | {
+      kind: 'CANDIDATE_EVIDENCE'
+      persistence?: 'CALLER' | 'TOOL'
+      candidates: CandidateEvidence[]
+      failed_candidates: CandidateEvidenceFailure[]
+      summary: string
+    }
   | {
       kind: 'CALIBRATION_ADVICE'
-      persistence?: 'CALLER' | 'TOOL'
+      persistence: 'CALLER'
       summary: string
-      proposed_change: Record<string, unknown>
+      advice: CalibrationAdvice
+    }
+  | {
+      kind: 'VERSION_COMPARISON'
+      persistence: 'NONE'
+      summary: string
+      artifact_type: ArtifactType
+      from_version: number
+      to_version: number
     }
 
 export interface HarnessTrace {
@@ -98,11 +122,54 @@ export interface HarnessHooks {
 }
 
 export interface HarnessAdapter {
+  route(request: AgentRouteRequest, hooks: HarnessHooks): Promise<AgentRouteResult>
   run(request: HarnessRequest, hooks: HarnessHooks): Promise<HarnessResult>
 }
 
 export class SidecarHarnessAdapter implements HarnessAdapter {
   constructor(private readonly config: AppConfig) {}
+
+  async route(request: AgentRouteRequest, hooks: HarnessHooks): Promise<AgentRouteResult> {
+    await hooks.onStatus('DeepSeek Harness Sidecar 正在识别意图')
+    const response = await fetch(`${this.config.HARNESS_BASE_URL}/v1/role-clarifier/routes`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${this.config.HARNESS_SIDECAR_TOKEN}`,
+      },
+      body: JSON.stringify(request),
+      signal: hooks.signal,
+    })
+    if (!response.ok) {
+      const body = await response.text()
+      let detail = body.slice(0, 500)
+      try {
+        const parsed = JSON.parse(body) as { error?: { message?: string; code?: string } }
+        detail = parsed.error?.message ?? parsed.error?.code ?? detail
+      } catch {
+        // Preserve the bounded response text when the sidecar did not return JSON.
+      }
+      throw new Error(`Harness Router returned ${response.status}: ${detail}`)
+    }
+    const routed = (await response.json()) as {
+      result: AgentRouteResult
+      events?: Array<
+        | { type: 'status'; value: string }
+        | { type: 'model.request'; value: string; attempt?: 'initial' | 'repair' }
+        | { type: 'model.response'; value: string; attempt?: 'initial' | 'repair' }
+        | { type: 'delta'; value: string }
+      >
+      trace: HarnessTrace
+    }
+    for (const event of routed.events ?? []) {
+      if (event.type === 'status') await hooks.onStatus(event.value)
+      else if (event.type === 'model.request') await hooks.onModelRequest(event.value)
+      else if (event.type === 'model.response') await hooks.onModelResponse(event.value)
+      else await hooks.onDelta(event.value)
+    }
+    await hooks.onTrace(routed.trace)
+    return routed.result
+  }
 
   async run(request: HarnessRequest, hooks: HarnessHooks): Promise<HarnessResult> {
     await hooks.onStatus('DeepSeek Harness Sidecar 正在执行')

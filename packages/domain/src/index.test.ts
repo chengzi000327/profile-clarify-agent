@@ -50,4 +50,12 @@ describe('domain rules', () => {
       'NAME',
     ])
   })
+
+  it('候选人资料发现显式敏感属性字段时拒绝', () => {
+    expect(detectPII('年龄：32，性别：女，婚育：已婚')).toEqual([
+      'AGE',
+      'GENDER',
+      'MARITAL_OR_FAMILY',
+    ])
+  })
 })

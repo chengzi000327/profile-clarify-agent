@@ -87,6 +87,9 @@ export const api = {
   getTraceAudits() {
     return request('/api/v1/admin/trace-audits');
   },
+  getAgentPolicy() {
+    return request('/api/v1/admin/agent-policy');
+  },
   updateAgentPolicy(initialBudget, extensionSize) {
     return request('/api/v1/admin/agent-policy', {
       method: 'PUT',

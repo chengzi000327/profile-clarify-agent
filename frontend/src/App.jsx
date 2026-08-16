@@ -182,7 +182,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [actor, activeRoleId]);
+  }, [actor, activeRoleId, activeView]);
 
   async function loadRoleSessions(cancelled = false, preferredRoleId = null) {
     const result = await api.listRoleSessions();
@@ -527,7 +527,7 @@ function App() {
         {requestError && <div className="workspace-error"><AlertTriangle size={14} />{requestError}<button onClick={() => setRequestError('')}><X size={13} /></button></div>}
 
         {activeView === 'admin-trace' && actor.role === 'ADMIN' ? (
-          <AdminTraceConsole />
+          <AdminTraceConsole onPolicyUpdated={() => refreshConversation()} />
         ) : activeView === 'conversation' ? (
           <ConversationView
             activeRole={activeRole}
@@ -749,7 +749,9 @@ function ConversationView({
             <ClarifierMark size={40} plate />
             <div>
               <h1>{activeRole.name}岗位澄清</h1>
-              <p>用人经理、HR和企业管理员可以在同一会话中补充事实、追问Agent并持续生成岗位画像。每条消息都会保留真实身份。</p>
+              <p>{actor.role === 'ADMIN'
+                ? '这里只展示你与 Agent 的对话；经理和 HR 的对话请在 Trace 控制台中审计。'
+                : '这里只展示你与 Agent 的对话；其他协作成员的消息不会出现在这里。'}</p>
             </div>
             <button className="conversation-profile-link" onClick={onOpenProfile}>查看岗位画像<ChevronRight size={14} /></button>
           </div>
@@ -791,7 +793,7 @@ function ConversationView({
                     <div className="persisted-question">
                       <span><CircleDot size={13} />第 {structured.round_ordinal} / {structured.budget} 轮主动澄清</span>
                       <strong>{structured.question}</strong>
-                      <small>经理、HR或企业管理员都可以直接在下方回答。</small>
+                      <small>这条问题只会出现在你与 Agent 的对话中，你可以直接在下方回答。</small>
                     </div>
                   )}
                   {structured.kind === 'CLARIFICATION_LIMIT' && (

@@ -5,6 +5,8 @@ import {
   eq,
   gt,
   inArray,
+  or,
+  type SQL,
 } from 'drizzle-orm'
 import { drizzle, type PostgresJsDatabase } from 'drizzle-orm/postgres-js'
 import postgres, { type Sql } from 'postgres'
@@ -29,6 +31,9 @@ import type {
   ManagerTaskRecord,
   RoleAggregate,
   RoleAggregateReadOptions,
+  RecruitingContextImport,
+  RecruitingContextQuery,
+  RecruitingContextRecord,
   RunRecord,
   StoredUser,
   TraceAccessAuditRecord,
@@ -51,6 +56,10 @@ const roleBusinessState = (
   hc_status: state.hc_status,
   facts: state.facts,
   conflicts: state.conflicts,
+  ...(state.public_job_basics ? { public_job_basics: state.public_job_basics } : {}),
+  ...(state.hr_recruiting_context
+    ? { hr_recruiting_context: state.hr_recruiting_context }
+    : {}),
   latest_artifacts: state.latest_artifacts,
   candidate_count: state.candidate_count,
   candidate_channels: state.candidate_channels,
@@ -344,7 +353,24 @@ export class PostgresStore implements ApplicationStore {
 
   async createRoleAggregate(aggregate: RoleAggregate): Promise<void> {
     await this.db.transaction(async (tx) => {
-      const policy = this.makeDefaultPolicy(aggregate.state.id)
+      const [tenantPolicy] = await tx
+        .select({
+          initialBudget: schema.roleSessions.clarificationInitialBudget,
+          extensionSize: schema.roleSessions.clarificationExtensionSize,
+        })
+        .from(schema.roleSessions)
+        .where(eq(schema.roleSessions.tenantId, aggregate.state.tenant_id))
+        .orderBy(desc(schema.roleSessions.clarificationUpdatedAt))
+        .limit(1)
+      const policy = this.makeDefaultPolicy(
+        aggregate.state.id,
+        tenantPolicy
+          ? {
+              initial_budget: tenantPolicy.initialBudget,
+              extension_size: tenantPolicy.extensionSize,
+            }
+          : undefined,
+      )
       await tx.insert(schema.roleSessions).values({
         id: aggregate.state.id,
         tenantId: aggregate.state.tenant_id,
@@ -679,6 +705,32 @@ export class PostgresStore implements ApplicationStore {
     return rows.map(conversationMessageFromRow)
   }
 
+  async listConversationMessagesForActor(
+    roleSessionId: string,
+    actorUserId: string,
+    afterSequence = 0,
+  ): Promise<ConversationMessage[]> {
+    const actorRunIds = this.db
+      .select({ id: schema.agentRuns.id })
+      .from(schema.agentRuns)
+      .where(eq(schema.agentRuns.actorUserId, actorUserId))
+    const rows = await this.db
+      .select()
+      .from(schema.conversationMessages)
+      .where(
+        and(
+          eq(schema.conversationMessages.roleSessionId, roleSessionId),
+          gt(schema.conversationMessages.sequence, afterSequence),
+          or(
+            eq(schema.conversationMessages.senderUserId, actorUserId),
+            inArray(schema.conversationMessages.runId, actorRunIds),
+          ),
+        ),
+      )
+      .orderBy(asc(schema.conversationMessages.sequence))
+    return rows.map(conversationMessageFromRow)
+  }
+
   async appendConversationMessage(message: ConversationMessage): Promise<void> {
     await this.db.insert(schema.conversationMessages).values({
       id: message.id,
@@ -731,12 +783,21 @@ export class PostgresStore implements ApplicationStore {
     if (rows.length !== 1) throw new Error('ROLE_SESSION_NOT_FOUND')
   }
 
-  async getOpenClarificationRound(roleSessionId: string): Promise<ClarificationRound | null> {
+  async getOpenClarificationRound(
+    roleSessionId: string,
+    actorUserId: string,
+  ): Promise<ClarificationRound | null> {
+    const actorRunIds = this.db
+      .select({ id: schema.agentRuns.id })
+      .from(schema.agentRuns)
+      .where(eq(schema.agentRuns.actorUserId, actorUserId))
     const row = await this.db.query.clarificationRounds.findFirst({
       where: and(
         eq(schema.clarificationRounds.roleSessionId, roleSessionId),
         eq(schema.clarificationRounds.status, 'OPEN'),
+        inArray(schema.clarificationRounds.openedByRunId, actorRunIds),
       ),
+      orderBy: desc(schema.clarificationRounds.ordinal),
     })
     return row ? clarificationRoundFromRow(row) : null
   }
@@ -833,12 +894,131 @@ export class PostgresStore implements ApplicationStore {
     }))
   }
 
-  private makeDefaultPolicy(roleSessionId: string): ClarificationPolicy {
+  async upsertRecruitingContextImport(
+    batch: RecruitingContextImport,
+    records: RecruitingContextRecord[],
+  ): Promise<void> {
+    if (records.some((record) => record.tenant_id !== batch.tenant_id)) {
+      throw new Error('RECRUITING_CONTEXT_TENANT_MISMATCH')
+    }
+    await this.db.transaction(async (tx) => {
+      await tx
+        .insert(schema.recruitingContextImports)
+        .values({
+          id: batch.id,
+          tenantId: batch.tenant_id,
+          sourceRevision: batch.source_revision,
+          sourceFile: batch.source_file,
+          excludedSheets: batch.excluded_sheets,
+          recordCounts: batch.record_counts,
+          importedAt: new Date(batch.imported_at),
+        })
+        .onConflictDoUpdate({
+          target: schema.recruitingContextImports.id,
+          set: {
+            sourceRevision: batch.source_revision,
+            sourceFile: batch.source_file,
+            excludedSheets: batch.excluded_sheets,
+            recordCounts: batch.record_counts,
+            importedAt: new Date(batch.imported_at),
+          },
+        })
+
+      for (let offset = 0; offset < records.length; offset += 100) {
+        const chunk = records.slice(offset, offset + 100)
+        await tx
+          .insert(schema.recruitingContextRecords)
+          .values(chunk.map((record) => ({
+            tenantId: record.tenant_id,
+            recordType: record.record_type,
+            externalId: record.external_id,
+            teamId: record.team_id,
+            roleTitle: record.role_title,
+            conversationId: record.conversation_id,
+            sourceSystem: record.source_system,
+            dataClassification: record.data_classification,
+            effectiveAt: record.effective_at ? new Date(record.effective_at) : null,
+            content: record.content,
+            importId: record.import_id,
+            updatedAt: new Date(),
+          })))
+          .onConflictDoNothing()
+        // Drizzle's bulk upsert cannot reference each excluded row in a static set clause, so
+        // update each record after the conflict-safe insert to keep re-imports fully idempotent.
+        for (const record of chunk) {
+          await tx
+            .update(schema.recruitingContextRecords)
+            .set({
+              teamId: record.team_id,
+              roleTitle: record.role_title,
+              conversationId: record.conversation_id,
+              sourceSystem: record.source_system,
+              dataClassification: record.data_classification,
+              effectiveAt: record.effective_at ? new Date(record.effective_at) : null,
+              content: record.content,
+              importId: record.import_id,
+              updatedAt: new Date(),
+            })
+            .where(and(
+              eq(schema.recruitingContextRecords.tenantId, record.tenant_id),
+              eq(schema.recruitingContextRecords.recordType, record.record_type),
+              eq(schema.recruitingContextRecords.externalId, record.external_id),
+            ))
+        }
+      }
+    })
+  }
+
+  async listRecruitingContextRecords(
+    actor: ActorContext,
+    query: RecruitingContextQuery,
+  ): Promise<RecruitingContextRecord[]> {
+    const predicates: SQL[] = [
+      eq(schema.recruitingContextRecords.tenantId, actor.tenant_id),
+      inArray(schema.recruitingContextRecords.recordType, query.record_types),
+    ]
+    if (query.team_id) {
+      predicates.push(eq(schema.recruitingContextRecords.teamId, query.team_id))
+    }
+    if (query.role_title) {
+      predicates.push(eq(schema.recruitingContextRecords.roleTitle, query.role_title))
+    }
+    const rows = await this.db
+      .select()
+      .from(schema.recruitingContextRecords)
+      .where(and(...predicates))
+      .orderBy(
+        asc(schema.recruitingContextRecords.recordType),
+        asc(schema.recruitingContextRecords.externalId),
+      )
+      .limit(Math.min(Math.max(query.limit ?? 1_000, 1), 1_000))
+    return rows.map((row) => ({
+      tenant_id: row.tenantId,
+      record_type: row.recordType as RecruitingContextRecord['record_type'],
+      external_id: row.externalId,
+      team_id: row.teamId,
+      role_title: row.roleTitle,
+      conversation_id: row.conversationId,
+      source_system: row.sourceSystem,
+      data_classification: row.dataClassification,
+      effective_at: row.effectiveAt ? iso(row.effectiveAt) : null,
+      content: row.content,
+      import_id: row.importId,
+    }))
+  }
+
+  private makeDefaultPolicy(
+    roleSessionId: string,
+    defaults: Pick<ClarificationPolicy, 'initial_budget' | 'extension_size'> = {
+      initial_budget: 6,
+      extension_size: 2,
+    },
+  ): ClarificationPolicy {
     return {
       role_session_id: roleSessionId,
-      initial_budget: 6,
+      initial_budget: defaults.initial_budget,
       granted_rounds: 0,
-      extension_size: 2,
+      extension_size: defaults.extension_size,
       completed_rounds: 0,
       opened_rounds: 0,
       open_round_id: null,

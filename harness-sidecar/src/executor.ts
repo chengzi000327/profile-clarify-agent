@@ -2,9 +2,20 @@ import { existsSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import {
+  HARNESS_TASK_TOOL_POLICY,
+  type AgentRouteRequest,
+  type AgentRouteResult,
+  type RoleAgentToolName,
+} from '@role-clarifier/contracts'
 import type { SidecarConfig } from './config.js'
 import { buildContextSnapshot, buildRepairPrompt, buildTaskPrompt } from './prompts.js'
 import { JsonRpcHarnessRuntime, type RuntimeTurn } from './protocol-client.js'
+import {
+  buildRoutePrompt,
+  buildRouteRepairPrompt,
+  parseAgentRouteResult,
+} from './routing.js'
 import {
   parseHarnessResult,
   requiredSaveTool,
@@ -41,12 +52,63 @@ export interface SidecarExecution {
   }
 }
 
+export interface SidecarRouteExecution {
+  result: AgentRouteResult
+  events: SidecarEvent[]
+  trace: SidecarExecution['trace']
+}
+
 const HARNESS_COMMIT = '47f943859bef60e4160492346772ded9b24f765a'
 
 export const maxTokensForTask = (task: HarnessTask, configuredMaximum: number): number => {
   if (task === 'CLARIFY_MESSAGE') return Math.min(configuredMaximum, 4_096)
   if (task === 'EXTRACT_CANDIDATES') return Math.min(configuredMaximum, 8_192)
   return configuredMaximum
+}
+
+export const assertTaskToolPolicy = (
+  task: HarnessTask,
+  calledTools: string[],
+  successfulTools: string[],
+): void => {
+  const policy = HARNESS_TASK_TOOL_POLICY[task]
+  const unexpected = [...new Set(calledTools.filter((name) =>
+    !(policy.allowed as readonly RoleAgentToolName[]).includes(name as RoleAgentToolName)))]
+  if (unexpected.length > 0) {
+    throw new Error(`Harness called tools outside ${task} allowlist: ${unexpected.join(', ')}`)
+  }
+  for (const name of policy.required) {
+    if (!successfulTools.includes(name)) {
+      throw new Error(`Harness did not complete required tool: ${name}`)
+    }
+  }
+}
+
+const assertTaskResult = (task: HarnessTask, result: HarnessResult): void => {
+  if (task === 'CLARIFY_MESSAGE' && result.kind !== 'CLARIFICATION') {
+    throw new Error(`Task ${task} cannot return ${result.kind}`)
+  }
+  if (task === 'EXTRACT_CANDIDATES' && result.kind !== 'CANDIDATE_EVIDENCE') {
+    throw new Error(`Task ${task} cannot return ${result.kind}`)
+  }
+  if (task === 'CALIBRATION_ADVICE' && result.kind !== 'CALIBRATION_ADVICE') {
+    throw new Error(`Task ${task} cannot return ${result.kind}`)
+  }
+  if (task === 'VERSION_COMPARISON' && result.kind !== 'VERSION_COMPARISON') {
+    throw new Error(`Task ${task} cannot return ${result.kind}`)
+  }
+  const artifactTypeByTask: Partial<Record<HarnessTask, string>> = {
+    GENERATE_ROLE_PROFILE: 'ROLE_PROFILE',
+    GENERATE_ASSESSMENT: 'ASSESSMENT_SCORECARD',
+    GENERATE_JD: 'PUBLIC_JD',
+    GENERATE_HR_BRIEF: 'HR_RECRUITING_BRIEF',
+  }
+  const expectedArtifact = artifactTypeByTask[task]
+  if (expectedArtifact && (
+    result.kind !== 'ARTIFACT' || result.artifact_type !== expectedArtifact
+  )) {
+    throw new Error(`Task ${task} must return ${expectedArtifact} artifact`)
+  }
 }
 
 const combineTurns = (turns: RuntimeTurn[]) => ({
@@ -75,6 +137,9 @@ export const recoverResultFromTool = (
   request: HarnessRequest,
   calls: Array<{ name: string; arguments: unknown }>,
 ): HarnessResult => {
+  if (request.task === 'VERSION_COMPARISON') {
+    throw new Error('Cannot recover a model-generated version comparison')
+  }
   const toolName = requiredSaveTool(request.task)
   const call = lastSuccessfulCall(calls, toolName)
   if (request.task === 'CLARIFY_MESSAGE' && (!call || !isRecord(call.arguments))) {
@@ -109,20 +174,6 @@ export const recoverResultFromTool = (
       fact_draft: { category: args.category, statement: args.statement },
     }))
   }
-  if (request.task === 'EXTRACT_CANDIDATES') {
-    return parseHarnessResult(JSON.stringify({
-      kind: 'CANDIDATE_EVIDENCE',
-      persistence: 'TOOL',
-      candidates: args.candidates,
-    }))
-  }
-  if (request.task === 'CALIBRATION_ADVICE') {
-    return parseHarnessResult(JSON.stringify({
-      kind: 'CALIBRATION_ADVICE',
-      persistence: 'TOOL',
-      proposed_change: args.proposed_change,
-    }))
-  }
   return parseHarnessResult(JSON.stringify({
     kind: 'ARTIFACT',
     persistence: 'TOOL',
@@ -138,6 +189,105 @@ export class HarnessExecutor {
     return {
       runtime: existsSync(this.config.DSH_RUNTIME_BIN) && existsSync(this.config.DSH_CORDIS_CONFIG),
       credential: Boolean(this.config.DEEPSEEK_API_KEY),
+    }
+  }
+
+  async route(request: AgentRouteRequest, signal: AbortSignal): Promise<SidecarRouteExecution> {
+    const startedAt = Date.now()
+    const readiness = this.readiness()
+    if (!readiness.runtime) {
+      throw new Error('Harness runtime is not prepared; run corepack pnpm harness:prepare')
+    }
+    if (!readiness.credential) {
+      throw new Error('DEEPSEEK_API_KEY is required for real Harness mode')
+    }
+    const model = this.config.DEEPSEEK_FLASH_MODEL
+    const sessionRoot = await mkdtemp(join(tmpdir(), 'role-router-dsh-'))
+    const runtime = new JsonRpcHarnessRuntime({
+      runtimeBin: this.config.DSH_RUNTIME_BIN,
+      cordisConfig: this.config.DSH_CORDIS_CONFIG,
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        DEEPSEEK_API_KEY: this.config.DEEPSEEK_API_KEY,
+        ...(this.config.DEEPSEEK_BASE_URL ? { DEEPSEEK_BASE_URL: this.config.DEEPSEEK_BASE_URL } : {}),
+        ROLE_AGENT_INTERNAL_URL: this.config.ROLE_AGENT_INTERNAL_URL,
+        ROLE_AGENT_TOOL_TOKEN: this.config.ROLE_AGENT_TOOL_TOKEN,
+        ROLE_AGENT_ALLOWED_TOOLS: '[]',
+        ROLE_AGENT_MODE: 'router',
+        DSH_SESSION_ROOT: sessionRoot,
+      },
+      model,
+      provider: 'deepseek-official',
+      maxTokens: Math.min(this.config.DSH_MAX_TOKENS, 4_096),
+      requestTimeoutMs: this.config.DSH_RUN_TIMEOUT_MS,
+    })
+    const sessionId = `route-${request.role_state.id}`
+    const turns: RuntimeTurn[] = []
+    const events: SidecarEvent[] = []
+    let repaired = false
+    const runSignal = AbortSignal.any([
+      signal,
+      AbortSignal.timeout(this.config.DSH_RUN_TIMEOUT_MS),
+    ])
+    try {
+      const initialPrompt = buildRoutePrompt(request)
+      events.push({ type: 'model.request', value: initialPrompt, attempt: 'initial' })
+      const initial = await runtime.runTurn(sessionId, initialPrompt, runSignal, 0)
+      turns.push(initial)
+      events.push({ type: 'model.response', value: initial.finalResponse, attempt: 'initial' })
+      if (initial.finishReason !== 'completed') {
+        throw new Error(`Router turn ended with ${initial.finishReason ?? 'unknown reason'}`)
+      }
+      let result: AgentRouteResult
+      try {
+        result = parseAgentRouteResult(initial.finalResponse)
+      } catch (error) {
+        repaired = true
+        const repairPrompt = buildRouteRepairPrompt(
+          error instanceof Error ? error.message : String(error),
+        )
+        events.push({ type: 'model.request', value: repairPrompt, attempt: 'repair' })
+        const repair = await runtime.runTurn(sessionId, repairPrompt, runSignal, 0)
+        turns.push(repair)
+        events.push({ type: 'model.response', value: repair.finalResponse, attempt: 'repair' })
+        if (repair.finishReason !== 'completed') {
+          throw new Error(`Router repair turn ended with ${repair.finishReason ?? 'unknown reason'}`)
+        }
+        result = parseAgentRouteResult(repair.finalResponse)
+      }
+      const combined = combineTurns(turns)
+      if (combined.tools.length > 0) {
+        throw new Error(`Router attempted forbidden tools: ${combined.tools.join(', ')}`)
+      }
+      const visibleText = result.action === 'ASK'
+        ? result.question
+        : result.action === 'RESPOND'
+          ? result.answer
+          : `已交接任务 ${result.task}`
+      return {
+        result,
+        events: [
+          { type: 'status', value: `${model} 已完成无工具意图路由` },
+          ...events,
+          ...(result.action === 'HANDOFF' ? [] : [{ type: 'delta' as const, value: visibleText }]),
+        ],
+        trace: {
+          model,
+          provider: 'deepseek-official',
+          harness_source_version: '0.1.0-rc.5',
+          harness_commit: HARNESS_COMMIT,
+          tool_count: 0,
+          input_tokens: combined.inputTokens,
+          output_tokens: combined.outputTokens,
+          duration_ms: Date.now() - startedAt,
+          repaired,
+          recovered_from_tool: false,
+        },
+      }
+    } finally {
+      await runtime.close()
+      await rm(sessionRoot, { recursive: true, force: true })
     }
   }
 
@@ -165,6 +315,8 @@ export class HarnessExecutor {
         ...(this.config.DEEPSEEK_BASE_URL ? { DEEPSEEK_BASE_URL: this.config.DEEPSEEK_BASE_URL } : {}),
         ROLE_AGENT_INTERNAL_URL: this.config.ROLE_AGENT_INTERNAL_URL,
         ROLE_AGENT_TOOL_TOKEN: this.config.ROLE_AGENT_TOOL_TOKEN,
+        ROLE_AGENT_ALLOWED_TOOLS: JSON.stringify(HARNESS_TASK_TOOL_POLICY[request.task].allowed),
+        ROLE_AGENT_MODE: 'domain',
         DSH_SESSION_ROOT: sessionRoot,
       },
       model,
@@ -227,14 +379,30 @@ export class HarnessExecutor {
       if (combined.tools.length > request.maximum_transitions) {
         throw new Error(`Harness exceeded ${request.maximum_transitions} tool transitions`)
       }
-      const required = result.kind === 'CONVERSATION'
-        ? []
-        : ['read_role_state', requiredSaveTool(request.task)]
-      for (const name of required) {
-        if (!combined.successfulTools.includes(name)) {
-          throw new Error(`Harness did not complete required tool: ${name}`)
+      if (request.task === 'VERSION_COMPARISON' && result.kind === 'VERSION_COMPARISON') {
+        const expected = request.version_comparison
+        if (
+          !expected
+          || result.artifact_type !== expected.artifact_type
+          || result.from_version !== expected.from_version
+          || result.to_version !== expected.to_version
+        ) {
+          throw new Error('VERSION_COMPARISON result does not match requested versions')
+        }
+        const diffCalls = combined.successfulToolCalls.filter((call) =>
+          call.name === 'read_version_diff')
+        if (
+          diffCalls.length !== 1
+          || !isRecord(diffCalls[0]?.arguments)
+          || diffCalls[0].arguments.artifact_type !== expected.artifact_type
+          || diffCalls[0].arguments.from_version !== expected.from_version
+          || diffCalls[0].arguments.to_version !== expected.to_version
+        ) {
+          throw new Error('read_version_diff arguments do not match requested versions')
         }
       }
+      assertTaskResult(request.task, result)
+      assertTaskToolPolicy(request.task, combined.tools, combined.successfulTools)
       const events: SidecarEvent[] = [
         { type: 'status', value: `${model} 已完成真实 Harness 推理` },
         { type: 'context.snapshot', value: '本轮上下文分层快照', context: contextSnapshot },

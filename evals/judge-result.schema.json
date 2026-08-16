@@ -1,0 +1,152 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://role-clarifier.local/evals/judge-result.schema.json",
+  "title": "Role Clarifier Eval Judge Result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "case_id",
+    "variant_id",
+    "run_id",
+    "prompt_version",
+    "model",
+    "p0_pass",
+    "answer_assertions",
+    "trace_assertions",
+    "state_assertions",
+    "score",
+    "verdict"
+  ],
+  "properties": {
+    "case_id": {
+      "type": "string",
+      "pattern": "^S-(0[1-9]|1[0-2])$"
+    },
+    "variant_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "prompt_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "model": {
+      "type": "string",
+      "minLength": 1
+    },
+    "p0_pass": {
+      "type": "boolean"
+    },
+    "p0_violations": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/assertion"
+      },
+      "default": []
+    },
+    "answer_assertions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/assertion"
+      }
+    },
+    "trace_assertions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/assertion"
+      }
+    },
+    "state_assertions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/assertion"
+      }
+    },
+    "score": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "verdict": {
+      "type": "string",
+      "enum": ["PASS", "FAIL"]
+    },
+    "failure_labels": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Z][A-Z0-9_]+$"
+      },
+      "uniqueItems": true,
+      "default": []
+    },
+    "judge_summary": {
+      "type": "string"
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "answer_path": {"type": "string"},
+        "trace_path": {"type": "string"},
+        "state_before_path": {"type": "string"},
+        "state_after_path": {"type": "string"}
+      }
+    }
+  },
+  "$defs": {
+    "assertion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "passed", "expected", "actual"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "passed": {
+          "type": "boolean"
+        },
+        "priority": {
+          "type": "string",
+          "enum": ["P0", "P1", "P2"]
+        },
+        "expected": {},
+        "actual": {},
+        "evidence": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "p0_pass": {"const": false}
+        }
+      },
+      "then": {
+        "properties": {
+          "verdict": {"const": "FAIL"}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "verdict": {"const": "PASS"}
+        }
+      },
+      "then": {
+        "properties": {
+          "p0_pass": {"const": true}
+        }
+      }
+    }
+  ]
+}

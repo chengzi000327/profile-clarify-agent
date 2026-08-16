@@ -2,27 +2,27 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-agent'
 import { defineTool, type JsonValue } from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-system-prompt'
-import { FACT_CATEGORIES, ROLE_CLARIFIER_SYSTEM_PROMPT } from '@role-clarifier/agent-spec'
+import {
+  FACT_CATEGORIES,
+  ROLE_AGENT_TOOL_NAMES,
+  ROLE_CLARIFIER_SYSTEM_PROMPT,
+  ROLE_ROUTER_SYSTEM_PROMPT,
+  type RoleAgentToolName,
+} from '@role-clarifier/agent-spec'
 
 export interface Config {
   apiBaseUrl?: string
   toolToken?: string
   timeoutMs?: number
+  allowedTools?: string[]
+  mode?: 'domain' | 'router'
 }
 
-export const inject = ['tools', 'systemPrompt'] as const
+export const inject = ['agents', 'tools', 'systemPrompt'] as const
 
-const allowedToolNames = [
-  'read_role_state',
-  'update_role_identity_draft',
-  'save_fact_draft',
-  'save_artifact_draft',
-  'save_candidate_evidence',
-  'propose_calibration_signal',
-  'read_version_diff',
-] as const
+export const ROLE_CLARIFIER_TOOL_ALLOWLIST = new Set<string>(ROLE_AGENT_TOOL_NAMES)
 
-export const ROLE_CLARIFIER_TOOL_ALLOWLIST = new Set<string>(allowedToolNames)
+type RuntimeConfig = Required<Omit<Config, 'allowedTools' | 'mode'>>
 
 const toolOutput = {
   schema: { type: 'json' as const },
@@ -35,7 +35,7 @@ const toolOutput = {
 }
 
 const callBusinessTool = async (
-  config: Required<Config>,
+  config: RuntimeConfig,
   name: string,
   args: unknown,
   signal: AbortSignal,
@@ -61,16 +61,26 @@ const callBusinessTool = async (
 }
 
 export const apply = (ctx: Context, input: Config = {}): void => {
-  const config: Required<Config> = {
+  const requestedTools = input.allowedTools ?? []
+  const unknownTools = requestedTools.filter((name) => !ROLE_CLARIFIER_TOOL_ALLOWLIST.has(name))
+  if (unknownTools.length > 0) {
+    throw new Error(`Unknown role-clarifier tools requested: ${unknownTools.join(', ')}`)
+  }
+  const allowedTools = [...new Set(requestedTools)] as RoleAgentToolName[]
+  const config: RuntimeConfig = {
     apiBaseUrl: input.apiBaseUrl ?? 'http://api:4100',
     toolToken: input.toolToken ?? '',
     timeoutMs: input.timeoutMs ?? 5_000,
   }
 
+  ctx.on('agent/created', ({ agent }) => {
+    agent.ctx.tools.restrict({ allow: allowedTools })
+  })
+
   ctx.systemPrompt.section({
     name: 'role-clarifier:guardrails',
     order: 20,
-    text: ROLE_CLARIFIER_SYSTEM_PROMPT,
+    text: input.mode === 'router' ? ROLE_ROUTER_SYSTEM_PROMPT : ROLE_CLARIFIER_SYSTEM_PROMPT,
   })
 
   ctx.tools.register(
@@ -84,6 +94,43 @@ export const apply = (ctx: Context, input: Config = {}): void => {
         return callBusinessTool(
           config,
           'read_role_state',
+          args,
+          exec.signal,
+          String(exec.agent?.session.id ?? ''),
+        )
+      },
+    }),
+  )
+
+  ctx.tools.register(
+    defineTool({
+      name: 'read_recruiting_context',
+      description: '按当前岗位和用户权限读取最小化的组织能力、历史澄清、招聘漏斗或智联岗位参考；员工敏感字段不会返回。',
+      parameters: {
+        projection: {
+          type: 'string',
+          required: true,
+          enum: [
+            'ORGANIZATION',
+            'CLARIFICATION_HISTORY',
+            'RECRUITING_FUNNEL',
+            'MARKET_JD_REFERENCE',
+          ],
+        },
+        team_id: { type: 'string' },
+        role_title: { type: 'string' },
+        session_type: { type: 'string' },
+        topic: { type: 'string' },
+        query: { type: 'string' },
+        offset: { type: 'integer' },
+        limit: { type: 'integer' },
+      },
+      output: toolOutput,
+      timeoutMs: config.timeoutMs,
+      async execute(args, exec) {
+        return callBusinessTool(
+          config,
+          'read_recruiting_context',
           args,
           exec.signal,
           String(exec.agent?.session.id ?? ''),

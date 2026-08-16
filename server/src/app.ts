@@ -16,9 +16,12 @@ import {
   ClarificationPolicySchema,
   ConversationMessageSchema,
   FactCategorySchema,
+  HARNESS_TASK_TOOL_POLICY,
+  HRRecruitingBriefSchema,
   HumanDecisionSchema,
   LoginRequestSchema,
   MessageRequestSchema,
+  PublicJobBasicsUpdateSchema,
   PublicJDSchema,
   RoleStateSchema,
   type ActorContext,
@@ -26,12 +29,18 @@ import {
   type ArtifactType,
   type CandidateEvidence,
   type ConversationMessage,
+  type HarnessDomainTask,
+  type RoleAgentToolName,
 } from '@role-clarifier/contracts'
 import { DomainError } from '@role-clarifier/domain'
 import { AgentRunner } from './agent/runner.js'
 import { SidecarHarnessAdapter, type HarnessAdapter } from './agent/harness-adapter.js'
 import type { AppConfig } from './config.js'
 import { RoleService } from './services/role-service.js'
+import {
+  RECRUITING_CONTEXT_PROJECTIONS,
+  RecruitingContextService,
+} from './services/recruiting-context-service.js'
 import { createStore, type ApplicationStore } from './store/index.js'
 import { writeSseEvent } from './http/sse.js'
 import {
@@ -196,11 +205,13 @@ export const buildApp = async (
   await store.initialize()
   await recoverInterruptedRuns(store)
   const roleService = new RoleService(store)
+  const recruitingContextService = new RecruitingContextService(store)
   const runner = new AgentRunner(
     store,
     roleService,
     dependencies.harness ?? new SidecarHarnessAdapter(config),
     config,
+    recruitingContextService,
   )
   const feishu = new FeishuGateway(
     config,
@@ -350,6 +361,20 @@ export const buildApp = async (
     }
     const activeRun = await store.findActiveRunByRole(roleSessionId)
     if (!activeRun) throw new DomainError('HARNESS_CONTEXT_EXPIRED', 'Agent Run 已结束', 409)
+    const { tool_name } = z.object({ tool_name: z.string() }).parse(request.params)
+    const taskPolicy = HARNESS_TASK_TOOL_POLICY[activeRun.run.task as HarnessDomainTask]
+    if (
+      !taskPolicy
+      || !(taskPolicy.allowed as readonly RoleAgentToolName[]).includes(
+        tool_name as RoleAgentToolName,
+      )
+    ) {
+      throw new DomainError(
+        'HARNESS_TOOL_NOT_ALLOWED_FOR_TASK',
+        `当前任务 ${activeRun.run.task} 不允许调用 ${tool_name}`,
+        403,
+      )
+    }
     const user = await store.getUser(activeRun.run.actor_user_id)
     if (!user) throw new DomainError('HARNESS_CONTEXT_EXPIRED', 'Agent Run 用户不存在', 409)
     const actor: ActorContext = {
@@ -358,10 +383,27 @@ export const buildApp = async (
       role: user.role,
       display_name: user.display_name,
     }
-    const { tool_name } = z.object({ tool_name: z.string() }).parse(request.params)
     const body = request.body ?? {}
     if (tool_name === 'read_role_state') {
       return roleService.readStateForTask(roleSessionId, actor, activeRun.run.task)
+    }
+    if (tool_name === 'read_recruiting_context') {
+      const input = z.object({
+        projection: z.enum(RECRUITING_CONTEXT_PROJECTIONS),
+        team_id: z.string().trim().min(1).max(120).optional(),
+        role_title: z.string().trim().min(1).max(120).optional(),
+        session_type: z.string().trim().min(1).max(80).optional(),
+        topic: z.string().trim().min(1).max(120).optional(),
+        query: z.string().trim().min(1).max(200).optional(),
+        offset: z.number().int().min(0).max(1_000).optional(),
+        limit: z.number().int().min(1).max(30).optional(),
+      }).strict().parse(body)
+      return recruitingContextService.read(
+        roleSessionId,
+        actor,
+        activeRun.run.task,
+        input,
+      )
     }
     if (tool_name === 'save_fact_draft') {
       const input = z
@@ -409,6 +451,19 @@ export const buildApp = async (
         })
         .strict()
         .parse(body)
+      const expectedArtifactByTask: Partial<Record<HarnessDomainTask, ArtifactType>> = {
+        GENERATE_ROLE_PROFILE: 'ROLE_PROFILE',
+        GENERATE_ASSESSMENT: 'ASSESSMENT_SCORECARD',
+        GENERATE_JD: 'PUBLIC_JD',
+        GENERATE_HR_BRIEF: 'HR_RECRUITING_BRIEF',
+      }
+      if (expectedArtifactByTask[activeRun.run.task as HarnessDomainTask] !== input.artifact_type) {
+        throw new DomainError(
+          'HARNESS_ARTIFACT_TYPE_NOT_ALLOWED_FOR_TASK',
+          `当前任务 ${activeRun.run.task} 不允许保存 ${input.artifact_type}`,
+          403,
+        )
+      }
       const artifact = await roleService.saveArtifactDraft(
         roleSessionId,
         actor,
@@ -560,7 +615,11 @@ export const buildApp = async (
       .object({ after_sequence: z.coerce.number().int().nonnegative().default(0) })
       .parse(request.query)
     return {
-      items: await store.listConversationMessages(id, query.after_sequence),
+      items: await store.listConversationMessagesForActor(
+        id,
+        request.actor.user_id,
+        query.after_sequence,
+      ),
       policy: await store.getClarificationPolicy(id),
     }
   })
@@ -589,6 +648,14 @@ export const buildApp = async (
         body.fact_ids,
         body.expected_revision,
       ),
+    }
+  })
+
+  app.put('/api/v1/role-sessions/:id/public-job-basics', async (request) => {
+    const { id } = IdParamsSchema.parse(request.params)
+    const body = PublicJobBasicsUpdateSchema.parse(request.body)
+    return {
+      state: await roleService.updatePublicJobBasics(id, request.actor, body),
     }
   })
 
@@ -860,6 +927,21 @@ export const buildApp = async (
     return { initial_budget: body.initial_budget, extension_size: body.extension_size }
   })
 
+  app.get('/api/v1/admin/agent-policy', async (request) => {
+    requireAdmin(request.actor)
+    const roles = await roleService.list(request.actor)
+    const policies = await Promise.all(
+      roles.map((role) => store.getClarificationPolicy(role.id)),
+    )
+    const latest = policies.sort((left, right) =>
+      right.updated_at.localeCompare(left.updated_at),
+    )[0]
+    return {
+      initial_budget: latest?.initial_budget ?? 6,
+      extension_size: latest?.extension_size ?? 2,
+    }
+  })
+
   app.get('/api/v1/openapi.json', async () => ({
     openapi: '3.1.0',
     info: { title: 'Role Clarifier Agent API', version: '0.1.0' },
@@ -873,6 +955,9 @@ export const buildApp = async (
       '/api/v1/role-sessions/{id}/messages': {
         get: { summary: '读取持久化多角色对话和澄清策略' },
         post: { summary: '保存人类消息并创建异步 Agent Run' },
+      },
+      '/api/v1/role-sessions/{id}/public-job-basics': {
+        put: { summary: '由授权人类确认对外 JD 的地点、雇佣类型和可选公开基础字段' },
       },
       '/api/v1/agent-runs/{run_id}/events': {
         get: { summary: '支持 Last-Event-ID 续传的 Agent 事件流' },
@@ -896,6 +981,7 @@ export const buildApp = async (
         ConversationMessage: z.toJSONSchema(ConversationMessageSchema),
         ClarificationPolicy: z.toJSONSchema(ClarificationPolicySchema),
         PublicJD: z.toJSONSchema(PublicJDSchema),
+        HRRecruitingBrief: z.toJSONSchema(HRRecruitingBriefSchema),
         CandidateEvidence: z.toJSONSchema(CandidateEvidenceSchema),
       },
     },

@@ -10,7 +10,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "tsx src/db/migrate.ts"
+    "db:migrate": "tsx src/db/migrate.ts",
+    "db:import-context": "tsx src/db/import-recruiting-context.ts"
   },
   "dependencies": {
     "@fastify/cookie": "11.0.2",

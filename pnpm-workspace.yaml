@@ -1,4 +1,5 @@
 packages:
+  - agent-intro-frontend
   - frontend
   - server
   - harness-sidecar

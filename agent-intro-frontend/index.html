@@ -1,0 +1,1173 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#075beb" />
+  <meta name="description" content="画像澄清 Agent：从意图识别、任务级工具白名单到 Sidecar 执行，把模糊招聘需求收紧成可审计的决策链。" />
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="画像澄清 Agent · 系统设计" />
+  <meta property="og:description" content="模型负责判断，服务端负责边界，人类保留最终决定权。" />
+  <meta property="og:image" content="/og.png" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <title>画像澄清 Agent · 系统设计</title>
+
+  <!-- Distinctive display, CJK, and technical annotation typefaces. -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Noto+Sans+SC:wght@400;500;600;700;800;900&family=Sora:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+
+  <style>
+    /* ===========================================
+       THEME — LIVING BLUEPRINT
+       Change these variables to retheme the deck.
+       =========================================== */
+    :root {
+      --stage-bg: #d8e7ff;
+      --slide-bg: #f7faff;
+      --paper: #ffffff;
+      --blue: #075beb;
+      --blue-2: #2677f4;
+      --deep: #063893;
+      --cyan: #18b8d1;
+      --azure: #77aefb;
+      --pale: #e8f1ff;
+      --pale-2: #d9e8ff;
+      --line: rgba(7, 91, 235, 0.24);
+      --line-soft: rgba(7, 91, 235, 0.1);
+      --text-soft: #4f72ae;
+      --font-display: "Sora", "Noto Sans SC", sans-serif;
+      --font-body: "Noto Sans SC", sans-serif;
+      --font-mono: "IBM Plex Mono", monospace;
+      --ease-blueprint: cubic-bezier(0.16, 1, 0.3, 1);
+      --duration: 680ms;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    /* ===========================================
+       FIXED 16:9 STAGE: MANDATORY BASE STYLES
+       Slides are authored at 1920×1080 and scaled as a whole.
+       =========================================== */
+
+    /* 1. Lock the browser viewport */
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: var(--stage-bg, #000);
+    }
+
+    /* 2. Full-window deck viewport */
+    .deck-viewport {
+      position: fixed;
+      inset: 0;
+      overflow: hidden;
+      background: var(--stage-bg, #000);
+    }
+
+    /* 3. Fixed 16:9 design canvas.
+       JavaScript sets transform: translate(...) scale(...). */
+    .deck-stage {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 1920px;
+      height: 1080px;
+      overflow: hidden;
+      transform-origin: 0 0;
+      background: var(--slide-bg, #fff);
+    }
+
+    /* 4. Slides stack inside the fixed stage.
+       Content must be laid out at 1920×1080, not reflowed per device. */
+    .slide {
+      position: absolute;
+      inset: 0;
+      width: 1920px;
+      height: 1080px;
+      overflow: hidden;
+      display: block;
+      visibility: hidden;
+      opacity: 0;
+      pointer-events: none;
+      background: var(--slide-bg, #fff);
+    }
+
+    .slide.active,
+    .slide.visible {
+      visibility: visible;
+      opacity: 1;
+      pointer-events: auto;
+      z-index: 1;
+    }
+
+    /* 5. Keep media inside authored slide bounds */
+    img,
+    video,
+    canvas,
+    svg {
+      max-width: 100%;
+      max-height: 100%;
+    }
+
+    /* 6. Presentation chrome stays outside the slide design system */
+    .deck-controls {
+      position: fixed;
+      left: 50%;
+      bottom: 22px;
+      transform: translateX(-50%);
+      z-index: 1000;
+    }
+
+    /* 7. Print one fixed-size slide per page */
+    @media print {
+      html,
+      body {
+        width: 1920px;
+        height: auto;
+        overflow: visible;
+        background: #fff;
+      }
+
+      .deck-viewport {
+        position: static;
+        overflow: visible;
+        background: #fff;
+      }
+
+      .deck-stage {
+        position: static;
+        width: auto;
+        height: auto;
+        transform: none !important;
+        background: none;
+      }
+
+      .slide {
+        position: relative;
+        display: block !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        pointer-events: auto !important;
+        width: 1920px;
+        height: 1080px;
+        break-after: page;
+        page-break-after: always;
+      }
+
+      .slide:last-child {
+        break-after: auto;
+        page-break-after: auto;
+      }
+
+      .deck-controls {
+        display: none !important;
+      }
+    }
+
+    /* 8. Reduced motion */
+    @media (prefers-reduced-motion: reduce) {
+      *,
+      *::before,
+      *::after {
+        animation-duration: 0.01ms !important;
+        transition-duration: 0.2s !important;
+      }
+    }
+
+    /* ===========================================
+       GLOBAL SLIDE LANGUAGE
+       Shared grid, chrome, typography, and reveals.
+       =========================================== */
+    body {
+      color: var(--deep);
+      font-family: var(--font-body);
+      -webkit-font-smoothing: antialiased;
+      text-rendering: geometricPrecision;
+    }
+
+    button, a { font: inherit; }
+    button { color: inherit; }
+
+    .slide {
+      background:
+        radial-gradient(circle at 79% 43%, rgba(92, 171, 255, 0.2), transparent 28%),
+        linear-gradient(145deg, #ffffff 0%, #f6f9ff 55%, #eaf3ff 100%);
+    }
+
+    .slide::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(7, 91, 235, 0.055) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(7, 91, 235, 0.055) 1px, transparent 1px);
+      background-size: 60px 60px;
+      pointer-events: none;
+    }
+
+    .slide::after {
+      content: "";
+      position: absolute;
+      right: -240px;
+      top: -280px;
+      width: 720px;
+      height: 720px;
+      border: 1px solid rgba(7, 91, 235, 0.12);
+      border-radius: 50%;
+      box-shadow:
+        0 0 0 76px rgba(7, 91, 235, 0.025),
+        0 0 0 160px rgba(7, 91, 235, 0.018);
+      pointer-events: none;
+    }
+
+    .slide-shell { position: absolute; inset: 0; z-index: 2; }
+
+    .slide-header {
+      position: absolute;
+      left: 76px;
+      right: 76px;
+      top: 48px;
+      height: 72px;
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      border-top: 2px solid var(--blue);
+      padding-top: 18px;
+      font-family: var(--font-mono);
+      color: var(--blue);
+      font-size: 15px;
+      font-weight: 600;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+    }
+
+    .slide-header .section-id { display: flex; gap: 18px; }
+    .slide-header .section-id b { color: var(--cyan); }
+    .slide-header .system-mark { color: var(--text-soft); }
+
+    .slide-title {
+      position: absolute;
+      left: 76px;
+      top: 150px;
+      margin: 0;
+      font-family: var(--font-display);
+      font-size: 72px;
+      line-height: 1.08;
+      letter-spacing: -0.045em;
+      color: var(--deep);
+      font-weight: 800;
+    }
+
+    .slide-title span { color: var(--blue); }
+
+    .slide-intro {
+      position: absolute;
+      right: 76px;
+      top: 164px;
+      width: 570px;
+      color: var(--text-soft);
+      font-size: 21px;
+      line-height: 1.65;
+      font-weight: 500;
+    }
+
+    .mono { font-family: var(--font-mono); }
+    .accent { color: var(--blue); }
+    .cyan { color: var(--cyan); }
+
+    .reveal,
+    .reveal-left,
+    .reveal-scale,
+    .reveal-blur {
+      opacity: 0;
+      transition:
+        opacity var(--duration) var(--ease-blueprint),
+        transform var(--duration) var(--ease-blueprint),
+        filter var(--duration) var(--ease-blueprint);
+    }
+
+    .reveal { transform: translateY(28px); }
+    .reveal-left { transform: translateX(-42px); }
+    .reveal-scale { transform: scale(0.92); }
+    .reveal-blur { filter: blur(10px); }
+    .slide.visible .reveal,
+    .slide.visible .reveal-left,
+    .slide.visible .reveal-scale,
+    .slide.visible .reveal-blur { opacity: 1; transform: none; filter: none; }
+    .delay-1 { transition-delay: 90ms; }
+    .delay-2 { transition-delay: 180ms; }
+    .delay-3 { transition-delay: 270ms; }
+    .delay-4 { transition-delay: 360ms; }
+    .delay-5 { transition-delay: 450ms; }
+    .delay-6 { transition-delay: 540ms; }
+
+    .trace-line {
+      fill: none;
+      stroke: url(#flowGradient);
+      stroke-width: 3;
+      stroke-dasharray: 12 10;
+      animation: traceFlow 4s linear infinite;
+    }
+
+    @keyframes traceFlow { to { stroke-dashoffset: -44; } }
+    @keyframes signalPulse {
+      0%, 100% { opacity: 0.55; transform: scale(0.78); }
+      50% { opacity: 1; transform: scale(1.18); }
+    }
+    @keyframes haloBreathe {
+      0%, 100% { transform: scale(0.98); opacity: 0.7; }
+      50% { transform: scale(1.03); opacity: 1; }
+    }
+
+    /* ===========================================
+       SLIDE 01 — HERO / LIVING BLUEPRINT
+       The selected visual direction expanded from the preview.
+       =========================================== */
+    .hero-nav {
+      position: absolute;
+      left: 76px;
+      right: 76px;
+      top: 50px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      color: var(--text-soft);
+      font-family: var(--font-mono);
+      font-size: 15px;
+      letter-spacing: 0.06em;
+    }
+
+    .hero-logo { display: flex; align-items: center; gap: 15px; color: var(--blue); font-weight: 700; }
+    .hero-logo-mark { width: 38px; height: 38px; border: 2px solid var(--blue); border-radius: 50%; position: relative; }
+    .hero-logo-mark::after { content: ""; position: absolute; inset: 8px; border: 2px solid var(--cyan); border-radius: 50%; }
+
+    .hero-copy { position: absolute; left: 80px; top: 205px; width: 860px; }
+    .hero-eyebrow { display: flex; align-items: center; gap: 16px; color: var(--blue); font: 600 17px/1 var(--font-mono); letter-spacing: 0.09em; }
+    .hero-eyebrow::before { content: ""; width: 48px; height: 4px; background: var(--cyan); }
+    .hero-copy h1 { margin: 35px 0 32px; font: 800 126px/1.02 var(--font-display); letter-spacing: -0.065em; color: var(--deep); }
+    .hero-copy h1 span { display: block; color: var(--blue); }
+    .hero-copy p { width: 770px; color: #4669a9; font-size: 29px; line-height: 1.55; font-weight: 500; }
+    .hero-copy p strong { color: var(--blue); font-weight: 700; }
+    .hero-tags { display: flex; gap: 12px; margin-top: 44px; }
+    .hero-tags span { padding: 13px 18px; border: 1px solid var(--line); border-radius: 100px; background: var(--pale); color: #2c60b8; font: 600 14px/1 var(--font-mono); }
+
+    .blueprint-hero { position: absolute; right: 62px; top: 164px; width: 815px; height: 760px; }
+    .blueprint-halo { position: absolute; left: 206px; top: 105px; width: 410px; height: 410px; border: 1px solid rgba(7,91,235,.18); border-radius: 50%; box-shadow: 0 0 0 74px rgba(7,91,235,.035), 0 0 0 150px rgba(7,91,235,.025); animation: haloBreathe 6s ease-in-out infinite; }
+    .blueprint-core { position: absolute; left: 302px; top: 200px; width: 218px; height: 218px; border-radius: 44px; background: linear-gradient(145deg, #176af0, #0751d4); box-shadow: 0 32px 74px rgba(7,91,235,.26); color: var(--paper); display: grid; place-items: center; text-align: center; font: 800 29px/1.2 var(--font-display); z-index: 3; }
+    .blueprint-core::after { content: ""; position: absolute; inset: 14px; border: 1px solid rgba(255,255,255,.42); border-radius: 34px; }
+    .blueprint-node { position: absolute; width: 196px; height: 88px; border: 1.5px solid #97b9fa; background: rgba(255,255,255,.94); border-radius: 18px; display: flex; align-items: center; justify-content: center; text-align: center; color: #2159b8; font: 600 15px/1.35 var(--font-mono); box-shadow: 0 18px 40px rgba(29,87,181,.1); z-index: 4; }
+    .blueprint-node.n1 { left: 20px; top: 38px; }
+    .blueprint-node.n2 { right: 10px; top: 72px; }
+    .blueprint-node.n3 { left: -2px; bottom: 112px; }
+    .blueprint-node.n4 { right: 2px; bottom: 77px; }
+    .blueprint-node.n5 { left: 310px; bottom: 0; }
+    .blueprint-wire { position: absolute; inset: 0; width: 815px; height: 760px; z-index: 1; }
+    .signal { position: absolute; width: 13px; height: 13px; border-radius: 50%; background: var(--cyan); box-shadow: 0 0 0 8px rgba(24,184,209,.15); animation: signalPulse 2.2s ease-in-out infinite; z-index: 5; }
+    .signal.s1 { left: 210px; top: 189px; }
+    .signal.s2 { right: 194px; top: 232px; animation-delay: .6s; }
+    .signal.s3 { left: 223px; bottom: 213px; animation-delay: 1.1s; }
+    .hero-footer { position: absolute; left: 78px; right: 78px; bottom: 48px; border-top: 1px solid #9bbafa; padding-top: 18px; display: flex; justify-content: space-between; color: #5475b4; font: 500 14px/1 var(--font-mono); }
+
+    /* ===========================================
+       SLIDE 02 — WHY / DECISION CHAIN
+       Editorial argument with a dependency rail.
+       =========================================== */
+    .why-lead { position: absolute; left: 76px; top: 260px; width: 770px; }
+    .why-lead .big-line { font: 800 94px/1.08 var(--font-display); letter-spacing: -0.055em; color: var(--deep); }
+    .why-lead .big-line em { display: block; color: var(--blue); font-style: normal; }
+    .why-lead p { margin-top: 38px; width: 690px; color: var(--text-soft); font-size: 23px; line-height: 1.7; }
+    .why-rail { position: absolute; right: 78px; top: 282px; width: 830px; }
+    .why-row { display: grid; grid-template-columns: 90px 280px 1fr; align-items: center; min-height: 144px; border-top: 1.5px solid var(--blue); }
+    .why-row:last-child { border-bottom: 1.5px solid var(--blue); }
+    .why-row .letter { color: var(--cyan); font: 600 24px/1 var(--font-mono); }
+    .why-row h3 { font: 700 27px/1.3 var(--font-display); color: var(--deep); }
+    .why-row p { padding-left: 28px; border-left: 1px solid var(--line); color: var(--text-soft); font-size: 18px; line-height: 1.65; }
+    .chain-strip { position: absolute; left: 76px; right: 76px; bottom: 116px; display: grid; grid-template-columns: repeat(5, 1fr); border: 1px solid var(--blue); background: rgba(255,255,255,.78); }
+    .chain-step { position: relative; min-height: 112px; padding: 24px 28px; border-right: 1px solid var(--line); }
+    .chain-step:last-child { border-right: 0; }
+    .chain-step small { display: block; color: var(--cyan); font: 600 13px/1 var(--font-mono); letter-spacing: .08em; }
+    .chain-step strong { display: block; margin-top: 12px; color: var(--deep); font-size: 24px; }
+    .chain-step::after { content: ""; position: absolute; right: -8px; top: 51px; width: 14px; height: 14px; border-top: 2px solid var(--blue); border-right: 2px solid var(--blue); transform: rotate(45deg); background: #f7faff; z-index: 2; }
+    .chain-step:last-child::after { display: none; }
+
+    /* ===========================================
+       SLIDE 03 — INTENT ROUTER
+       One model understanding step, three actions, seven handoffs.
+       =========================================== */
+    .router-map { position: absolute; left: 82px; right: 82px; top: 300px; height: 610px; }
+    .router-input { position: absolute; left: 0; top: 104px; width: 330px; min-height: 186px; padding: 30px; border: 1.5px solid var(--blue); background: rgba(255,255,255,.86); }
+    .router-input small, .route-action small { color: var(--cyan); font: 600 13px/1 var(--font-mono); letter-spacing: .08em; }
+    .router-input p { margin-top: 18px; color: var(--deep); font-size: 24px; line-height: 1.5; font-weight: 650; }
+    .router-input::after { content: ""; position: absolute; left: 100%; top: 91px; width: 170px; border-top: 2px solid var(--blue); }
+    .router-core { position: absolute; left: 500px; top: 30px; width: 330px; height: 330px; border-radius: 50%; background: var(--blue); color: var(--paper); display: grid; place-items: center; text-align: center; box-shadow: 0 28px 78px rgba(7,91,235,.24); }
+    .router-core::before { content: ""; position: absolute; inset: 23px; border: 1px solid rgba(255,255,255,.46); border-radius: 50%; }
+    .router-core strong { font: 800 38px/1.2 var(--font-display); }
+    .router-core span { display: block; margin-top: 13px; color: #cfe0ff; font: 500 14px/1.4 var(--font-mono); }
+    .route-actions { position: absolute; left: 1030px; top: 0; width: 670px; }
+    .route-action { min-height: 103px; display: grid; grid-template-columns: 120px 1fr; align-items: center; border-top: 1.5px solid var(--blue); }
+    .route-action:last-child { border-bottom: 1.5px solid var(--blue); }
+    .route-action b { color: var(--blue); font: 700 20px/1 var(--font-mono); }
+    .route-action p { color: var(--text-soft); font-size: 18px; line-height: 1.5; }
+    .route-action.highlight { background: linear-gradient(90deg, rgba(7,91,235,.07), transparent); }
+    .action-connect { position: absolute; left: 830px; top: 193px; width: 200px; border-top: 2px solid var(--blue); }
+    .handoff-list { position: absolute; left: 380px; right: 0; bottom: 0; height: 156px; border-top: 1px solid var(--line); padding-top: 24px; }
+    .handoff-list > span { display: block; margin-bottom: 16px; color: var(--text-soft); font: 500 13px/1 var(--font-mono); }
+    .handoff-tasks { display: grid; grid-template-columns: repeat(7, 1fr); gap: 8px; }
+    .handoff-tasks code { min-height: 70px; padding: 12px 9px; border: 1px solid var(--line); background: rgba(232,241,255,.76); display: flex; align-items: center; justify-content: center; text-align: center; color: var(--deep); font: 600 12px/1.35 var(--font-mono); }
+    .greeting-proof { position: absolute; left: 0; bottom: 0; width: 330px; padding: 20px 22px; border-left: 5px solid var(--cyan); background: var(--pale); color: var(--deep); }
+    .greeting-proof strong { display: block; font-size: 18px; }
+    .greeting-proof span { display: block; margin-top: 8px; color: var(--text-soft); font: 500 13px/1.5 var(--font-mono); }
+
+    /* ===========================================
+       SLIDE 04 — END-TO-END ARCHITECTURE
+       Dual entry paths converge on server policy and persistence.
+       =========================================== */
+    .architecture { position: absolute; left: 72px; right: 72px; top: 300px; bottom: 145px; }
+    .arch-labels { display: grid; grid-template-columns: 260px 310px 310px 310px 310px; gap: 36px; margin-left: 0; color: var(--text-soft); font: 600 13px/1 var(--font-mono); letter-spacing: .08em; }
+    .arch-grid { position: absolute; left: 0; right: 0; top: 42px; bottom: 0; display: grid; grid-template-columns: 260px 310px 310px 310px 310px; gap: 36px; align-items: center; }
+    .arch-column { position: relative; min-height: 450px; display: flex; flex-direction: column; justify-content: center; gap: 24px; }
+    .arch-column:not(:last-child)::after { content: ""; position: absolute; left: calc(100% + 4px); top: 224px; width: 28px; border-top: 2px solid var(--blue); }
+    .arch-node { position: relative; min-height: 126px; padding: 24px; border: 1.5px solid var(--line); background: rgba(255,255,255,.88); }
+    .arch-node strong { display: block; color: var(--deep); font: 700 22px/1.25 var(--font-display); }
+    .arch-node span { display: block; margin-top: 12px; color: var(--text-soft); font-size: 16px; line-height: 1.5; }
+    .arch-node.primary { border-color: var(--blue); background: var(--blue); }
+    .arch-node.primary strong { color: var(--paper); }
+    .arch-node.primary span { color: #d6e4ff; }
+    .arch-node.cyan-edge { border-left: 6px solid var(--cyan); }
+    .arch-badge { position: absolute; right: 16px; top: 14px; color: var(--cyan); font: 600 11px/1 var(--font-mono); }
+    .arch-merge { position: absolute; left: 260px; top: 107px; width: 36px; height: 236px; border-right: 2px solid var(--blue); border-top: 2px solid var(--blue); border-bottom: 2px solid var(--blue); }
+    .persist-legend { position: absolute; left: 346px; right: 0; bottom: -2px; display: flex; gap: 14px; justify-content: flex-end; }
+    .persist-legend span { padding: 10px 14px; border: 1px solid var(--line); background: var(--pale); color: var(--text-soft); font: 600 12px/1 var(--font-mono); }
+
+    /* ===========================================
+       SLIDE 05 — TOOL REGISTRY
+       Eight capabilities in current code, separated from visibility.
+       =========================================== */
+    .tool-registry { position: absolute; left: 76px; right: 76px; top: 290px; bottom: 88px; display: grid; grid-template-columns: 1fr 1fr; column-gap: 62px; }
+    .tool-column { border-top: 2px solid var(--blue); }
+    .tool-line { min-height: 137px; display: grid; grid-template-columns: 58px 320px 1fr; align-items: center; border-bottom: 1px solid var(--line); }
+    .tool-index { color: var(--cyan); font: 600 15px/1 var(--font-mono); }
+    .tool-line code { color: var(--blue); font: 600 16px/1.3 var(--font-mono); }
+    .tool-line p { color: var(--text-soft); font-size: 17px; line-height: 1.55; }
+    .tool-line p b { display: block; margin-bottom: 5px; color: var(--deep); font-size: 15px; }
+    .tool-note { position: absolute; left: 76px; bottom: 38px; width: 600px; padding-left: 18px; border-left: 5px solid var(--cyan); color: var(--deep); font-size: 17px; line-height: 1.5; }
+    .tool-note strong { color: var(--blue); }
+
+    /* ===========================================
+       SLIDE 06 — TASK-LEVEL ALLOWLIST
+       The actual policy matrix used by bundle and executor.
+       =========================================== */
+    .policy-table { position: absolute; left: 76px; right: 76px; top: 300px; border-top: 2px solid var(--blue); border-bottom: 2px solid var(--blue); }
+    .policy-row { display: grid; grid-template-columns: 325px 1fr 350px 160px; min-height: 84px; align-items: center; border-bottom: 1px solid var(--line); }
+    .policy-row:last-child { border-bottom: 0; }
+    .policy-row > * { height: 100%; display: flex; align-items: center; padding: 16px 20px; border-right: 1px solid var(--line-soft); }
+    .policy-row > *:last-child { border-right: 0; }
+    .policy-head { min-height: 58px; color: var(--text-soft); font: 600 12px/1 var(--font-mono); letter-spacing: .08em; background: rgba(232,241,255,.7); }
+    .policy-row strong { color: var(--deep); font: 650 16px/1.35 var(--font-mono); }
+    .policy-row .allowed { color: var(--text-soft); font: 500 14px/1.55 var(--font-mono); }
+    .policy-row .required { color: var(--deep); font-size: 15px; line-height: 1.45; }
+    .policy-mode { justify-content: center; color: var(--blue); font: 700 13px/1 var(--font-mono); }
+    .policy-row.focus { background: linear-gradient(90deg, rgba(24,184,209,.08), rgba(7,91,235,.035)); }
+    .policy-footer { position: absolute; left: 76px; right: 76px; bottom: 46px; display: flex; justify-content: space-between; color: var(--text-soft); font-size: 16px; }
+    .policy-footer strong { color: var(--blue); }
+
+    /* ===========================================
+       SLIDE 07 — SIX ENFORCEMENT GATES
+       Defense in depth shown as a single narrowing corridor.
+       =========================================== */
+    .gate-track { position: absolute; left: 76px; right: 76px; top: 330px; height: 430px; display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; align-items: center; }
+    .gate-track::before { content: ""; position: absolute; left: 55px; right: 55px; top: 212px; border-top: 3px solid var(--cyan); box-shadow: 0 0 20px rgba(24,184,209,.24); }
+    .gate { position: relative; height: 330px; border-left: 2px solid var(--blue); border-right: 2px solid var(--blue); background: linear-gradient(180deg, rgba(255,255,255,.1), rgba(232,241,255,.8), rgba(255,255,255,.1)); z-index: 2; }
+    .gate:nth-child(2), .gate:nth-child(5) { height: 380px; }
+    .gate:nth-child(3), .gate:nth-child(4) { height: 420px; }
+    .gate::before, .gate::after { content: ""; position: absolute; left: -12px; right: -12px; height: 2px; background: var(--blue); }
+    .gate::before { top: 0; } .gate::after { bottom: 0; }
+    .gate-number { position: absolute; top: 22px; left: 24px; color: var(--cyan); font: 600 16px/1 var(--font-mono); }
+    .gate h3 { position: absolute; left: 24px; right: 24px; top: 78px; color: var(--deep); font: 700 22px/1.3 var(--font-display); }
+    .gate p { position: absolute; left: 24px; right: 24px; bottom: 28px; color: var(--text-soft); font-size: 15px; line-height: 1.55; }
+    .gate-signal { position: absolute; left: 50%; top: 200px; width: 16px; height: 16px; margin-left: -8px; border-radius: 50%; background: var(--cyan); box-shadow: 0 0 0 10px rgba(24,184,209,.12); animation: signalPulse 2.3s ease-in-out infinite; z-index: 5; }
+    .human-lock { position: absolute; left: 640px; right: 640px; bottom: 130px; height: 86px; border: 2px solid var(--blue); background: var(--blue); color: var(--paper); display: flex; align-items: center; justify-content: center; gap: 18px; font: 700 20px/1 var(--font-display); }
+    .human-lock span { width: 34px; height: 34px; border: 2px solid var(--cyan); border-radius: 50%; box-shadow: inset 0 0 0 7px var(--blue); background: var(--paper); }
+
+    /* ===========================================
+       SLIDE 08 — PROMPT ARCHITECTURE
+       System prompts, task prompts, data blocks, and repair boundary.
+       =========================================== */
+    .prompt-map { position: absolute; left: 76px; right: 76px; top: 290px; bottom: 125px; display: grid; grid-template-columns: 480px 1fr 430px; gap: 42px; }
+    .prompt-lane { border-top: 2px solid var(--blue); padding-top: 22px; }
+    .prompt-lane-label { color: var(--text-soft); font: 600 13px/1 var(--font-mono); letter-spacing: .08em; }
+    .prompt-block { margin-top: 18px; padding: 24px; border: 1px solid var(--line); background: rgba(255,255,255,.82); }
+    .prompt-block.primary { border-color: var(--blue); background: var(--blue); }
+    .prompt-block b { display: block; color: var(--blue); font: 700 17px/1.3 var(--font-mono); }
+    .prompt-block.primary b { color: var(--paper); }
+    .prompt-block p { margin-top: 12px; color: var(--text-soft); font-size: 16px; line-height: 1.55; }
+    .prompt-block.primary p { color: #d8e6ff; }
+    .prompt-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 18px; }
+    .prompt-task { min-height: 106px; padding: 18px; border: 1px solid var(--line); background: var(--pale); }
+    .prompt-task code { color: var(--blue); font: 700 14px/1.2 var(--font-mono); }
+    .prompt-task span { display: block; margin-top: 9px; color: var(--deep); font-size: 15px; line-height: 1.4; font-weight: 600; }
+    .data-stack { margin-top: 18px; display: flex; flex-direction: column; gap: 11px; }
+    .data-block { min-height: 68px; padding: 14px 18px; border-left: 5px solid var(--cyan); background: rgba(232,241,255,.76); }
+    .data-block code { color: var(--deep); font: 600 13px/1 var(--font-mono); }
+    .data-block span { display: block; margin-top: 7px; color: var(--text-soft); font-size: 14px; }
+    .repair-block { margin-top: 20px; padding: 18px; border: 1px dashed var(--blue); color: var(--text-soft); font-size: 15px; line-height: 1.55; }
+    .repair-block strong { color: var(--blue); }
+
+    /* ===========================================
+       SLIDE 09 — SIDECAR-ONLY RUNTIME
+       No mock branch and no local greeting shortcut.
+       =========================================== */
+    .runtime-flow { position: absolute; left: 76px; right: 76px; top: 310px; height: 250px; display: grid; grid-template-columns: repeat(5, 1fr); gap: 48px; align-items: center; }
+    .runtime-node { position: relative; min-height: 170px; padding: 28px 24px; border: 1.5px solid var(--blue); background: rgba(255,255,255,.86); }
+    .runtime-node:not(:last-child)::after { content: ""; position: absolute; left: calc(100% + 8px); top: 83px; width: 34px; border-top: 2px solid var(--blue); }
+    .runtime-node small { color: var(--cyan); font: 600 12px/1 var(--font-mono); }
+    .runtime-node strong { display: block; margin-top: 19px; color: var(--deep); font: 700 23px/1.25 var(--font-display); }
+    .runtime-node span { display: block; margin-top: 12px; color: var(--text-soft); font-size: 15px; line-height: 1.45; }
+    .runtime-node.model { background: var(--blue); }
+    .runtime-node.model strong { color: var(--paper); }
+    .runtime-node.model span { color: #d8e6ff; }
+    .runtime-bottom { position: absolute; left: 76px; right: 76px; bottom: 130px; display: grid; grid-template-columns: 1.2fr 1fr; gap: 54px; }
+    .runtime-proof { min-height: 246px; padding: 28px 32px; border-top: 2px solid var(--blue); background: rgba(232,241,255,.54); }
+    .runtime-proof h3 { color: var(--deep); font: 700 25px/1.3 var(--font-display); }
+    .runtime-proof p { margin-top: 16px; color: var(--text-soft); font-size: 17px; line-height: 1.65; }
+    .runtime-proof code { display: inline-block; margin-top: 20px; margin-right: 9px; padding: 10px 13px; border: 1px solid var(--line); background: var(--paper); color: var(--blue); font: 600 13px/1 var(--font-mono); }
+    .no-mock { display: grid; grid-template-columns: 110px 1fr; align-items: center; border-top: 2px solid var(--cyan); }
+    .no-mock .zero { color: var(--blue); font: 800 92px/1 var(--font-display); }
+    .no-mock h3 { color: var(--deep); font: 700 24px/1.3 var(--font-display); }
+    .no-mock p { margin-top: 10px; color: var(--text-soft); font-size: 16px; line-height: 1.55; }
+
+    /* ===========================================
+       SLIDE 10 — THREE REQUEST PATHS
+       Scenario timelines prove that one input box is not one workflow.
+       =========================================== */
+    .scenario-tracks { position: absolute; left: 76px; right: 76px; top: 300px; bottom: 145px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 34px; }
+    .scenario { position: relative; border-top: 3px solid var(--blue); padding: 26px 26px 0; background: linear-gradient(180deg, rgba(232,241,255,.75), rgba(255,255,255,.35)); }
+    .scenario:nth-child(1) { border-top-color: var(--cyan); }
+    .scenario h3 { color: var(--deep); font: 700 27px/1.3 var(--font-display); }
+    .scenario .scenario-tag { display: block; margin-top: 10px; color: var(--text-soft); font: 500 13px/1 var(--font-mono); }
+    .scenario ol { list-style: none; margin-top: 28px; border-left: 2px solid var(--line); }
+    .scenario li { position: relative; min-height: 72px; padding: 0 0 20px 42px; color: var(--text-soft); font-size: 17px; line-height: 1.5; }
+    .scenario li::before { content: attr(data-step); position: absolute; left: -18px; top: -5px; width: 34px; height: 34px; border-radius: 50%; background: var(--paper); border: 2px solid var(--blue); display: grid; place-items: center; color: var(--blue); font: 600 11px/1 var(--font-mono); }
+    .scenario:nth-child(1) li::before { border-color: var(--cyan); color: var(--cyan); }
+    .scenario-result { position: absolute; left: 26px; right: 26px; bottom: 26px; min-height: 104px; padding: 20px; border: 1px solid var(--line); background: rgba(255,255,255,.78); }
+    .scenario-result b { color: var(--blue); font: 700 15px/1 var(--font-mono); }
+    .scenario-result p { margin-top: 10px; color: var(--deep); font-size: 16px; line-height: 1.45; font-weight: 600; }
+
+    /* ===========================================
+       SLIDE 11 — CLOSING
+       A concise system promise and workspace handoff.
+       =========================================== */
+    .closing-copy { position: absolute; left: 90px; top: 212px; width: 1180px; }
+    .closing-copy .closing-kicker { color: var(--cyan); font: 600 16px/1 var(--font-mono); letter-spacing: .1em; }
+    .closing-copy h2 { margin-top: 38px; color: var(--deep); font: 800 102px/1.08 var(--font-display); letter-spacing: -.055em; }
+    .closing-copy h2 span { color: var(--blue); }
+    .closing-copy p { margin-top: 38px; width: 890px; color: var(--text-soft); font-size: 25px; line-height: 1.65; }
+    .closing-actions { position: absolute; left: 90px; bottom: 92px; display: flex; align-items: center; gap: 18px; }
+    .workspace-link { display: inline-flex; align-items: center; gap: 20px; min-height: 68px; padding: 0 28px; border-radius: 100px; background: var(--blue); color: var(--paper); text-decoration: none; font: 700 17px/1 var(--font-display); box-shadow: 0 22px 48px rgba(7,91,235,.22); transition: transform .25s ease, box-shadow .25s ease; }
+    .workspace-link:hover { transform: translateY(-3px); box-shadow: 0 28px 58px rgba(7,91,235,.28); }
+    .workspace-link i { width: 34px; height: 34px; border-radius: 50%; background: var(--paper); color: var(--blue); display: grid; place-items: center; font-style: normal; }
+    .closing-actions span { color: var(--text-soft); font: 500 14px/1.5 var(--font-mono); }
+    .closing-orbit { position: absolute; right: 96px; top: 226px; width: 480px; height: 480px; border: 1px solid var(--line); border-radius: 50%; animation: haloBreathe 6s ease-in-out infinite; }
+    .closing-orbit::before, .closing-orbit::after { content: ""; position: absolute; border-radius: 50%; border: 1px solid var(--line); }
+    .closing-orbit::before { inset: 68px; }
+    .closing-orbit::after { inset: 142px; background: var(--blue); border: 18px solid #cfe0ff; box-shadow: 0 0 0 28px rgba(7,91,235,.08); }
+    .orbit-word { position: absolute; color: var(--blue); font: 600 13px/1 var(--font-mono); }
+    .orbit-word.w1 { left: 12px; top: 104px; }
+    .orbit-word.w2 { right: -18px; top: 190px; }
+    .orbit-word.w3 { left: 100px; bottom: 12px; }
+
+    /* ===========================================
+       PRESENTATION CONTROLS
+       Navigation lives outside the scaled 1920×1080 stage.
+       =========================================== */
+    .deck-controls {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      height: 52px;
+      padding: 7px 10px;
+      border: 1px solid rgba(7,91,235,.22);
+      border-radius: 100px;
+      background: rgba(255,255,255,.88);
+      box-shadow: 0 16px 42px rgba(23,76,166,.16);
+      backdrop-filter: blur(14px);
+    }
+
+    .control-button {
+      width: 38px;
+      height: 38px;
+      border: 0;
+      border-radius: 50%;
+      background: var(--pale);
+      color: var(--blue);
+      cursor: pointer;
+      display: grid;
+      place-items: center;
+      font: 700 18px/1 var(--font-display);
+      transition: background .2s ease, color .2s ease, transform .2s ease;
+    }
+    .control-button:hover { background: var(--blue); color: var(--paper); transform: scale(1.05); }
+    .control-button:disabled { opacity: .35; cursor: default; transform: none; }
+    .progress-dots { display: flex; gap: 6px; padding: 0 7px; }
+    .progress-dot { width: 7px; height: 7px; padding: 0; border: 0; border-radius: 50%; background: #afc8f3; cursor: pointer; transition: width .25s ease, border-radius .25s ease, background .25s ease; }
+    .progress-dot.active { width: 24px; border-radius: 8px; background: var(--blue); }
+    .page-count { min-width: 58px; color: var(--text-soft); text-align: center; font: 600 12px/1 var(--font-mono); }
+
+    /* ===========================================
+       INLINE EDITING CONTROLS
+       Hidden by default; hover top-left or press E.
+       =========================================== */
+    .edit-hotzone { position: fixed; top: 0; left: 0; width: 86px; height: 86px; z-index: 10000; cursor: pointer; }
+    .edit-toggle { position: fixed; left: 18px; top: 18px; z-index: 10001; min-width: 52px; height: 38px; padding: 0 13px; border: 1px solid var(--line); border-radius: 100px; background: rgba(255,255,255,.92); color: var(--blue); opacity: 0; pointer-events: none; cursor: pointer; font: 700 11px/1 var(--font-mono); box-shadow: 0 12px 28px rgba(22,76,168,.13); transition: opacity .3s ease; }
+    .edit-toggle.show, .edit-toggle.active { opacity: 1; pointer-events: auto; }
+    .editor-bar { position: fixed; top: 18px; left: 82px; z-index: 10001; display: flex; gap: 8px; opacity: 0; pointer-events: none; transition: opacity .25s ease; }
+    .editor-bar.active { opacity: 1; pointer-events: auto; }
+    .editor-bar button { height: 38px; padding: 0 14px; border: 1px solid var(--line); border-radius: 100px; background: rgba(255,255,255,.92); color: var(--blue); cursor: pointer; font: 600 11px/1 var(--font-mono); }
+    .editing [data-editable] { outline: 2px dashed rgba(24,184,209,.75); outline-offset: 4px; cursor: text; }
+    .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+  </style>
+</head>
+
+<body>
+  <!-- Fixed viewport and 1920×1080 authored stage. -->
+  <div class="deck-viewport">
+    <main class="deck-stage" id="deckStage" aria-label="画像澄清 Agent 系统设计演示">
+
+      <!-- =========================================
+           SLIDE 01 — TITLE
+           ========================================= -->
+      <section class="slide active" data-title="画像澄清 Agent">
+        <div class="slide-shell">
+          <header class="hero-nav reveal">
+            <div class="hero-logo"><span class="hero-logo-mark" aria-hidden="true"></span><span>ROLE CLARIFIER</span></div>
+            <span>SYSTEM ARCHITECTURE · 01</span>
+          </header>
+          <div class="hero-copy">
+            <div class="hero-eyebrow reveal delay-1">CONTROLLED AGENTIC WORKFLOW</div>
+            <h1 class="reveal delay-2" data-editable data-edit-id="hero-title">画像澄清<span>Agent</span></h1>
+            <p class="reveal delay-3" data-editable data-edit-id="hero-subtitle">从“模型能做什么”转向<strong>系统允许它在当前任务里做什么</strong>。</p>
+            <div class="hero-tags reveal delay-4"><span>INTENT ROUTER</span><span>TOOL GATE</span><span>SIDECAR</span><span>DRAFT FIRST</span></div>
+          </div>
+          <div class="blueprint-hero reveal-scale delay-2" aria-label="可信决策链示意图">
+            <div class="blueprint-halo"></div>
+            <svg class="blueprint-wire" viewBox="0 0 815 760" aria-hidden="true">
+              <defs><linearGradient id="flowGradient"><stop stop-color="#075beb"/><stop offset="1" stop-color="#18b8d1"/></linearGradient></defs>
+              <path class="trace-line" d="M210 82 C320 84 295 210 405 309"/>
+              <path class="trace-line" d="M705 116 C590 118 594 216 448 310"/>
+              <path class="trace-line" d="M194 604 C304 574 288 457 391 407"/>
+              <path class="trace-line" d="M714 637 C604 586 613 467 467 405"/>
+              <path class="trace-line" d="M408 718 C410 590 409 525 409 420"/>
+            </svg>
+            <div class="blueprint-core">可信<br/>决策链</div>
+            <div class="blueprint-node n1">自然语言输入</div>
+            <div class="blueprint-node n2">意图识别</div>
+            <div class="blueprint-node n3">权限与工具闸门</div>
+            <div class="blueprint-node n4">Sidecar 执行</div>
+            <div class="blueprint-node n5">可确认草稿</div>
+            <i class="signal s1"></i><i class="signal s2"></i><i class="signal s3"></i>
+          </div>
+          <footer class="hero-footer reveal delay-5"><span>MODEL DECIDES · SERVER ENFORCES</span><span>PROFILE CLARIFICATION AGENT / 2026</span></footer>
+        </div>
+      </section>
+
+      <!-- =========================================
+           SLIDE 02 — WHY
+           ========================================= -->
+      <section class="slide" data-title="为什么这样做">
+        <div class="slide-shell">
+          <header class="slide-header reveal"><div class="section-id"><b>02</b><span>WHY THIS AGENT</span></div><span class="system-mark">LESS MISUNDERSTANDING</span></header>
+          <div class="why-lead">
+            <p class="big-line reveal-left delay-1" data-editable data-edit-id="why-headline">招聘真正缺的，<em>不是更多文字。</em></p>
+            <p class="reveal delay-2" data-editable data-edit-id="why-body">通用模型可以快速写出“像 JD 的内容”，但无法自动证明事实从哪里来、谁有权决定，以及招聘团队能否据此执行。</p>
+          </div>
+          <div class="why-rail">
+            <article class="why-row reveal delay-2"><span class="letter">A</span><h3>业务语言<br/>不是岗位定义</h3><p>“找个懂 B 端的人”没有业务变化、组织缺口与成功结果，无法稳定推导 Must-have。</p></article>
+            <article class="why-row reveal delay-3"><span class="letter">B</span><h3>生成内容<br/>不是正式事实</h3><p>模型越流畅，越容易把猜测包装成共识。未确认信息必须停留在草稿。</p></article>
+            <article class="why-row reveal delay-4"><span class="letter">C</span><h3>Prompt<br/>不是权限系统</h3><p>经理、HR、候选人数据和公开 JD 的可见范围不同，真正的边界必须在服务端。</p></article>
+          </div>
+          <div class="chain-strip reveal delay-5" aria-label="招聘决策链">
+            <div class="chain-step"><small>WHY</small><strong>招聘原因</strong></div>
+            <div class="chain-step"><small>OUTCOME</small><strong>成功标准</strong></div>
+            <div class="chain-step"><small>ROLE</small><strong>岗位画像</strong></div>
+            <div class="chain-step"><small>EVALUATE</small><strong>评估方案</strong></div>
+            <div class="chain-step"><small>PUBLISH</small><strong>公开 JD</strong></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- =========================================
+           SLIDE 03 — INTENT ROUTING
+           ========================================= -->
+      <section class="slide" data-title="意图识别">
+        <div class="slide-shell">
+          <header class="slide-header reveal"><div class="section-id"><b>03</b><span>INTENT ROUTER</span></div><span class="system-mark">ONE MODEL · ZERO TOOLS</span></header>
+          <h2 class="slide-title reveal-left delay-1" data-editable data-edit-id="router-title">先理解意图，<span>再决定是否执行。</span></h2>
+          <p class="slide-intro reveal delay-2">Router 是一次真实的 Flash 模型调用，但它永远看不到工具。它只输出三种动作，不拥有任何业务写入能力。</p>
+          <div class="router-map">
+            <div class="router-input reveal-left delay-2"><small>CURRENT USER INPUT</small><p>问候、查询、补充事实、生成请求，全部先作为不可信数据进入。</p></div>
+            <div class="router-core reveal-scale delay-2"><div><strong>Flash<br/>Router</strong><span>P-02 ONLY<br/>TOOL COUNT = 0</span></div></div>
+            <span class="action-connect reveal delay-3" aria-hidden="true"></span>
+            <div class="route-actions">
+              <div class="route-action reveal delay-3"><b>RESPOND</b><p>问候、普通问答、状态查询、越界请求：模型自然回复，不修改数据。</p></div>
+              <div class="route-action reveal delay-4"><b>ASK</b><p>意图、产物类型或版本参数不完整：只追问一个能确定下一步的问题。</p></div>
+              <div class="route-action highlight reveal delay-5"><b>HANDOFF</b><p>明确领域动作：只交接任务；权限、阶段与数据条件仍由服务端检查。</p></div>
+            </div>
+            <div class="greeting-proof reveal delay-4"><strong>“你好”也调用模型</strong><span>1 MODEL REQUEST · 0 TOOLS · 0 BUSINESS WRITES</span></div>
+            <div class="handoff-list reveal delay-5"><span>7 个可路由领域任务 · 候选人提取只允许明确导入 API</span><div class="handoff-tasks"><code>CLARIFY<br/>MESSAGE</code><code>GENERATE<br/>ROLE PROFILE</code><code>GENERATE<br/>ASSESSMENT</code><code>GENERATE<br/>JD</code><code>GENERATE<br/>HR BRIEF</code><code>CALIBRATION<br/>ADVICE</code><code>VERSION<br/>COMPARISON</code></div></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- =========================================
+           SLIDE 04 — SYSTEM ARCHITECTURE
+           ========================================= -->
+      <section class="slide" data-title="系统架构">
+        <div class="slide-shell">
+          <header class="slide-header reveal"><div class="section-id"><b>04</b><span>SYSTEM ARCHITECTURE</span></div><span class="system-mark">TWO ENTRIES · ONE POLICY</span></header>
+          <h2 class="slide-title reveal-left delay-1">模型负责理解，<span>服务端负责边界。</span></h2>
+          <p class="slide-intro reveal delay-2">自由文本需要 Router；明确按钮或导入 API 已经知道用户要做什么，可以直接进入任务门禁，避免额外成本与误判。</p>
+          <div class="architecture">
+            <div class="arch-labels reveal delay-2"><span>01 / INPUT</span><span>02 / ROUTE</span><span>03 / CONTROL</span><span>04 / EXECUTE</span><span>05 / PERSIST</span></div>
+            <div class="arch-grid">
+              <div class="arch-column reveal-left delay-2">
+                <div class="arch-node cyan-edge"><span class="arch-badge">CHAT</span><strong>自由文本</strong><span>问候、查询、事实补充、生成请求</span></div>
+                <div class="arch-node"><span class="arch-badge">API</span><strong>明确入口</strong><span>生成产物、批量导入候选人</span></div>
+              </div>
+              <div class="arch-column reveal delay-3">
+                <div class="arch-node primary"><span class="arch-badge">0 TOOLS</span><strong>Flash Router</strong><span>RESPOND / ASK / HANDOFF</span></div>
+                <div class="arch-node"><span class="arch-badge">DIRECT</span><strong>Task Request</strong><span>无需重复做意图识别</span></div>
+              </div>
+              <div class="arch-column reveal delay-4">
+                <div class="arch-node"><span class="arch-badge">SERVER</span><strong>业务门禁</strong><span>身份 · 角色 · 阶段 · 数据条件</span></div>
+                <div class="arch-node"><span class="arch-badge">POLICY</span><strong>任务策略</strong><span>模型 · Prompt · 工具 · 持久化</span></div>
+              </div>
+              <div class="arch-column reveal delay-5">
+                <div class="arch-node primary"><span class="arch-badge">SIDECAR</span><strong>Domain Agent</strong><span>Flash / Pro + 最小上下文</span></div>
+                <div class="arch-node"><span class="arch-badge">VERIFY</span><strong>Executor</strong><span>拒绝额外工具，核验必需工具</span></div>
+              </div>
+              <div class="arch-column reveal delay-6">
+                <div class="arch-node"><span class="arch-badge">STORE</span><strong>业务事实层</strong><span>Schema · 版本 · Trace · 审计</span></div>
+                <div class="arch-node cyan-edge"><span class="arch-badge">HUMAN</span><strong>人工确认</strong><span>经理 / HR 的正式业务决定</span></div>
+              </div>
+            </div>
+            <div class="persist-legend reveal delay-6"><span>TOOL · 澄清草稿</span><span>CALLER · 结构校验后保存</span><span>NONE · 只读或对话</span></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- =========================================
+           SLIDE 05 — REGISTERED TOOLS
+           ========================================= -->
+      <section class="slide" data-title="自研工具">
+        <div class="slide-shell">
+          <header class="slide-header reveal"><div class="section-id"><b>05</b><span>REGISTERED TOOLS</span></div><span class="system-mark">REGISTRY ≠ VISIBILITY</span></header>
+          <h2 class="slide-title reveal-left delay-1">当前代码注册 <span>8 个领域工具。</span></h2>
+          <p class="slide-intro reveal delay-2">原来的七项能力已经增加 <span class="mono accent">read_recruiting_context</span>。注册只是 Bundle 具备能力，不代表模型在当前任务中可见。</p>
+          <div class="tool-registry">
+            <div class="tool-column reveal delay-2">
+              <article class="tool-line"><span class="tool-index">01</span><code>read_role_state</code><p><b>最小岗位状态</b>读取服务端按角色与任务过滤后的字段；它不是权限控制器。</p></article>
+              <article class="tool-line"><span class="tool-index">02</span><code>read_recruiting_context</code><p><b>招聘上下文</b>按最窄 projection 读取组织、历史澄清、漏斗或公开参考。</p></article>
+              <article class="tool-line"><span class="tool-index">03</span><code>update_role_identity_draft</code><p><b>岗位身份草稿</b>只保存用户明确说出的岗位名称或团队。</p></article>
+              <article class="tool-line"><span class="tool-index">04</span><code>save_fact_draft</code><p><b>岗位事实草稿</b>记录背景、原因、成功标准和约束，状态只能是 DRAFT。</p></article>
+            </div>
+            <div class="tool-column reveal delay-3">
+              <article class="tool-line"><span class="tool-index">05</span><code>save_artifact_draft</code><p><b>产物草稿</b>画像、评分卡、JD、HR Brief；已注册，当前在线任务不暴露。</p></article>
+              <article class="tool-line"><span class="tool-index">06</span><code>save_candidate_evidence</code><p><b>候选人证据</b>保存脱敏证据批次；当前改为 Caller 整批校验后写入。</p></article>
+              <article class="tool-line"><span class="tool-index">07</span><code>propose_calibration_signal</code><p><b>校准信号</b>提出待 HR 审核建议；当前由 Caller 持久化。</p></article>
+              <article class="tool-line"><span class="tool-index">08</span><code>read_version_diff</code><p><b>版本差异</b>只读同类正式产物的两个授权版本。</p></article>
+            </div>
+          </div>
+          <p class="tool-note reveal delay-5"><strong>权限来源：</strong>登录会话 + 当前 Agent Run + 业务服务鉴权；任何模型工具参数都不能自报 tenant、role 或 run 身份。</p>
+        </div>
+      </section>
+
+      <!-- =========================================
+           SLIDE 06 — TOOL ALLOWLIST
+           ========================================= -->
+      <section class="slide" data-title="工具白名单">
+        <div class="slide-shell">
+          <header class="slide-header reveal"><div class="section-id"><b>06</b><span>TASK TOOL ALLOWLIST</span></div><span class="system-mark">SINGLE SOURCE OF TRUTH</span></header>
+          <h2 class="slide-title reveal-left delay-1">工具不是“少调用”，<span>而是不可见。</span></h2>
+          <p class="slide-intro reveal delay-2">同一份 <span class="mono">HARNESS_TASK_TOOL_POLICY</span> 同时驱动 Bundle 可见性、Executor 核验和内部 API 拒绝策略。</p>
+          <div class="policy-table reveal delay-2" role="table" aria-label="任务级工具白名单">
+            <div class="policy-row policy-head" role="row"><span>任务 / 动作</span><span>模型可见工具</span><span>必需成功</span><span>持久化</span></div>
+            <div class="policy-row" role="row"><strong>Router<br/>RESPOND / ASK / HANDOFF</strong><span class="allowed">NONE</span><span class="required">NONE</span><span class="policy-mode">NONE</span></div>
+            <div class="policy-row focus" role="row"><strong>CLARIFY_MESSAGE</strong><span class="allowed">read_role_state · read_recruiting_context<br/>update_role_identity_draft · save_fact_draft</span><span class="required">read_role_state<br/>save_fact_draft</span><span class="policy-mode">TOOL</span></div>
+            <div class="policy-row" role="row"><strong>4 × GENERATE_*</strong><span class="allowed">NONE</span><span class="required">NONE</span><span class="policy-mode">CALLER</span></div>
+            <div class="policy-row" role="row"><strong>EXTRACT_CANDIDATES</strong><span class="allowed">NONE</span><span class="required">NONE</span><span class="policy-mode">CALLER</span></div>
+            <div class="policy-row" role="row"><strong>CALIBRATION_ADVICE</strong><span class="allowed">NONE</span><span class="required">NONE</span><span class="policy-mode">CALLER</span></div>
+            <div class="policy-row" role="row"><strong>VERSION_COMPARISON</strong><span class="allowed">read_version_diff</span><span class="required">read_version_diff</span><span class="policy-mode">NONE</span></div>
+          </div>
+          <div class="policy-footer reveal delay-5"><span><strong>Token 更少：</strong>零工具任务不携带 Tool Schema</span><span><strong>风险更低：</strong>白名单外调用使 Run 失败，且不会写入业务对象</span></div>
+        </div>
+      </section>
+
+      <!-- =========================================
+           SLIDE 07 — DEFENSE IN DEPTH
+           ========================================= -->
+      <section class="slide" data-title="六层收紧">
+        <div class="slide-shell">
+          <header class="slide-header reveal"><div class="section-id"><b>07</b><span>DEFENSE IN DEPTH</span></div><span class="system-mark">PROMPT IS ONLY LAYER ONE</span></header>
+          <h2 class="slide-title reveal-left delay-1">六道闸门，<span>逐层收紧。</span></h2>
+          <p class="slide-intro reveal delay-2">安全边界来自重复校验，而不是一句“请不要越界”。任何一层发现任务、身份或数据不一致，都应停止执行。</p>
+          <div class="gate-track">
+            <article class="gate reveal-scale delay-1"><span class="gate-number">01</span><h3>Router<br/>先分流</h3><p>自由文本先得到 RESPOND、ASK 或 HANDOFF；Router 零工具。</p><i class="gate-signal"></i></article>
+            <article class="gate reveal-scale delay-2"><span class="gate-number">02</span><h3>Schema<br/>最小暴露</h3><p>Agent 创建时只注入当前任务允许的工具定义。</p><i class="gate-signal"></i></article>
+            <article class="gate reveal-scale delay-3"><span class="gate-number">03</span><h3>Executor<br/>双向核验</h3><p>拒绝额外工具，同时检查必需工具是否真正成功。</p><i class="gate-signal"></i></article>
+            <article class="gate reveal-scale delay-4"><span class="gate-number">04</span><h3>Run<br/>身份绑定</h3><p>内部 API 根据 Sidecar Session 找到岗位与活跃 Run。</p><i class="gate-signal"></i></article>
+            <article class="gate reveal-scale delay-5"><span class="gate-number">05</span><h3>业务服务<br/>最终鉴权</h3><p>租户、角色、阶段、PII、Schema、版本和乐观锁。</p><i class="gate-signal"></i></article>
+            <article class="gate reveal-scale delay-6"><span class="gate-number">06</span><h3>Draft First<br/>人类决定</h3><p>模型只产草稿或信号，正式确认、发布和审核走人工 API。</p><i class="gate-signal"></i></article>
+          </div>
+          <div class="human-lock reveal delay-6"><span aria-hidden="true"></span>HUMAN-APPROVED BUSINESS STATE</div>
+        </div>
+      </section>
+
+      <!-- =========================================
+           SLIDE 08 — PROMPT SYSTEM
+           ========================================= -->
+      <section class="slide" data-title="Prompt 架构">
+        <div class="slide-shell">
+          <header class="slide-header reveal"><div class="section-id"><b>08</b><span>PROMPT ARCHITECTURE</span></div><span class="system-mark">P-01 → P-08</span></header>
+          <h2 class="slide-title reveal-left delay-1">Prompt 分层，<span>职责不混写。</span></h2>
+          <p class="slide-intro reveal delay-2">单一事实源位于 <span class="mono">packages/agent-spec</span>。Router 与 Domain 使用不同 System Prompt，业务数据进入明确的不可信数据块。</p>
+          <div class="prompt-map">
+            <div class="prompt-lane reveal delay-2">
+              <span class="prompt-lane-label">ROUTER MODE</span>
+              <div class="prompt-block primary"><b>P-02 · ROUTER SYSTEM</b><p>无工具；只输出 RESPOND / ASK / HANDOFF；普通问候自然生成回复。</p></div>
+              <div class="prompt-block"><b>ROUTE REQUEST</b><p>current_user_input + conversation_context + 已过滤 role_state_summary。</p></div>
+              <div class="repair-block"><strong>Router Repair</strong><br/>最多一次，只修复 JSON 结构，不改变意图。</div>
+            </div>
+            <div class="prompt-lane reveal delay-3">
+              <span class="prompt-lane-label">DOMAIN MODE</span>
+              <div class="prompt-block primary"><b>P-01 · DOMAIN SYSTEM</b><p>事实优先级、权限、隐私、Draft First、人工边界、工具失败和注入防护。</p></div>
+              <div class="prompt-grid">
+                <div class="prompt-task"><code>P-03</code><span>岗位画像生成</span></div>
+                <div class="prompt-task"><code>P-04</code><span>评估方案生成</span></div>
+                <div class="prompt-task"><code>P-05</code><span>对外 JD 生成</span></div>
+                <div class="prompt-task"><code>P-06</code><span>HR 招聘画像</span></div>
+                <div class="prompt-task"><code>P-07</code><span>候选人证据</span></div>
+                <div class="prompt-task"><code>P-08</code><span>校准建议</span></div>
+              </div>
+              <div class="repair-block"><strong>Task Orchestration + Repair</strong><br/>注入任务、持久化、最大转换与严格输出；Repair 不重放成功工具。</div>
+            </div>
+            <div class="prompt-lane reveal delay-4">
+              <span class="prompt-lane-label">UNTRUSTED DATA BLOCKS</span>
+              <div class="data-stack">
+                <div class="data-block"><code>&lt;current_user_input&gt;</code><span>当前请求</span></div>
+                <div class="data-block"><code>&lt;short_term_memory&gt;</code><span>近期对话窗口</span></div>
+                <div class="data-block"><code>&lt;long_term_memory&gt;</code><span>服务端最小岗位投影</span></div>
+                <div class="data-block"><code>&lt;task_state&gt;</code><span>角色、任务与编排上限</span></div>
+              </div>
+              <div class="prompt-block"><b>INJECTION BOUNDARY</b><p>用户消息、旧 JD、简历与外部文档不能覆盖 System Prompt，也不能扩大工具权限。</p></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- =========================================
+           SLIDE 09 — SIDECAR RUNTIME
+           ========================================= -->
+      <section class="slide" data-title="Sidecar-only">
+        <div class="slide-shell">
+          <header class="slide-header reveal"><div class="section-id"><b>09</b><span>SIDECAR-ONLY RUNTIME</span></div><span class="system-mark">NO PRODUCT MOCK BRANCH</span></header>
+          <h2 class="slide-title reveal-left delay-1">只有一条产品运行路径：<span>Sidecar。</span></h2>
+          <p class="slide-intro reveal delay-2">测试可以使用本地模型桩验证协议，但它不能成为产品降级回复。运行配置不存在可切换的 <span class="mono">HARNESS_MODE</span>。</p>
+          <div class="runtime-flow">
+            <div class="runtime-node reveal delay-2"><small>01 / WEB</small><strong>用户请求</strong><span>聊天、按钮或候选人导入</span></div>
+            <div class="runtime-node reveal delay-3"><small>02 / API</small><strong>Agent Run</strong><span>保存消息、绑定身份与任务</span></div>
+            <div class="runtime-node model reveal delay-4"><small>03 / SIDECAR</small><strong>DeepSeek Harness</strong><span>Bundle · Prompt · Tool Restriction</span></div>
+            <div class="runtime-node reveal delay-5"><small>04 / MODEL</small><strong>Flash / Pro</strong><span>真实模型理解或结构化生成</span></div>
+            <div class="runtime-node reveal delay-6"><small>05 / RETURN</small><strong>Validate + SSE</strong><span>校验、持久化、事件推送</span></div>
+          </div>
+          <div class="runtime-bottom">
+            <article class="runtime-proof reveal delay-4"><h3>实现不再分叉</h3><p>Router、Domain、工具策略和业务持久化在同一条可追踪链路上。失败必须显式失败，不能偷偷用固定回复掩盖。</p><code>deepseek-v4-flash</code><code>deepseek-v4-pro</code><code>JSON-RPC</code><code>SSE</code></article>
+            <article class="no-mock reveal delay-5"><span class="zero">0</span><div><h3>本地问候短路</h3><p>“你好”会经过 API → Sidecar → Flash Router → 模型自然回复；工具和业务写入仍保持为零。</p></div></article>
+          </div>
+        </div>
+      </section>
+
+      <!-- =========================================
+           SLIDE 10 — REQUEST SCENARIOS
+           ========================================= -->
+      <section class="slide" data-title="三个真实请求">
+        <div class="slide-shell">
+          <header class="slide-header reveal"><div class="section-id"><b>10</b><span>THREE REQUEST PATHS</span></div><span class="system-mark">SAME INPUT · DIFFERENT EXECUTION</span></header>
+          <h2 class="slide-title reveal-left delay-1">同一个输入框，<span>三条执行链。</span></h2>
+          <p class="slide-intro reveal delay-2">判断由模型完成，但每条路径的工具、持久化和权限结果由服务端任务策略预先限定。</p>
+          <div class="scenario-tracks">
+            <article class="scenario reveal delay-2"><h3>一句“你好”</h3><span class="scenario-tag">NATURAL CONVERSATION</span><ol><li data-step="01">API 保存用户消息并创建 Run</li><li data-step="02">Sidecar 调用 Flash Router</li><li data-step="03">模型返回自然语言 RESPOND</li><li data-step="04">API 通过 SSE 推送回复</li></ol><div class="scenario-result"><b>TRACE RESULT</b><p>1 次模型调用 · 0 个工具 · 0 次业务写入</p></div></article>
+            <article class="scenario reveal delay-3"><h3>补充招聘原因</h3><span class="scenario-tag">CLARIFY MESSAGE</span><ol><li data-step="01">Router 识别明确事实补充</li><li data-step="02">服务端交接 CLARIFY_MESSAGE</li><li data-step="03">Domain 读取最小岗位状态</li><li data-step="04">保存 DRAFT 并提出一个具体问题</li></ol><div class="scenario-result"><b>TRACE RESULT</b><p>2 次模型调用 · 4 工具可见 · 2 工具必需</p></div></article>
+            <article class="scenario reveal delay-4"><h3>生成岗位画像</h3><span class="scenario-tag">EXPLICIT API ENTRY</span><ol><li data-step="01">服务端检查权限与生成门禁</li><li data-step="02">Pro 接收已确认事实投影</li><li data-step="03">模型零工具输出严格 JSON</li><li data-step="04">API Schema 校验后统一保存</li></ol><div class="scenario-result"><b>TRACE RESULT</b><p>领域模型直达 · 0 个工具 · Caller 持久化</p></div></article>
+          </div>
+        </div>
+      </section>
+
+      <!-- =========================================
+           SLIDE 11 — CLOSING
+           ========================================= -->
+      <section class="slide" data-title="最终原则">
+        <div class="slide-shell">
+          <header class="slide-header reveal"><div class="section-id"><b>11</b><span>DESIGN PRINCIPLE</span></div><span class="system-mark">HUMAN-APPROVED</span></header>
+          <div class="closing-copy">
+            <span class="closing-kicker reveal delay-1">THE SYSTEM PROMISE</span>
+            <h2 class="reveal-left delay-2" data-editable data-edit-id="closing-title">让模型参与判断，<br/><span>但不让模型拥有决定权。</span></h2>
+            <p class="reveal delay-3" data-editable data-edit-id="closing-body">最终得到的不只是一份文案，而是一套可以继续招聘、评估、校准和追溯的岗位共识。</p>
+          </div>
+          <div class="closing-orbit reveal-scale delay-3" aria-hidden="true"><span class="orbit-word w1">INTENT</span><span class="orbit-word w2">POLICY</span><span class="orbit-word w3">EVIDENCE</span></div>
+          <div class="closing-actions reveal delay-4"><a class="workspace-link" href="http://127.0.0.1:5173/">进入招聘工作台 <i>→</i></a><span>MODEL-ROUTED<br/>SERVER-GOVERNED</span></div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Navigation chrome sits outside the scaled stage. -->
+  <nav class="deck-controls" aria-label="演示导航">
+    <button class="control-button" id="prevSlide" aria-label="上一页">←</button>
+    <div class="progress-dots" id="progressDots" aria-label="选择页面"></div>
+    <span class="page-count" id="pageCount">01 / 11</span>
+    <button class="control-button" id="nextSlide" aria-label="下一页">→</button>
+  </nav>
+
+  <!-- Hidden inline-edit affordance: hover top-left or press E. -->
+  <div class="edit-hotzone" title="编辑文本（E）"></div>
+  <button class="edit-toggle" id="editToggle" title="编辑模式（E）">EDIT</button>
+  <div class="editor-bar" id="editorBar">
+    <button id="saveEdits">SAVE</button>
+    <button id="downloadDeck">DOWNLOAD HTML</button>
+  </div>
+  <div class="sr-only" id="slideAnnouncer" aria-live="polite"></div>
+
+  <script>
+    /* ===========================================
+       SLIDE PRESENTATION CONTROLLER
+       Keyboard, wheel, touch, progress, and fixed-stage scaling.
+       =========================================== */
+    class SlidePresentation {
+      constructor() {
+        this.slides = Array.from(document.querySelectorAll('.slide'));
+        this.stage = document.getElementById('deckStage');
+        this.prevButton = document.getElementById('prevSlide');
+        this.nextButton = document.getElementById('nextSlide');
+        this.pageCount = document.getElementById('pageCount');
+        this.progressDots = document.getElementById('progressDots');
+        this.announcer = document.getElementById('slideAnnouncer');
+        this.currentSlide = this.initialSlideFromHash();
+        this.wheelLocked = false;
+        this.touchStartX = 0;
+        this.touchStartY = 0;
+
+        this.setupProgress();
+        this.setupStageScale();
+        this.setupKeyboardNavigation();
+        this.setupWheelNavigation();
+        this.setupTouchNavigation();
+        this.setupButtons();
+        this.setupHashNavigation();
+        this.showSlide(this.currentSlide, false);
+      }
+
+      initialSlideFromHash() {
+        const match = window.location.hash.match(/slide-(\d+)/);
+        if (!match) return 0;
+        return Math.max(0, Math.min(Number(match[1]) - 1, this.slides.length - 1));
+      }
+
+      setupStageScale() {
+        const scale = () => {
+          const factor = Math.min(window.innerWidth / 1920, window.innerHeight / 1080);
+          const x = (window.innerWidth - 1920 * factor) / 2;
+          const y = (window.innerHeight - 1080 * factor) / 2;
+          this.stage.style.transform = `translate(${x}px, ${y}px) scale(${factor})`;
+        };
+        scale();
+        window.addEventListener('resize', scale);
+      }
+
+      setupProgress() {
+        this.slides.forEach((slide, index) => {
+          const dot = document.createElement('button');
+          dot.className = 'progress-dot';
+          dot.type = 'button';
+          dot.setAttribute('aria-label', `前往第 ${index + 1} 页：${slide.dataset.title}`);
+          dot.addEventListener('click', () => this.showSlide(index));
+          this.progressDots.appendChild(dot);
+        });
+      }
+
+      setupButtons() {
+        this.prevButton.addEventListener('click', () => this.previous());
+        this.nextButton.addEventListener('click', () => this.next());
+      }
+
+      setupHashNavigation() {
+        window.addEventListener('hashchange', () => {
+          const requestedSlide = this.initialSlideFromHash();
+          if (requestedSlide !== this.currentSlide) this.showSlide(requestedSlide, false);
+        });
+      }
+
+      setupKeyboardNavigation() {
+        document.addEventListener('keydown', (event) => {
+          if (event.target.closest('[contenteditable="true"]')) return;
+          if (['ArrowRight', 'ArrowDown', 'PageDown', ' '].includes(event.key)) {
+            event.preventDefault();
+            this.next();
+          }
+          if (['ArrowLeft', 'ArrowUp', 'PageUp'].includes(event.key)) {
+            event.preventDefault();
+            this.previous();
+          }
+          if (event.key === 'Home') this.showSlide(0);
+          if (event.key === 'End') this.showSlide(this.slides.length - 1);
+        });
+      }
+
+      setupWheelNavigation() {
+        window.addEventListener('wheel', (event) => {
+          if (this.wheelLocked || Math.abs(event.deltaY) < 24) return;
+          this.wheelLocked = true;
+          event.deltaY > 0 ? this.next() : this.previous();
+          window.setTimeout(() => { this.wheelLocked = false; }, 650);
+        }, { passive: true });
+      }
+
+      setupTouchNavigation() {
+        window.addEventListener('touchstart', (event) => {
+          this.touchStartX = event.changedTouches[0].clientX;
+          this.touchStartY = event.changedTouches[0].clientY;
+        }, { passive: true });
+        window.addEventListener('touchend', (event) => {
+          const deltaX = event.changedTouches[0].clientX - this.touchStartX;
+          const deltaY = event.changedTouches[0].clientY - this.touchStartY;
+          const dominant = Math.abs(deltaX) > Math.abs(deltaY) ? deltaX : deltaY;
+          if (Math.abs(dominant) < 48) return;
+          dominant < 0 ? this.next() : this.previous();
+        }, { passive: true });
+      }
+
+      next() { this.showSlide(this.currentSlide + 1); }
+      previous() { this.showSlide(this.currentSlide - 1); }
+
+      showSlide(index, updateHash = true) {
+        this.currentSlide = Math.max(0, Math.min(index, this.slides.length - 1));
+        this.slides.forEach((slide, slideIndex) => {
+          const isCurrent = slideIndex === this.currentSlide;
+          slide.classList.toggle('active', isCurrent);
+          slide.classList.remove('visible');
+          if (isCurrent) requestAnimationFrame(() => slide.classList.add('visible'));
+        });
+        Array.from(this.progressDots.children).forEach((dot, dotIndex) => {
+          dot.classList.toggle('active', dotIndex === this.currentSlide);
+          dot.setAttribute('aria-current', dotIndex === this.currentSlide ? 'page' : 'false');
+        });
+        this.prevButton.disabled = this.currentSlide === 0;
+        this.nextButton.disabled = this.currentSlide === this.slides.length - 1;
+        this.pageCount.textContent = `${String(this.currentSlide + 1).padStart(2, '0')} / ${String(this.slides.length).padStart(2, '0')}`;
+        const currentTitle = this.slides[this.currentSlide].dataset.title;
+        this.announcer.textContent = `第 ${this.currentSlide + 1} 页，共 ${this.slides.length} 页：${currentTitle}`;
+        document.title = this.currentSlide === 0
+          ? '画像澄清 Agent · 系统设计'
+          : `${currentTitle} · 画像澄清 Agent`;
+        if (updateHash) history.replaceState(null, '', `#slide-${this.currentSlide + 1}`);
+      }
+    }
+
+    /* ===========================================
+       INLINE TEXT EDITOR
+       E toggles editing; content is saved to localStorage.
+       =========================================== */
+    class InlineEditor {
+      constructor() {
+        this.isActive = false;
+        this.items = Array.from(document.querySelectorAll('[data-editable]'));
+        this.toggleButton = document.getElementById('editToggle');
+        this.editorBar = document.getElementById('editorBar');
+        this.restore();
+        this.bindSaveEvents();
+      }
+
+      storageKey(item) { return `role-clarifier-deck:${item.dataset.editId}`; }
+
+      restore() {
+        this.items.forEach((item) => {
+          const saved = localStorage.getItem(this.storageKey(item));
+          if (saved !== null) item.innerHTML = saved;
+        });
+      }
+
+      toggleEditMode() {
+        this.isActive = !this.isActive;
+        document.body.classList.toggle('editing', this.isActive);
+        this.toggleButton.classList.toggle('active', this.isActive);
+        this.editorBar.classList.toggle('active', this.isActive);
+        this.toggleButton.textContent = this.isActive ? 'DONE' : 'EDIT';
+        this.items.forEach((item) => item.setAttribute('contenteditable', String(this.isActive)));
+        if (!this.isActive) this.save();
+      }
+
+      save() {
+        this.items.forEach((item) => localStorage.setItem(this.storageKey(item), item.innerHTML));
+      }
+
+      bindSaveEvents() {
+        this.items.forEach((item) => item.addEventListener('input', () => this.save()));
+        document.getElementById('saveEdits').addEventListener('click', () => this.save());
+        document.getElementById('downloadDeck').addEventListener('click', () => this.download());
+      }
+
+      download() {
+        this.save();
+        const source = '<!doctype html>\n' + document.documentElement.outerHTML;
+        const blob = new Blob([source], { type: 'text/html;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = 'role-clarifier-agent.html';
+        link.click();
+        URL.revokeObjectURL(url);
+      }
+    }
+
+    /* ===========================================
+       EDITOR HOTZONE INTERACTION
+       JS delay prevents the hidden toggle from disappearing mid-hover.
+       =========================================== */
+    const presentation = new SlidePresentation();
+    const editor = new InlineEditor();
+    const hotzone = document.querySelector('.edit-hotzone');
+    const editToggle = document.getElementById('editToggle');
+    let hideTimeout = null;
+
+    hotzone.addEventListener('mouseenter', () => {
+      clearTimeout(hideTimeout);
+      editToggle.classList.add('show');
+    });
+    hotzone.addEventListener('mouseleave', () => {
+      hideTimeout = window.setTimeout(() => {
+        if (!editor.isActive) editToggle.classList.remove('show');
+      }, 400);
+    });
+    editToggle.addEventListener('mouseenter', () => clearTimeout(hideTimeout));
+    editToggle.addEventListener('mouseleave', () => {
+      hideTimeout = window.setTimeout(() => {
+        if (!editor.isActive) editToggle.classList.remove('show');
+      }, 400);
+    });
+    editToggle.addEventListener('click', () => editor.toggleEditMode());
+    hotzone.addEventListener('click', () => editor.toggleEditMode());
+
+    document.addEventListener('keydown', (event) => {
+      const editingText = event.target.closest('[contenteditable="true"]');
+      if ((event.key === 'e' || event.key === 'E') && !editingText) editor.toggleEditMode();
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
+        event.preventDefault();
+        editor.save();
+      }
+    });
+  </script>
+</body>
+</html>

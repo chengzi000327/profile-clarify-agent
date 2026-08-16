@@ -3,6 +3,7 @@
 > 对应 PRD：`岗位画像澄清Agent_PRD_v1.md` 中 S-01 至 S-12。  
 > 用途：人工走查、Answer Eval、Trace Eval、接口/状态验收。  
 > 口径：预期输出中的文案是“可接受参考输出”，不要求逐字匹配；机器评测以每轮断言为准。
+> 深度执行规格：`cases/README.md` 及其中12个独立Case文件；如与本总览冲突，以深度规格为准。
 
 ## 0. 执行约定
 
@@ -216,37 +217,66 @@ role_state:
 
 ```json
 {
-  "mission": "连接客户场景与产品路线，把重复定制需求沉淀为可复用的B端标准产品能力。",
-  "responsibilities": [
+  "mission": {
+    "statement": "连接客户场景与产品路线，把重复定制需求沉淀为可复用的B端标准产品能力。",
+    "hiring_reason_fact_refs": ["hiring_reason"],
+    "success_criterion_fact_refs": ["success_90d", "success_6m"]
+  },
+  "work": [
     {
-      "text": "归纳跨客户的高频业务场景并维护产品路线图",
-      "evidence_refs": ["success_90d"]
-    },
-    {
-      "text": "推动售前、交付和研发对需求取舍达成一致，并让重点方案进入客户验证",
-      "evidence_refs": ["hiring_reason", "success_90d"]
-    },
-    {
-      "text": "将多个客户的同类流程收敛为可复用的标准方案",
-      "evidence_refs": ["success_6m"]
+      "id": "W-01",
+      "title": "归纳跨客户场景并形成产品路线",
+      "description": "识别跨客户共性，提出产品路线并推动重点方案进入验证。",
+      "deliverables": ["客户场景归纳", "产品路线图", "方案验证结论"],
+      "success_criterion_fact_refs": ["success_90d", "success_6m"],
+      "other_fact_refs": ["hiring_reason"]
     }
   ],
-  "must_have": [
+  "boundaries": {
+    "owns": [
+      {
+        "statement": "负责产品路线与重点方案验证的推动。",
+        "fact_refs": ["hiring_reason"],
+        "work_refs": ["W-01"]
+      }
+    ],
+    "does_not_own": [],
+    "decision_rights": [],
+    "collaboration_and_resources": []
+  },
+  "requirements": [
     {
-      "text": "能用实际案例证明曾从多个企业客户需求中识别共性并形成产品取舍",
-      "evidence_refs": ["success_90d", "success_6m"]
+      "id": "R-01",
+      "priority": "MUST_HAVE",
+      "name": "跨客户需求抽象与产品取舍",
+      "level": "能够独立完成",
+      "rationale": "直接支撑场景归纳、产品路线形成和标准方案收敛。",
+      "strong_evidence": ["说明需求差异、抽象方法、取舍依据和验证结果"],
+      "acceptable_alternatives": ["在其他复杂企业流程中完成过同类标准化闭环"],
+      "risk_signals": ["只会汇总需求，无法说明取舍和验证结果"],
+      "work_refs": ["W-01"],
+      "success_criterion_fact_refs": ["success_90d", "success_6m"],
+      "constraint_fact_refs": []
     },
     {
-      "text": "能在无直接汇报关系下推动售前、交付与研发形成承诺并闭环",
-      "evidence_refs": ["hiring_reason", "success_90d"]
+      "id": "R-02",
+      "priority": "PREFERRED",
+      "name": "B端或复杂企业流程产品经验",
+      "level": "能够加快复杂场景理解",
+      "rationale": "可能降低上手成本，但不是已证实的唯一替代路径。",
+      "strong_evidence": ["能够说明复杂企业流程如何影响产品取舍"],
+      "acceptable_alternatives": ["在其他复杂业务中完成过跨客户标准化"],
+      "risk_signals": ["只有行业标签，没有产品化结果"],
+      "work_refs": ["W-01"],
+      "success_criterion_fact_refs": ["success_90d"],
+      "constraint_fact_refs": []
     }
   ],
-  "preferred": ["有B端或复杂企业流程产品经验"],
-  "pending": ["交付周期8周降至5周的基线与公开性"]
+  "open_questions": []
 }
 ```
 
-Trace 断言：`read_role_state → save_artifact_draft(ROLE_PROFILE)`；所有 Must-have 均有上游引用；不能把待确认的周期数字写成正式绩效要求。
+Trace 断言：P-03 使用 `maximum_transitions=0`、`tool_sequence=[]`，模型返回 `persistence=CALLER`；服务端执行 Schema、事实引用和门禁校验后保存。所有 Must-have 均有上游引用；不能把待确认的周期数字写成正式绩效要求。
 
 整 Case 禁止项：直接产出通用 JD；一次抛出长问卷；编造团队规模、汇报线、预算或市场供给。
 
@@ -403,9 +433,9 @@ Trace/状态断言：
 ```yaml
 profile_version: rp_v1
 must_have:
-  - id: req_industry
+  - id: R-01
     text: 3年以上制造业产品经验
-  - id: req_platform
+  - id: R-02
     text: 有多租户平台产品经验
 calibration_policy:
   min_candidates: 10
@@ -449,10 +479,9 @@ calibration_policy:
 
 预期 Trace：
 
-1. `read_role_state`。
-2. `save_candidate_evidence`，15 个 `candidate_ref`，无姓名/联系方式。
-3. `propose_calibration_signal`。
-4. 不创建经理任务，不修改正式画像。
+1. 候选人导入由 P-07 零工具提取，返回 `CALLER` 结果并由 API 校验保存，15 个 `candidate_ref` 中不含姓名/联系方式。
+2. P-08 由服务端注入脱敏聚合和确定性 10/2/2 结果，模型工具数为 0，返回 `CALLER` 结果。
+3. API 只创建或更新 `HR_REVIEW` 信号，不创建经理任务，不修改正式画像。
 
 ### Turn 2：HR 审核信号
 
@@ -984,4 +1013,4 @@ Trace/状态断言：
 3. `CandidateEvidence.signal` 当前只有 `STRONG/MIXED/WEAK/MISSING`，不能完整表达 PRD 的“明确支持、可能支持、未提及、明确不符、需面试验证”。
 4. 当前 `ArtifactStatus` 只有 `DRAFT/CONFIRMED/INVALIDATED`，PRD/验收使用的 `STALE` 需要明确映射或扩展。
 5. S-09 的恢复摘要属于普通对话，现有 `CONVERSATION` 可承载，但需要单独断言它不会误写事实。
-6. 当前 `CALIBRATION_ADVICE` 明确只能 `propose_calibration_signal`，不能创建经理任务；S-11 的业务事实变化“直达经理”需要由业务服务在人工确认后触发，或增加明确的非模型编排路径。
+6. 当前 `CALIBRATION_ADVICE` 只处理 `RECRUITMENT_SIGNAL`，采用零工具 `CALLER` 持久化且不能创建经理任务；S-11 的 `BUSINESS_FACT_CHANGE` 仍必须由业务服务在人工确认后通过独立确定性路径直达经理。
