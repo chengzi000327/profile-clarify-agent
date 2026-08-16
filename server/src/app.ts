@@ -37,6 +37,7 @@ import { AgentRunner } from './agent/runner.js'
 import { SidecarHarnessAdapter, type HarnessAdapter } from './agent/harness-adapter.js'
 import type { AppConfig } from './config.js'
 import { RoleService } from './services/role-service.js'
+import { ApprovedHcIntakeService } from './services/approved-hc-intake-service.js'
 import {
   RECRUITING_CONTEXT_PROJECTIONS,
   RecruitingContextService,
@@ -52,6 +53,9 @@ import {
 
 const IdParamsSchema = z.object({ id: z.string().uuid() })
 const RunParamsSchema = z.object({ run_id: z.string().uuid() })
+const HcApprovalParamsSchema = z.object({
+  approval_id: z.string().trim().min(1).max(160),
+})
 const ArtifactParamsSchema = z.object({
   id: z.string().uuid(),
   type: ArtifactTypeSchema,
@@ -208,6 +212,7 @@ export const buildApp = async (
   await seedMockHcApprovals(store)
   await recoverInterruptedRuns(store)
   const roleService = new RoleService(store)
+  const approvedHcIntakeService = new ApprovedHcIntakeService(store, roleService)
   const reconciledHcRoles = await roleService.reconcileHcApprovalsForTenant('tenant-demo')
   if (reconciledHcRoles > 0) {
     app.log.info({ reconciledHcRoles }, 'mock HC approvals synchronized')
@@ -606,6 +611,27 @@ export const buildApp = async (
     const body = MessageRequestSchema.parse(request.body)
     const role = await roleService.createIntake(request.actor)
     const result = await runner.submitMessage(role.state.id, request.actor, body.content)
+    return reply.status(202).send({
+      role,
+      run_id: result.run.id,
+      message: result.message,
+      stream_url: `/api/v1/agent-runs/${result.run.id}/events`,
+    })
+  })
+
+  app.get('/api/v1/intake/hc-approvals', async (request) => ({
+    items: await approvedHcIntakeService.list(request.actor),
+  }))
+
+  app.post('/api/v1/intake/hc-approvals/:approval_id', async (request, reply) => {
+    const { approval_id: approvalId } = HcApprovalParamsSchema.parse(request.params)
+    const role = await approvedHcIntakeService.start(request.actor, approvalId)
+    const approval = role.state.hc_approval
+    if (!approval || approval.status !== 'APPROVED') {
+      throw new DomainError('HC_APPROVAL_REQUIRED', '必须选择已审批的 HC', 409)
+    }
+    const content = `我选择先澄清已通过 HC 审批的“${approval.role_title}”（${approval.department}）。请读取 HC 审批单中的招聘原因，不要再次追问招聘原因，从这个岗位入职后的成功标准开始澄清。`
+    const result = await runner.submitMessage(role.state.id, request.actor, content)
     return reply.status(202).send({
       role,
       run_id: result.run.id,

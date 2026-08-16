@@ -36,9 +36,11 @@ import {
   versions,
 } from './data.js';
 import { api, ApiError } from './api/client.js';
+import { hcIntakeApi } from './api/hc-intake.js';
 import LoginScreen from './components/LoginScreen.jsx';
 import { Composer, LiveAgentRun } from './components/AgentConversation.jsx';
 import AdminTraceConsole from './components/AdminTraceConsole.jsx';
+import './hc-intake.css';
 
 const sourceIcons = {
   org: Users,
@@ -350,6 +352,28 @@ function App() {
     }
   }
 
+  async function startApprovedHcIntake(approvalId) {
+    setRequestError('');
+    setAgentStatus('running');
+    try {
+      const result = await hcIntakeApi.start(approvalId);
+      const roleId = result.role.state.id;
+      setNewConversationMode(false);
+      setActiveRoleId(roleId);
+      setRoleDetail(result.role);
+      setMessages([result.message]);
+      setActiveView('conversation');
+      connectRun(result, roleId);
+      Promise.all([
+        loadRoleSessions(false, roleId),
+        refreshConversation(roleId),
+      ]).catch((error) => setRequestError(error.message));
+    } catch (error) {
+      setAgentStatus('failed');
+      setRequestError(error.message);
+    }
+  }
+
   async function confirmPendingFacts(factIds) {
     if (!activeRoleId || !roleDetail || factIds.length === 0) return;
     setRequestError('');
@@ -415,6 +439,7 @@ function App() {
         onDismissError={() => setRequestError('')}
         onChooseRole={chooseRole}
         onSend={sendIntakeMessage}
+        onSelectApprovedHc={startApprovedHcIntake}
         onOpenConversation={() => setActiveView('conversation')}
         onOpenTrace={() => setActiveView('admin-trace')}
         onStartNew={startNewConversation}
@@ -617,13 +642,36 @@ function EmptyWorkspace({
   onDismissError,
   onChooseRole,
   onSend,
+  onSelectApprovedHc,
   onOpenConversation,
   onOpenTrace,
   onStartNew,
   onLogout,
 }) {
   const [profileOpen, setProfileOpen] = useState(false);
+  const [approvedHcs, setApprovedHcs] = useState([]);
+  const [approvedHcsLoading, setApprovedHcsLoading] = useState(actor.role === 'MANAGER');
+  const [approvedHcsError, setApprovedHcsError] = useState('');
   const viewerRole = actor.role === 'ADMIN' ? 'admin' : actor.role === 'HR' ? 'hr' : 'manager';
+
+  useEffect(() => {
+    if (actor.role !== 'MANAGER') return undefined;
+    let cancelled = false;
+    setApprovedHcsLoading(true);
+    hcIntakeApi.listApproved()
+      .then((result) => {
+        if (!cancelled) setApprovedHcs(result.items ?? []);
+      })
+      .catch((error) => {
+        if (!cancelled) setApprovedHcsError(error.message);
+      })
+      .finally(() => {
+        if (!cancelled) setApprovedHcsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [actor.role, actor.user_id]);
   const guidance = actor.role === 'HR'
     ? {
         sidebarAction: '开始岗位需求审核',
@@ -677,15 +725,15 @@ function EmptyWorkspace({
     : {
         sidebarAction: '开始新岗位对话',
         emptyListHint: '直接在右侧和 Agent 聊聊',
-        workspaceTitle: '新岗位对话',
-        phaseLabel: '直接描述招聘需求',
-        introTitle: '先聊聊你为什么想招人',
-        introDescription: '不用先创建岗位或填写表单。直接描述业务问题，Agent 会在对话中识别岗位、补齐事实并逐步建立岗位画像。',
-        policyLabel: '岗位建立',
-        policyStrong: '从第一句话开始',
-        policyHint: '岗位名称、团队和成功标准会在对话中逐步补全',
-        greeting: `你好，${actor.display_name}。我们先从这次招聘要解决的业务问题聊起。`,
-        prompt: '你可以直接说：“最近业务遇到了什么问题，所以想招什么样的人？”我会边聊边帮你建立岗位。',
+        workspaceTitle: '岗位画像澄清',
+        phaseLabel: '选择已审批 HC',
+        introTitle: '聊一聊你想招什么样的人',
+        introDescription: 'Agent 会先读取已经通过审批的 HC。选择一个岗位后，我们再围绕成功标准、关键工作和能力要求逐步澄清画像。',
+        policyLabel: '画像澄清',
+        policyStrong: '从已审批 HC 开始',
+        policyHint: 'HC 中的招聘原因直接作为事实，不再重复追问',
+        greeting: `你好，${actor.display_name}。我已经同步了当前通过审批、仍需澄清岗位画像的 HC。`,
+        prompt: '你希望先澄清哪一个？选择后我会读取对应 HC，并主动开始下一步澄清。',
         starterLabel: '你可以这样开始',
         starters: [
           {
@@ -825,12 +873,53 @@ function EmptyWorkspace({
                     <div className="message-label">画像澄清 Agent</div>
                     <p>{guidance.greeting}</p>
                     <p>{guidance.prompt}</p>
-                    <div className="empty-chat-starters">
-                      <span><Sparkles size={14} />{guidance.starterLabel}</span>
-                      {guidance.starters.map((starter) => (
-                        <button key={starter.label} type="button" onClick={() => onSend(starter.message)}>{starter.label}</button>
-                      ))}
-                    </div>
+                    {actor.role === 'MANAGER' ? (
+                      approvedHcsLoading ? (
+                        <div className="approved-hc-picker-state">正在读取已审批 HC…</div>
+                      ) : approvedHcsError ? (
+                        <div className="approved-hc-picker-state">HC 列表加载失败：{approvedHcsError}</div>
+                      ) : approvedHcs.length === 0 ? (
+                        <div className="approved-hc-picker-state">当前没有尚待澄清画像的已审批 HC。</div>
+                      ) : (
+                        <div className="approved-hc-picker">
+                          <div className="approved-hc-picker-header">
+                            <strong>待澄清画像的已审批 HC</strong>
+                            <span>共 {approvedHcs.length} 个</span>
+                          </div>
+                          {approvedHcs.map((hc) => (
+                            <button
+                              className="approved-hc-card"
+                              disabled={isAgentBusy(agentStatus)}
+                              key={hc.approval_id}
+                              onClick={() => onSelectApprovedHc(hc.approval_id)}
+                              type="button"
+                            >
+                              <span>
+                                <span className="approved-hc-card-main">
+                                  <strong>{hc.role_title}</strong>
+                                  <span className="approved-hc-status">HC 已审批</span>
+                                </span>
+                                <span className="approved-hc-card-meta">
+                                  {hc.department} · {hc.headcount} 人 · {hc.approval_id}
+                                </span>
+                              </span>
+                              <p className="approved-hc-card-reason">{hc.hiring_reason}</p>
+                              <span className="approved-hc-card-action">
+                                {hc.clarification_status === 'IN_PROGRESS' ? '继续澄清' : '开始澄清'}
+                                <ArrowRight size={13} />
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                      )
+                    ) : (
+                      <div className="empty-chat-starters">
+                        <span><Sparkles size={14} />{guidance.starterLabel}</span>
+                        {guidance.starters.map((starter) => (
+                          <button key={starter.label} type="button" onClick={() => onSend(starter.message)}>{starter.label}</button>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 </div>
                 {(agentStatus === 'running' || agentStatus === 'reconnecting') && (
