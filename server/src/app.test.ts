@@ -76,7 +76,7 @@ describe('Role Clarifier API', () => {
       display_name: '企业管理员',
     })
     expect(managerEvent.payload.internal_message).toBeUndefined()
-    expect(managerEvent.payload.message).toContain('请稍后重试')
+    expect(managerEvent.payload.message).toBe('Agent 本轮没有完成，原消息已经保留，请稍后重试。')
     expect(adminEvent.payload.internal_message).toBe('runtime stack for administrator')
   })
 

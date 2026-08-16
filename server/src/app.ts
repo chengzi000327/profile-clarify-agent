@@ -94,7 +94,13 @@ const toCandidateEvidencePlaceholder = (
 export const visibleAgentEvent = (event: AgentEvent, actor: ActorContext): AgentEvent => {
   if (actor.role === 'ADMIN' || event.type !== 'run.failed') return event
   const { internal_message: _internalMessage, ...payload } = event.payload
-  return { ...event, payload }
+  return {
+    ...event,
+    payload: {
+      ...payload,
+      message: 'Agent 本轮没有完成，原消息已经保留，请稍后重试。',
+    },
+  }
 }
 
 export interface AppDependencies {
