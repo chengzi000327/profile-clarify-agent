@@ -2457,44 +2457,74 @@ textarea:focus-visible {
   font-size: 9px;
 }
 
-.trace-console-grid {
-  display: grid;
-  min-height: 560px;
-  grid-template-columns: 320px minmax(0, 1fr);
+.trace-run-page,
+.trace-detail-page {
   border: 1px solid #e0e4eb;
   border-radius: 12px;
   background: #fff;
   overflow: hidden;
 }
 
-.trace-run-list {
-  min-width: 0;
-  border-right: 1px solid var(--line);
-  overflow-y: auto;
+.trace-run-page {
+  min-height: 520px;
 }
 
 .trace-list-heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 13px;
+  padding: 15px 17px;
   border-bottom: 1px solid var(--line);
   font-size: 11px;
 }
 
+.trace-list-heading > div {
+  display: grid;
+  gap: 3px;
+}
+
+.trace-list-heading small {
+  color: var(--text-3);
+  font-size: 9px;
+  font-weight: 400;
+}
+
 .trace-list-heading span {
-  padding: 2px 6px;
+  padding: 3px 8px;
   border-radius: 999px;
   color: var(--text-3);
   background: var(--surface-3);
   font-size: 9px;
 }
 
-.trace-run-list > button {
+.trace-run-table-scroll {
+  overflow-x: auto;
+}
+
+.trace-run-table {
+  min-width: 860px;
+}
+
+.trace-run-table-head,
+.trace-run-row {
   display: grid;
+  grid-template-columns: minmax(190px, 1.25fr) minmax(180px, 1.15fr) minmax(135px, .8fr) 140px 76px 20px;
+  gap: 16px;
+  align-items: center;
+}
+
+.trace-run-table-head {
+  padding: 9px 17px;
+  color: var(--text-3);
+  background: #fafbfc;
+  font-size: 8px;
+  font-weight: 600;
+}
+
+.trace-run-row {
   width: 100%;
-  gap: 5px;
-  padding: 12px 13px;
+  min-height: 64px;
+  padding: 10px 17px;
   border: 0;
   border-bottom: 1px solid #eff0f2;
   background: #fff;
@@ -2502,44 +2532,49 @@ textarea:focus-visible {
   cursor: pointer;
 }
 
-.trace-run-list > button:hover,
-.trace-run-list > button.active {
+.trace-run-row:hover {
   background: #f5f8ff;
 }
 
-.trace-run-list > button.active {
-  box-shadow: inset 3px 0 var(--blue);
+.trace-run-row:last-child {
+  border-bottom: 0;
 }
 
-.trace-run-list button > div,
-.trace-run-list button > span {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+.trace-run-row > span {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
 }
 
-.trace-run-list strong {
+.trace-run-row strong,
+.trace-run-row small,
+.trace-run-row code {
   overflow: hidden;
-  font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.trace-run-list p,
-.trace-run-list span {
-  margin: 0;
+.trace-run-row strong {
+  color: var(--text-1);
+  font-size: 10px;
+}
+
+.trace-run-row small,
+.trace-run-row time,
+.trace-run-row code {
   color: var(--text-3);
+  font-family: inherit;
   font-size: 9px;
 }
 
-.trace-run-list code {
-  color: #657086;
+.trace-run-row code {
+  font-family: monospace;
   font-size: 8px;
 }
 
-.trace-run-list em,
+.trace-run-row em,
 .trace-detail-heading > em {
+  justify-self: start;
   padding: 3px 6px;
   border-radius: 999px;
   color: #3562a9;
@@ -2549,22 +2584,83 @@ textarea:focus-visible {
   white-space: nowrap;
 }
 
-.trace-run-list em.completed,
+.trace-run-row em.completed,
 .trace-detail-heading > em.completed {
   color: #08754f;
   background: #e9f8f1;
 }
 
-.trace-run-list em.failed,
+.trace-run-row em.failed,
 .trace-detail-heading > em.failed {
   color: #b13b2d;
   background: #fff0ed;
+}
+
+.trace-row-arrow {
+  color: #9aa3b0;
+  transition: transform .16s ease, color .16s ease;
+}
+
+.trace-run-row:hover .trace-row-arrow {
+  color: var(--blue);
+  transform: translateX(2px);
+}
+
+.trace-detail-screen {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.trace-detail-page-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.trace-back-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--text-2);
+  background: #fff;
+  font-size: 9px;
+  cursor: pointer;
+}
+
+.trace-back-button:hover {
+  color: var(--blue);
+  border-color: #b9cafa;
+  background: #f7f9ff;
+}
+
+.trace-detail-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-3);
+  font-size: 9px;
+}
+
+.trace-detail-breadcrumb strong {
+  color: var(--text-2);
+  font-weight: 600;
 }
 
 .trace-detail {
   min-width: 0;
   padding: 18px 20px;
   overflow: auto;
+}
+
+.trace-detail-page {
+  width: min(100%, 1420px);
+  min-height: 560px;
+  margin: 0 auto;
+  padding: 22px 24px;
 }
 
 .trace-detail-heading {
@@ -2582,6 +2678,12 @@ textarea:focus-visible {
 .trace-detail-heading h2 {
   margin: 4px 0 0;
   font-size: 17px;
+}
+
+.trace-detail-heading p {
+  margin: 6px 0 0;
+  color: var(--text-3);
+  font-size: 9px;
 }
 
 .trace-metrics {
