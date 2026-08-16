@@ -370,7 +370,8 @@ export class AgentRunner {
       if (!cancelled) {
         await emit('run.failed', {
           code: run.error_code,
-          message: error instanceof Error ? error.message : 'Harness execution failed',
+          message: 'Agent 本轮没有完成，原消息已经保留，请稍后重试。',
+          internal_message: error instanceof Error ? error.message : 'Harness execution failed',
         })
         const failedMessage = await this.createMessage({
           roleSessionId: run.role_session_id,

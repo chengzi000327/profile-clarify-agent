@@ -91,6 +91,12 @@ const toCandidateEvidencePlaceholder = (
   bottlenecks: [],
 })
 
+export const visibleAgentEvent = (event: AgentEvent, actor: ActorContext): AgentEvent => {
+  if (actor.role === 'ADMIN' || event.type !== 'run.failed') return event
+  const { internal_message: _internalMessage, ...payload } = event.payload
+  return { ...event, payload }
+}
+
 export interface AppDependencies {
   store?: ApplicationStore
   feishuClient?: FeishuClientLike
@@ -765,7 +771,7 @@ export const buildApp = async (
     })
     reply.raw.write('retry: 2000\n\n')
     for (const event of await store.listRunEvents(run_id, Number.isFinite(lastSequence) ? lastSequence : 0)) {
-      writeSseEvent(reply.raw, event)
+      writeSseEvent(reply.raw, visibleAgentEvent(event, request.actor))
     }
     const latest = await store.getRun(run_id)
     if (latest && ['COMPLETED', 'FAILED', 'CANCELLED'].includes(latest.run.status)) {
@@ -773,7 +779,7 @@ export const buildApp = async (
       return
     }
     const unsubscribe = store.subscribeToRun(run_id, (event) => {
-      writeSseEvent(reply.raw, event)
+      writeSseEvent(reply.raw, visibleAgentEvent(event, request.actor))
       if (['run.completed', 'run.failed'].includes(event.type)) {
         unsubscribe()
         clearInterval(heartbeat)

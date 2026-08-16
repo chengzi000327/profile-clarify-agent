@@ -15,6 +15,11 @@ const runtimeConfig = await readFile(
   resolve(repositoryRoot, 'harness-sidecar/runtime/cordis.yml'),
   'utf8',
 )
+
+const reasoningEffort = runtimeConfig.match(/reasoningEffort:\s*([^\s#]+)/)?.[1]
+if (!reasoningEffort || !['off', 'high', 'max'].includes(reasoningEffort)) {
+  throw new Error(`Harness rc.5 reasoningEffort must be off, high, or max; got ${reasoningEffort ?? 'missing'}`)
+}
 const patch = await readFile(resolve(root, 'cordis.patch.yml'), 'utf8')
 const source = await readFile(resolve(root, 'src/index.ts'), 'utf8')
 

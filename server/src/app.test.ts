@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { FastifyInstance } from 'fastify'
-import { buildApp } from './app.js'
+import { buildApp, visibleAgentEvent } from './app.js'
 import { loadConfig } from './config.js'
 import { MemoryStore } from './store/memory-store.js'
 import { DEMO_ROLE_SESSION_ID } from './store/seed.js'
@@ -48,6 +48,36 @@ describe('Role Clarifier API', () => {
 
   beforeEach(async () => {
     app = await buildApp(config, { store: new MemoryStore() })
+  })
+
+  it('普通成员的 SSE 不暴露内部错误，企业管理员 Trace 保留诊断信息', () => {
+    const event = {
+      id: 'event-failed',
+      run_id: 'run-failed',
+      sequence: 1,
+      type: 'run.failed' as const,
+      payload: {
+        code: 'HARNESS_EXECUTION_FAILED',
+        message: 'Agent 本轮没有完成，原消息已经保留，请稍后重试。',
+        internal_message: 'runtime stack for administrator',
+      },
+      created_at: '2026-08-16T00:00:00.000Z',
+    }
+    const managerEvent = visibleAgentEvent(event, {
+      tenant_id: 'tenant-demo',
+      user_id: 'manager-demo',
+      role: 'MANAGER',
+      display_name: '用人经理',
+    })
+    const adminEvent = visibleAgentEvent(event, {
+      tenant_id: 'tenant-demo',
+      user_id: 'admin-demo',
+      role: 'ADMIN',
+      display_name: '企业管理员',
+    })
+    expect(managerEvent.payload.internal_message).toBeUndefined()
+    expect(managerEvent.payload.message).toContain('请稍后重试')
+    expect(adminEvent.payload.internal_message).toBe('runtime stack for administrator')
   })
 
   it('动态账号选择角色：新账号为空，同一账号恢复岗位，不同账号互相隔离', async () => {
