@@ -2,6 +2,10 @@
 
 一个可运行的招聘岗位澄清工作台：React 前端、Fastify API、PostgreSQL 业务事实层、异步 Agent Run/SSE，以及锁定官方源码的 DeepSeek Harness Sidecar。
 
+[![岗位画像澄清智能体：从招聘需求走向岗位共识](docs/images/role-clarifier-overview.png)](https://agent-intro-web-production.up.railway.app)
+
+点击上图查看 [Railway 线上项目介绍](https://agent-intro-web-production.up.railway.app)，或直接进入 [Railway 线上招聘工作台](https://web-production-a9f14.up.railway.app)。
+
 ## 当前可以跑通
 
 - 登录时填写企业空间、账号和姓名并选择用人经理、HR 或企业管理员；不存在固定用户名，权限来自签名 HttpOnly Cookie。

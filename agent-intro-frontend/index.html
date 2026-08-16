@@ -49,9 +49,9 @@
 
     .deck-viewport { position: fixed; inset: 0; overflow: hidden; background: var(--stage-bg); }
     .deck-stage { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; overflow: hidden; transform-origin: 0 0; background: var(--slide-bg); }
-    .slide { position: absolute; inset: 0; width: 1920px; height: 1080px; overflow: hidden; visibility: hidden; opacity: 0; pointer-events: none; background: radial-gradient(circle at 82% 38%, rgba(72, 156, 255, .2), transparent 30%), linear-gradient(145deg, #fff 0%, #f6f9ff 54%, #eaf3ff 100%); }
+    .slide { position: absolute; inset: 0; width: 1920px; height: 1080px; overflow: hidden; visibility: hidden; opacity: 0; pointer-events: none; background: linear-gradient(to bottom, transparent 0 calc(100% - 92px), #fff calc(100% - 92px)), radial-gradient(circle at 82% 38%, rgba(72, 156, 255, .2), transparent 30%), linear-gradient(145deg, #fff 0%, #f6f9ff 54%, #eaf3ff 100%); }
     .slide.active, .slide.visible { visibility: visible; opacity: 1; pointer-events: auto; z-index: 1; }
-    .slide::before { content: ""; position: absolute; inset: 0; background-image: linear-gradient(rgba(7,91,235,.052) 1px, transparent 1px), linear-gradient(90deg, rgba(7,91,235,.052) 1px, transparent 1px); background-size: 60px 60px; pointer-events: none; }
+    .slide::before { content: ""; position: absolute; inset: 0 0 92px; background-image: linear-gradient(rgba(7,91,235,.052) 1px, transparent 1px), linear-gradient(90deg, rgba(7,91,235,.052) 1px, transparent 1px); background-size: 60px 60px; pointer-events: none; }
     .slide::after { content: ""; position: absolute; right: -210px; top: -280px; width: 720px; height: 720px; border: 1px solid rgba(7,91,235,.12); border-radius: 50%; box-shadow: 0 0 0 78px rgba(7,91,235,.025), 0 0 0 162px rgba(7,91,235,.018); pointer-events: none; }
     .slide-shell { position: absolute; inset: 0; z-index: 2; }
 
@@ -61,6 +61,7 @@
     .slide-header .system-mark { color: var(--text-soft); }
     .slide-title { position: absolute; left: 76px; top: 150px; max-width: 1120px; font: 800 70px/1.12 var(--font-display); letter-spacing: -.045em; }
     .slide-title span { color: var(--blue); }
+    .slide-title.compact-title { max-width: 1160px; font-size: 62px; line-height: 1.08; }
     .slide-intro { position: absolute; right: 76px; top: 158px; width: 560px; color: var(--text-soft); font-size: 21px; line-height: 1.7; font-weight: 500; }
     .slide-intro strong { color: var(--blue); }
     .slide-foot { position: absolute; left: 76px; right: 76px; bottom: 45px; display: flex; justify-content: space-between; align-items: center; padding-top: 16px; border-top: 1px solid var(--line); color: var(--text-soft); font-size: 15px; }
@@ -79,6 +80,9 @@
     .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--cyan); box-shadow: 0 0 0 8px rgba(24,184,209,.13); }
 
     /* 第 1 页 */
+    .cover-slide { background: #fff; }
+    .cover-slide::before, .cover-slide::after { display: none; }
+    .cover-image { position: absolute; left: 35px; top: 35px; width: 1850px; height: 1010px; object-fit: contain; border-radius: 38px; background: #fff; box-shadow: 0 22px 60px rgba(8, 58, 138, .08); }
     .hero-nav { position: absolute; left: 76px; right: 76px; top: 48px; display: flex; justify-content: space-between; align-items: center; color: var(--text-soft); font: 600 15px/1 var(--font-mono); letter-spacing: .06em; }
     .hero-brand { display: flex; align-items: center; gap: 15px; color: var(--blue); font-family: var(--font-body); font-weight: 800; }
     .hero-mark { position: relative; width: 38px; height: 38px; border: 2px solid var(--blue); border-radius: 12px; }
@@ -108,7 +112,7 @@
     .hero-footer { position: absolute; left: 78px; right: 78px; bottom: 47px; display: flex; justify-content: space-between; padding-top: 17px; border-top: 1px solid var(--line); color: var(--text-soft); font-size: 14px; }
 
     /* 第 2 页 */
-    .gap-layout { position: absolute; left: 76px; right: 76px; top: 286px; bottom: 110px; display: grid; grid-template-columns: .92fr 1.08fr; gap: 70px; }
+    .gap-layout { position: absolute; left: 76px; right: 76px; top: 306px; bottom: 110px; display: grid; grid-template-columns: .92fr 1.08fr; gap: 70px; }
     .gap-statement { display: flex; flex-direction: column; justify-content: center; padding: 52px; border-left: 8px solid var(--cyan); background: linear-gradient(135deg, var(--pale), rgba(255,255,255,.78)); }
     .gap-statement strong { font: 800 68px/1.16 var(--font-display); letter-spacing: -.045em; }
     .gap-statement strong span { display: block; color: var(--blue); }
@@ -159,28 +163,28 @@
     .role-card.agent li { color: #dbe9ff; }
     .role-limit { position: absolute; left: 32px; right: 32px; bottom: 28px; padding-top: 17px; border-top: 1px solid var(--line); color: var(--deep); font-size: 15px; font-weight: 700; }
     .role-card.agent .role-limit { color: #fff; border-color: rgba(255,255,255,.25); }
-    .collab-strip { position: absolute; left: 76px; right: 76px; bottom: 56px; display: flex; justify-content: center; gap: 22px; color: var(--text); font-size: 18px; font-weight: 700; }
+    .collab-strip { position: absolute; left: 76px; right: 76px; bottom: 108px; display: flex; justify-content: center; gap: 22px; color: var(--text); font-size: 18px; font-weight: 700; }
     .collab-strip b { color: var(--cyan); }
 
     /* 第 6 页 */
-    .company-layout { position: absolute; left: 76px; right: 76px; top: 285px; bottom: 100px; display: grid; grid-template-columns: 610px 1fr; gap: 46px; }
-    .company-profile { padding: 40px; background: linear-gradient(145deg, var(--blue), #0643aa); color: #fff; }
+    .company-layout { position: absolute; left: 76px; right: 76px; top: 285px; bottom: 136px; display: grid; grid-template-columns: 610px 1fr; gap: 46px; }
+    .company-profile { padding: 34px 38px; background: linear-gradient(145deg, var(--blue), #0643aa); color: #fff; }
     .company-profile .mock-label { display: inline-flex; padding: 9px 14px; border: 1px solid rgba(255,255,255,.35); border-radius: 999px; color: #b9f3f5; font-size: 14px; font-weight: 800; }
-    .company-profile h3 { margin-top: 28px; font-size: 40px; }
-    .company-profile > p { margin-top: 18px; color: #dbe8ff; font-size: 19px; line-height: 1.7; }
-    .company-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 32px; }
-    .company-metric { padding: 20px; border: 1px solid rgba(255,255,255,.2); background: rgba(255,255,255,.08); }
+    .company-profile h3 { margin-top: 24px; font-size: 38px; }
+    .company-profile > p { margin-top: 16px; color: #dbe8ff; font-size: 18px; line-height: 1.62; }
+    .company-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 25px; }
+    .company-metric { padding: 17px 19px; border: 1px solid rgba(255,255,255,.2); background: rgba(255,255,255,.08); }
     .company-metric strong { display: block; color: #fff; font-size: 30px; }
     .company-metric span { display: block; margin-top: 8px; color: #bdd4ff; font-size: 14px; }
-    .company-note { margin-top: 28px; padding: 18px 20px; border-left: 5px solid var(--cyan); background: rgba(255,255,255,.09); color: #fff; font-size: 16px; line-height: 1.55; }
+    .company-note { margin-top: 22px; padding: 15px 18px; border-left: 5px solid var(--cyan); background: rgba(255,255,255,.09); color: #fff; font-size: 15px; line-height: 1.5; }
     .data-catalog { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
-    .data-card { padding: 27px; }
+    .data-card { padding: 23px 25px; }
     .data-card .data-symbol { width: 44px; height: 44px; display: grid; place-items: center; border-radius: 14px; background: var(--pale-cyan); color: var(--cyan); font-size: 20px; font-weight: 900; }
-    .data-card h4 { margin-top: 20px; font-size: 21px; }
-    .data-card p { margin-top: 10px; color: var(--text-soft); font-size: 15px; line-height: 1.55; }
+    .data-card h4 { margin-top: 16px; font-size: 20px; }
+    .data-card p { margin-top: 9px; color: var(--text-soft); font-size: 15px; line-height: 1.48; }
 
     /* 第 7 页 */
-    .context-table { position: absolute; left: 76px; right: 76px; top: 300px; border-top: 2px solid var(--blue); border-bottom: 2px solid var(--blue); background: rgba(255,255,255,.78); }
+    .context-table { position: absolute; left: 76px; right: 76px; top: 315px; border-top: 2px solid var(--blue); border-bottom: 2px solid var(--blue); background: rgba(255,255,255,.78); }
     .context-row { display: grid; grid-template-columns: 300px 400px 1fr 300px; min-height: 104px; align-items: stretch; border-bottom: 1px solid var(--line); }
     .context-row:last-child { border-bottom: 0; }
     .context-row > * { display: flex; align-items: center; padding: 18px 22px; border-right: 1px solid var(--line-soft); }
@@ -189,12 +193,12 @@
     .context-row strong { color: var(--deep); font-size: 18px; }
     .context-row span { color: var(--text-soft); font-size: 16px; line-height: 1.5; }
     .context-row .result { color: var(--blue); font-weight: 700; }
-    .context-principles { position: absolute; left: 76px; right: 76px; bottom: 50px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+    .context-principles { position: absolute; left: 76px; right: 76px; bottom: 106px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
     .context-principles span { padding: 17px 18px; border: 1px solid var(--line); background: rgba(234,242,255,.82); text-align: center; color: var(--text); font-size: 16px; font-weight: 700; }
 
     /* 第 8 页 */
     .workflow-grid { position: absolute; left: 76px; right: 76px; top: 306px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 22px; }
-    .workflow-step { position: relative; min-height: 225px; padding: 29px; }
+    .workflow-step { position: relative; min-height: 250px; padding: 27px 29px; }
     .workflow-step:nth-child(-n+4)::after { content: "→"; position: absolute; right: -19px; top: 88px; z-index: 3; color: var(--blue); font-size: 30px; font-weight: 800; }
     .workflow-step:nth-child(4)::after { content: "↓"; right: 50%; top: auto; bottom: -31px; }
     .workflow-step:nth-child(5), .workflow-step:nth-child(6), .workflow-step:nth-child(7), .workflow-step:nth-child(8) { margin-top: 8px; }
@@ -219,10 +223,10 @@
     .profile-card footer { margin-top: 19px; padding-top: 14px; border-top: 1px solid var(--line); color: var(--blue); font-size: 14px; font-weight: 800; }
 
     /* 第 10 页 */
-    .output-source { position: absolute; left: 790px; top: 292px; width: 340px; min-height: 132px; display: grid; place-items: center; padding: 24px; border-radius: 24px; background: var(--blue); color: #fff; text-align: center; box-shadow: 0 25px 55px rgba(7,91,235,.22); }
+    .output-source { position: absolute; left: 790px; top: 315px; width: 340px; min-height: 122px; display: grid; place-items: center; padding: 22px; border-radius: 24px; background: var(--blue); color: #fff; text-align: center; box-shadow: 0 25px 55px rgba(7,91,235,.22); }
     .output-source strong { font-size: 27px; }
     .output-source span { display: block; margin-top: 9px; color: #cfe0ff; font-size: 15px; }
-    .output-grid { position: absolute; left: 76px; right: 76px; top: 482px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 23px; }
+    .output-grid { position: absolute; left: 76px; right: 76px; top: 500px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 23px; }
     .output-card { position: relative; min-height: 380px; padding: 30px; }
     .output-card::before { content: ""; position: absolute; left: 50%; top: -58px; height: 58px; border-left: 2px solid var(--blue); }
     .output-card h3 { font-size: 25px; }
@@ -247,26 +251,26 @@
     .arch-layer.control .arch-items span { border-color: rgba(255,255,255,.18); background: rgba(255,255,255,.1); color: #fff; }
 
     /* 第 12 页 */
-    .architecture-detail { position: absolute; left: 76px; right: 76px; top: 294px; bottom: 92px; display: grid; grid-template-columns: 1.08fr .92fr; gap: 42px; }
-    .data-journey { position: relative; padding: 35px; }
+    .architecture-detail { position: absolute; left: 76px; right: 76px; top: 294px; bottom: 128px; display: grid; grid-template-columns: 1.08fr .92fr; gap: 42px; }
+    .data-journey { position: relative; padding: 30px 32px; }
     .journey-title { font-size: 26px; }
-    .journey-list { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-top: 27px; }
-    .journey-step { position: relative; min-height: 116px; padding: 20px 20px 18px 60px; border: 1px solid var(--line); background: var(--pale); }
+    .journey-list { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 22px; }
+    .journey-step { position: relative; min-height: 106px; padding: 17px 18px 15px 57px; border: 1px solid var(--line); background: var(--pale); }
     .journey-step b { position: absolute; left: 18px; top: 18px; width: 28px; height: 28px; display: grid; place-items: center; border-radius: 50%; background: var(--blue); color: #fff; font-size: 13px; }
     .journey-step strong { display: block; font-size: 18px; }
     .journey-step span { display: block; margin-top: 8px; color: var(--text-soft); font-size: 14px; line-height: 1.5; }
-    .context-example { margin-top: 19px; padding: 22px; border-left: 6px solid var(--cyan); background: var(--pale-cyan); }
+    .context-example { margin-top: 15px; padding: 17px 20px; border-left: 6px solid var(--cyan); background: var(--pale-cyan); }
     .context-example strong { font-size: 18px; }
     .context-example p { margin-top: 9px; color: var(--text-soft); font-size: 15px; line-height: 1.55; }
-    .design-reasons { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
-    .reason-card { padding: 25px; }
+    .design-reasons { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .reason-card { padding: 21px 23px; }
     .reason-card .reason-key { color: var(--cyan); font: 700 13px/1 var(--font-mono); }
-    .reason-card h3 { margin-top: 15px; font-size: 22px; }
-    .reason-card p { margin-top: 12px; color: var(--text-soft); font-size: 15px; line-height: 1.58; }
+    .reason-card h3 { margin-top: 13px; font-size: 21px; }
+    .reason-card p { margin-top: 10px; color: var(--text-soft); font-size: 15px; line-height: 1.5; }
     .reason-card strong { color: var(--blue); }
 
     /* 第 13 页 */
-    .case-layout { position: absolute; left: 76px; right: 76px; top: 280px; display: grid; grid-template-columns: 1.14fr .86fr; gap: 45px; }
+    .case-layout { position: absolute; left: 76px; right: 76px; top: 305px; display: grid; grid-template-columns: 1.14fr .86fr; gap: 45px; }
     .case-panel { padding: 35px; }
     .case-panel header { display: flex; justify-content: space-between; align-items: center; }
     .case-panel h3 { font-size: 28px; }
@@ -285,7 +289,7 @@
     .workbench-link { display: flex; align-items: center; justify-content: space-between; margin-top: 27px; min-height: 70px; padding: 0 24px; border-radius: 999px; background: #fff; color: var(--blue); font-size: 18px; font-weight: 900; transition: transform .2s ease, box-shadow .2s ease; }
     .workbench-link:hover { transform: translateY(-3px); box-shadow: 0 18px 35px rgba(0,0,0,.16); }
     .workbench-link i { font-style: normal; font-size: 28px; }
-    .final-quote { position: absolute; left: 76px; right: 76px; bottom: 42px; padding-top: 18px; border-top: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; color: var(--text-soft); font-size: 16px; }
+    .final-quote { position: absolute; left: 76px; right: 76px; bottom: 98px; padding-top: 14px; border-top: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; color: var(--text-soft); font-size: 16px; }
     .final-quote strong { color: var(--blue); font-size: 19px; }
 
     /* 导航与编辑 */
@@ -322,29 +326,16 @@
   <div class="deck-viewport">
     <main class="deck-stage" id="deckStage" aria-label="岗位画像澄清智能体企业实践介绍">
 
-      <section class="slide active" data-title="项目定位">
+      <section class="slide cover-slide active" data-title="项目定位">
         <div class="slide-shell">
-          <header class="hero-nav reveal"><div class="hero-brand"><span class="hero-mark" aria-hidden="true"></span><span>岗位画像澄清智能体</span></div><span>企业招聘协作 · 01</span></header>
-          <div class="hero-copy">
-            <div class="hero-kicker reveal delay-1">从招聘编制审批开始</div>
-            <h1 class="reveal-left delay-2" data-editable data-edit-id="v2-hero-title">从招聘需求<br/><span>走向岗位共识</span></h1>
-            <p class="reveal delay-3" data-editable data-edit-id="v2-hero-body">帮助用人经理和人力资源伙伴，把已审批的招聘需求转化为<strong>可寻源、可筛选、可面试、可发布</strong>的统一标准。</p>
-            <div class="hero-tags reveal delay-4"><span>业务目标清楚</span><span>角色协作明确</span><span>数据按需调用</span><span>关键决定由人确认</span></div>
-          </div>
-          <div class="hero-flow reveal-scale delay-2" aria-label="从招聘编制审批到招聘执行">
-            <article class="hero-step s1"><small>第一步</small><strong>审批完成</strong><p>企业确认招聘岗位、人数与基本约束。</p></article>
-            <article class="hero-step s2"><small>第二步</small><strong>主动提醒</strong><p>智能体提醒用人经理开始画像澄清。</p></article>
-            <article class="hero-step s3"><small>第三步</small><strong>形成画像</strong><p>经理与人力资源伙伴确认岗位共识。</p></article>
-            <article class="hero-step s4"><small>第四步</small><strong>进入招聘</strong><p>统一指导寻源、筛选、面试和发布。</p></article>
-          </div>
-          <footer class="hero-footer reveal delay-5"><span>从原始需求到正式产物版本</span><span>岗位画像澄清智能体 / 2026</span></footer>
+          <img class="cover-image reveal-scale" src="/og.png" alt="从招聘需求走向岗位共识：审批完成、主动提醒、形成画像、招聘执行" />
         </div>
       </section>
 
       <section class="slide" data-title="业务问题">
         <div class="slide-shell">
           <header class="slide-header reveal"><div class="section-id"><b>02</b><span>为什么需要澄清</span></div><span class="system-mark">审批完成，不等于需求清楚</span></header>
-          <h2 class="slide-title reveal-left delay-1">招聘编制批了，<span>岗位却可能还没说清楚。</span></h2>
+          <h2 class="slide-title compact-title reveal-left delay-1">招聘编制批了，<br/><span>岗位却可能还没说清楚。</span></h2>
           <p class="slide-intro reveal delay-2">招聘编制（HC）解决“能不能招”，岗位画像解决“为什么招、招来做什么、什么样的人能做好”。</p>
           <div class="gap-layout">
             <div class="gap-statement reveal-left delay-2"><strong>企业缺的不是<br/><span>更多招聘文案</span></strong><p>真正缺少的是一套能够被用人经理、人力资源伙伴和面试官共同理解、共同执行、持续校准的招聘决策基线。</p></div>
@@ -429,7 +420,7 @@
       <section class="slide" data-title="上下文调用">
         <div class="slide-shell">
           <header class="slide-header reveal"><div class="section-id"><b>07</b><span>上下文调用</span></div><span class="system-mark">合适的时间，查询合适的数据</span></header>
-          <h2 class="slide-title reveal-left delay-1">不是一次喂完，<span>而是按任务精确取用。</span></h2>
+          <h2 class="slide-title compact-title reveal-left delay-1">不是一次喂完，<br/><span>而是按任务精确取用。</span></h2>
           <p class="slide-intro reveal delay-2">服务端根据当前任务、当前角色和数据权限生成最小上下文，既提高回答准确性，也避免无关信息与敏感数据进入模型。</p>
           <div class="context-table reveal delay-2" role="table" aria-label="不同任务需要的企业上下文">
             <div class="context-row context-head" role="row"><span>当前任务</span><span>查询哪些信息</span><span>为什么此时需要</span><span>帮助形成什么判断</span></div>
@@ -445,7 +436,7 @@
       <section class="slide" data-title="业务流程">
         <div class="slide-shell">
           <header class="slide-header reveal"><div class="section-id"><b>08</b><span>端到端业务流程</span></div><span class="system-mark">从审批到招聘校准</span></header>
-          <h2 class="slide-title reveal-left delay-1">先澄清、再确认、<span>最后形成正式版本。</span></h2>
+          <h2 class="slide-title compact-title reveal-left delay-1">先澄清、再确认，<br/><span>最后形成正式版本。</span></h2>
           <p class="slide-intro reveal delay-2">整个流程保留原始资料、结构化事实、人工确认和正式产物之间的关系，招聘反馈还能继续推动画像迭代。</p>
           <div class="workflow-grid">
             <article class="workflow-step card reveal delay-1"><small>01</small><h3>读取已审批岗位</h3><p>筛选尚未完成画像澄清的招聘编制。</p></article>
@@ -479,7 +470,7 @@
       <section class="slide" data-title="四类业务产物">
         <div class="slide-shell">
           <header class="slide-header reveal"><div class="section-id"><b>10</b><span>四类业务产物</span></div><span class="system-mark">来自同一份已确认岗位画像</span></header>
-          <h2 class="slide-title reveal-left delay-1">不是生成四套文案，<span>而是服务四种行动。</span></h2>
+          <h2 class="slide-title compact-title reveal-left delay-1">不是生成四套文案，<br/><span>而是服务四种行动。</span></h2>
           <p class="slide-intro reveal delay-2">所有产物共享同一组已确认事实，既保持前后一致，又允许不同角色看到与任务相关的内容。</p>
           <div class="output-source reveal-scale delay-2"><div><strong>已确认岗位画像</strong><span>共同事实源 · 可追溯版本</span></div></div>
           <div class="output-grid">
@@ -526,7 +517,7 @@
       <section class="slide" data-title="案例与价值">
         <div class="slide-shell">
           <header class="slide-header reveal"><div class="section-id"><b>13</b><span>案例与价值</span></div><span class="system-mark">从一个岗位看到完整闭环</span></header>
-          <h2 class="slide-title reveal-left delay-1">它不是职位描述生成器，<span>而是招聘协作机制。</span></h2>
+          <h2 class="slide-title compact-title reveal-left delay-1">它不是职位描述生成器，<br/><span>而是招聘协作机制。</span></h2>
           <p class="slide-intro reveal delay-2">以“企业产品经理”为例：从审批完成后的主动提醒开始，到形成统一标准，再用真实招聘反馈持续校准。</p>
           <div class="case-layout">
             <article class="case-panel card reveal-left delay-2"><header><h3>企业产品经理 · 已审批岗位</h3><span class="pill">模拟案例</span></header><div class="case-timeline"><div class="case-step"><b>1</b><strong>智能体提醒</strong><span>检测到岗位已审批、画像尚未开始。</span></div><div class="case-step"><b>2</b><strong>经理澄清</strong><span>确认业务目标、成功标准与关键职责。</span></div><div class="case-step"><b>3</b><strong>人力资源补充</strong><span>补充职级、市场、漏斗和筛选约束。</span></div><div class="case-step"><b>4</b><strong>共同确认</strong><span>处理分歧并形成正式岗位画像版本。</span></div><div class="case-step"><b>5</b><strong>进入招聘</strong><span>同步派生内部画像、评估方案和公开职位。</span></div><div class="case-step"><b>6</b><strong>持续校准</strong><span>根据简历和面试证据提出下一版建议。</span></div></div></article>
