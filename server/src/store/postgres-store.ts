@@ -5,7 +5,6 @@ import {
   eq,
   gt,
   inArray,
-  or,
   type SQL,
 } from 'drizzle-orm'
 import { drizzle, type PostgresJsDatabase } from 'drizzle-orm/postgres-js'
@@ -130,6 +129,7 @@ const conversationMessageFromRow = (row: ConversationMessageRow): ConversationMe
     id: row.id,
     tenant_id: row.tenantId,
     role_session_id: row.roleSessionId,
+    conversation_user_id: row.conversationUserId,
     run_id: row.runId,
     clarification_round_id: row.clarificationRoundId,
     sender_type: humanRole ? 'HUMAN' : row.senderKind as ConversationMessage['sender_type'],
@@ -243,14 +243,6 @@ export class PostgresStore implements ApplicationStore {
   }
 
   async listRoleStates(actor: ActorContext): Promise<RoleState[]> {
-    if (actor.role === 'ADMIN') {
-      const rows = await this.db
-        .select()
-        .from(schema.roleSessions)
-        .where(eq(schema.roleSessions.tenantId, actor.tenant_id))
-        .orderBy(desc(schema.roleSessions.updatedAt))
-      return rows.map(roleStateFromRow)
-    }
     const rows = await this.db
       .select({ role: schema.roleSessions })
       .from(schema.roleSessions)
@@ -266,6 +258,15 @@ export class PostgresStore implements ApplicationStore {
       )
       .orderBy(desc(schema.roleSessions.updatedAt))
     return rows.map((row) => roleStateFromRow(row.role))
+  }
+
+  async listTenantRoleStates(tenantId: string): Promise<RoleState[]> {
+    const rows = await this.db
+      .select()
+      .from(schema.roleSessions)
+      .where(eq(schema.roleSessions.tenantId, tenantId))
+      .orderBy(desc(schema.roleSessions.updatedAt))
+    return rows.map(roleStateFromRow)
   }
 
   async getRoleAggregate(
@@ -710,10 +711,6 @@ export class PostgresStore implements ApplicationStore {
     actorUserId: string,
     afterSequence = 0,
   ): Promise<ConversationMessage[]> {
-    const actorRunIds = this.db
-      .select({ id: schema.agentRuns.id })
-      .from(schema.agentRuns)
-      .where(eq(schema.agentRuns.actorUserId, actorUserId))
     const rows = await this.db
       .select()
       .from(schema.conversationMessages)
@@ -721,10 +718,7 @@ export class PostgresStore implements ApplicationStore {
         and(
           eq(schema.conversationMessages.roleSessionId, roleSessionId),
           gt(schema.conversationMessages.sequence, afterSequence),
-          or(
-            eq(schema.conversationMessages.senderUserId, actorUserId),
-            inArray(schema.conversationMessages.runId, actorRunIds),
-          ),
+          eq(schema.conversationMessages.conversationUserId, actorUserId),
         ),
       )
       .orderBy(asc(schema.conversationMessages.sequence))
@@ -736,6 +730,7 @@ export class PostgresStore implements ApplicationStore {
       id: message.id,
       tenantId: message.tenant_id,
       roleSessionId: message.role_session_id,
+      conversationUserId: message.conversation_user_id,
       runId: message.run_id,
       clarificationRoundId: message.clarification_round_id,
       senderKind: message.sender_type === 'HUMAN'
@@ -756,6 +751,7 @@ export class PostgresStore implements ApplicationStore {
     await this.db
       .update(schema.conversationMessages)
       .set({
+        conversationUserId: message.conversation_user_id,
         runId: message.run_id,
         clarificationRoundId: message.clarification_round_id,
         content: message.content,

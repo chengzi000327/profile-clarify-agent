@@ -141,6 +141,7 @@ export interface ApplicationStore {
   saveUser(user: StoredUser): Promise<void>
   claimExternalEvent(channel: string, eventId: string): Promise<boolean>
   listRoleStates(actor: ActorContext): Promise<RoleState[]>
+  listTenantRoleStates(tenantId: string): Promise<RoleState[]>
   getRoleAggregate(
     roleSessionId: string,
     actor: ActorContext,

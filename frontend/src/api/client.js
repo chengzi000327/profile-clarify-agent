@@ -69,6 +69,15 @@ export const api = {
       body: JSON.stringify({ content, expected_revision: expectedRevision }),
     });
   },
+  confirmFacts(id, factIds, expectedRevision) {
+    return request(`/api/v1/role-sessions/${id}/facts:confirm`, {
+      method: 'POST',
+      body: JSON.stringify({
+        fact_ids: factIds,
+        expected_revision: expectedRevision,
+      }),
+    });
+  },
   extendClarification(id, reason) {
     return request(`/api/v1/role-sessions/${id}/clarification:extend`, {
       method: 'POST',

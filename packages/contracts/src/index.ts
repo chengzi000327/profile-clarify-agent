@@ -1101,6 +1101,7 @@ export const ConversationMessageSchema = z.object({
   id: z.string(),
   tenant_id: z.string(),
   role_session_id: z.string(),
+  conversation_user_id: z.string().nullable(),
   run_id: z.string().nullable(),
   clarification_round_id: z.string().nullable(),
   sender_type: z.enum(['HUMAN', 'AGENT', 'SYSTEM']),

@@ -989,6 +989,7 @@ export class AgentRunner {
       id: input.id ?? randomUUID(),
       tenant_id: input.actor.tenant_id,
       role_session_id: input.roleSessionId,
+      conversation_user_id: input.actor.user_id,
       run_id: input.runId,
       clarification_round_id: input.clarificationRoundId,
       sender_type: input.senderType,

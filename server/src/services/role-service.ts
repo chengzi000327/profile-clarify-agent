@@ -1387,14 +1387,31 @@ export class RoleService {
       throw new DomainError('ROLE_IDENTITY_EMPTY', '岗位名称与所属团队不能同时为空', 400)
     }
     const timestamp = nowIso()
+    const identityChanged = (title !== undefined && title !== aggregate.state.title)
+      || (department !== undefined && department !== aggregate.state.department)
+    const invalidation = identityChanged
+      ? await this.invalidateAllRoleArtifacts(aggregate)
+      : {
+          latest: aggregate.state.latest_artifacts,
+          invalidatedTypes: [] as ArtifactType[],
+        }
     const state: RoleState = {
       ...aggregate.state,
       ...(title ? { title } : {}),
       ...(department ? { department } : {}),
+      stage: invalidation.invalidatedTypes.length > 0 ? 'PROFILE_DRAFT' : aggregate.state.stage,
+      latest_artifacts: invalidation.latest,
       revision: aggregate.state.revision + 1,
       updated_at: timestamp,
     }
     await this.persistState(state, aggregate.state.revision)
+    if (identityChanged) {
+      await this.audit(actor, roleSessionId, 'UPDATE_ROLE_IDENTITY', 'ROLE_SESSION', roleSessionId, {
+        title: title ?? aggregate.state.title,
+        department: department ?? aggregate.state.department,
+        invalidated_artifact_types: invalidation.invalidatedTypes,
+      })
+    }
     return this.filterState(state, actor)
   }
 
@@ -1562,16 +1579,31 @@ export class RoleService {
     if (!['MANAGER', 'ADMIN'].includes(actor.role)) throw new DomainError('FORBIDDEN', '仅用人经理或企业管理员可确认岗位事实', 403)
     assertRevision(aggregate.state.revision, expectedRevision)
     const ids = new Set(factIds)
+    const newlyConfirmedIds = aggregate.state.facts
+      .filter((fact) => ids.has(fact.id) && fact.status !== 'CONFIRMED')
+      .map((fact) => fact.id)
+    const invalidation = newlyConfirmedIds.length > 0
+      ? await this.invalidateAllRoleArtifacts(aggregate)
+      : {
+          latest: aggregate.state.latest_artifacts,
+          invalidatedTypes: [] as ArtifactType[],
+        }
     const timestamp = nowIso()
     const state: RoleState = {
       ...aggregate.state,
+      stage: invalidation.invalidatedTypes.length > 0 ? 'PROFILE_DRAFT' : aggregate.state.stage,
       revision: aggregate.state.revision + 1,
       facts: aggregate.state.facts.map((fact) =>
         ids.has(fact.id) ? { ...fact, status: 'CONFIRMED' as const, updated_at: timestamp } : fact,
       ),
+      latest_artifacts: invalidation.latest,
       updated_at: timestamp,
     }
     await this.persistState(state, aggregate.state.revision)
+    await this.audit(actor, roleSessionId, 'CONFIRM_FACTS', 'ROLE_SESSION', roleSessionId, {
+      fact_ids: newlyConfirmedIds,
+      invalidated_artifact_types: invalidation.invalidatedTypes,
+    })
     return this.filterState(state, actor)
   }
 
@@ -2208,6 +2240,35 @@ export class RoleService {
     if (!saved) {
       throw new DomainError('REVISION_CONFLICT', '岗位数据已被其他操作更新，请刷新后重试', 409)
     }
+  }
+
+  private async invalidateAllRoleArtifacts(
+    aggregate: RoleAggregate,
+  ): Promise<{
+      latest: RoleState['latest_artifacts']
+      invalidatedTypes: ArtifactType[]
+    }> {
+    const invalidated = aggregate.artifacts.map((artifact) =>
+      artifact.status === 'INVALIDATED'
+        ? artifact
+        : { ...artifact, status: 'INVALIDATED' as const },
+    )
+    const invalidatedTypes = new Set<ArtifactType>()
+    for (const artifact of invalidated) {
+      const previous = aggregate.artifacts.find((item) => item.id === artifact.id)
+      if (previous && previous.status !== artifact.status) {
+        await this.store.updateArtifact(artifact)
+        invalidatedTypes.add(artifact.type)
+      }
+    }
+    const latest = { ...aggregate.state.latest_artifacts }
+    for (const artifact of invalidated) {
+      const current = latest[artifact.type]
+      if (current?.id === artifact.id && current.status !== 'INVALIDATED') {
+        latest[artifact.type] = { ...current, status: 'INVALIDATED' }
+      }
+    }
+    return { latest, invalidatedTypes: [...invalidatedTypes] }
   }
 
   private filterState(state: RoleState, actor: ActorContext): RoleState {

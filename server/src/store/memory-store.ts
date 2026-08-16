@@ -82,8 +82,15 @@ export class MemoryStore implements ApplicationStore {
       .filter(
         ({ state, member_ids }) =>
           state.tenant_id === actor.tenant_id &&
-          (actor.role === 'ADMIN' || member_ids.includes(actor.user_id)),
+          member_ids.includes(actor.user_id),
       )
+      .map(({ state }) => clone(state))
+      .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
+  }
+
+  async listTenantRoleStates(tenantId: string): Promise<RoleState[]> {
+    return [...this.roles.values()]
+      .filter(({ state }) => state.tenant_id === tenantId)
       .map(({ state }) => clone(state))
       .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
   }
@@ -269,9 +276,7 @@ export class MemoryStore implements ApplicationStore {
     return clone(
       (this.messages.get(roleSessionId) ?? []).filter((message) => {
         if (message.sequence <= afterSequence) return false
-        if (message.sender_user_id === actorUserId) return true
-        if (!message.run_id) return false
-        return this.runs.get(message.run_id)?.run.actor_user_id === actorUserId
+        return message.conversation_user_id === actorUserId
       }),
     )
   }

@@ -214,6 +214,7 @@ export const conversationMessages = pgTable(
     roleSessionId: uuid('role_session_id')
       .notNull()
       .references(() => roleSessions.id, { onDelete: 'cascade' }),
+    conversationUserId: text('conversation_user_id'),
     runId: uuid('run_id').references(() => agentRuns.id, { onDelete: 'set null' }),
     clarificationRoundId: uuid('clarification_round_id'),
     senderKind: text('sender_kind').notNull(),
@@ -229,6 +230,11 @@ export const conversationMessages = pgTable(
   (table) => [
     uniqueIndex('conversation_messages_sequence_uidx').on(table.roleSessionId, table.sequence),
     index('conversation_messages_role_idx').on(table.roleSessionId, table.sequence),
+    index('conversation_messages_user_idx').on(
+      table.roleSessionId,
+      table.conversationUserId,
+      table.sequence,
+    ),
     index('conversation_messages_run_idx').on(table.runId),
   ],
 )

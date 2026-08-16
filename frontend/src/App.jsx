@@ -32,8 +32,6 @@ import {
 import {
   contextSources,
   evidenceById,
-  recruitingPortrait,
-  roleProfile,
   traceRows,
   versions,
 } from './data.js';
@@ -80,6 +78,10 @@ function displayInitial(name, role) {
   const value = String(name ?? '').trim();
   if (value) return Array.from(value)[0];
   return role === 'ADMIN' ? '管' : role === 'HR' ? 'HR' : '用';
+}
+
+function privateMessagesForActor(items, actorId) {
+  return (items ?? []).filter((message) => message.conversation_user_id === actorId);
 }
 
 function toRoleCard(state) {
@@ -131,7 +133,12 @@ function App() {
   const [clarificationPolicy, setClarificationPolicy] = useState(null);
   const [requestError, setRequestError] = useState('');
   const streamStopRef = useRef(null);
+  const actorIdRef = useRef(null);
   const viewerRole = actor?.role === 'ADMIN' ? 'admin' : actor?.role === 'HR' ? 'hr' : 'manager';
+
+  useEffect(() => {
+    actorIdRef.current = actor?.user_id ?? null;
+  }, [actor]);
 
   const activeRole = useMemo(
     () => newConversationMode
@@ -165,6 +172,9 @@ function App() {
   useEffect(() => {
     if (!actor || !activeRoleId) return;
     let cancelled = false;
+    setMessages([]);
+    setAgentEvents([]);
+    setAgentStatus('idle');
     Promise.all([
       api.getRoleSession(activeRoleId),
       api.getMessages(activeRoleId),
@@ -172,7 +182,7 @@ function App() {
       .then(([detail, conversation]) => {
         if (!cancelled) {
           setRoleDetail(detail);
-          setMessages(conversation.items);
+          setMessages(privateMessagesForActor(conversation.items, actor.user_id));
           setClarificationPolicy(conversation.policy);
         }
       })
@@ -198,6 +208,11 @@ function App() {
 
   async function handleLogin(credentials) {
     const session = await api.login(credentials);
+    streamStopRef.current?.();
+    setMessages([]);
+    setAgentEvents([]);
+    setAgentStatus('idle');
+    setClarificationPolicy(null);
     setActor(session.actor);
     setActiveView('conversation');
     setNewConversationMode(false);
@@ -214,6 +229,8 @@ function App() {
     setNewConversationMode(false);
     setRoleDetail(null);
     setMessages([]);
+    setAgentEvents([]);
+    setAgentStatus('idle');
     setClarificationPolicy(null);
     setProfileMenuOpen(false);
     setActiveView('conversation');
@@ -255,8 +272,11 @@ function App() {
 
   async function refreshConversation(roleId = activeRoleId) {
     if (!roleId) return;
+    const actorId = actor?.user_id;
+    if (!actorId) return;
     const conversation = await api.getMessages(roleId);
-    setMessages(conversation.items);
+    if (actorIdRef.current !== actorId) return;
+    setMessages(privateMessagesForActor(conversation.items, actorId));
     setClarificationPolicy(conversation.policy);
   }
 
@@ -320,6 +340,17 @@ function App() {
       ]).catch((error) => setRequestError(error.message));
     } catch (error) {
       setAgentStatus('failed');
+      setRequestError(error.message);
+    }
+  }
+
+  async function confirmPendingFacts(factIds) {
+    if (!activeRoleId || !roleDetail || factIds.length === 0) return;
+    setRequestError('');
+    try {
+      await api.confirmFacts(activeRoleId, factIds, roleDetail.state.revision);
+      await refreshActiveRole();
+    } catch (error) {
       setRequestError(error.message);
     }
   }
@@ -406,7 +437,13 @@ function App() {
 
         <button className="new-project-button" onClick={startNewConversation}>
           <Plus size={17} />
-          {!sidebarCollapsed && <span>开始新岗位对话</span>}
+          {!sidebarCollapsed && (
+            <span>{actor.role === 'HR'
+              ? '开始岗位需求审核'
+              : actor.role === 'ADMIN'
+                ? '开始 Agent 测试对话'
+                : '开始新岗位对话'}</span>
+          )}
         </button>
 
         {!sidebarCollapsed && (
@@ -546,8 +583,10 @@ function App() {
             key={viewerRole}
             viewerRole={viewerRole}
             onOpenEvidence={setEvidenceId}
+            onOpenConversation={() => setActiveView('conversation')}
             roleDetail={roleDetail}
             onArtifactAction={handleArtifactAction}
+            onConfirmFacts={confirmPendingFacts}
             agentStatus={agentStatus}
           />
         )}
@@ -575,6 +614,80 @@ function EmptyWorkspace({
 }) {
   const [profileOpen, setProfileOpen] = useState(false);
   const viewerRole = actor.role === 'ADMIN' ? 'admin' : actor.role === 'HR' ? 'hr' : 'manager';
+  const guidance = actor.role === 'HR'
+    ? {
+        sidebarAction: '开始岗位需求审核',
+        emptyListHint: '在右侧和 Agent 一起审核',
+        workspaceTitle: '新岗位需求审核',
+        phaseLabel: '协助业务审核招聘需求',
+        introTitle: '先帮业务把招聘需求审清楚',
+        introDescription: '把业务方提出的岗位设想或招聘背景告诉 Agent。Agent 会协助你核对招聘原因、成功标准和岗位边界，标出证据缺口与待业务确认项。',
+        policyLabel: '需求审核',
+        policyStrong: '从业务问题开始',
+        policyHint: '岗位身份、招聘理由和成功标准会在审核中逐项核对',
+        greeting: `你好，${actor.display_name}。你可以把业务方提出的招聘需求交给我，我们先核对它要解决的业务问题是否清楚。`,
+        prompt: '你可以直接说：“业务想招聘一位……，请帮我审核这项需求是否成立、还缺哪些信息。”我会边审边记录缺口，并整理需要用人经理确认的问题。',
+        starterLabel: '你可以这样开始审核',
+        starters: [
+          {
+            label: '审核一份业务招聘需求',
+            message: '业务希望招聘一位新同事，请帮我从招聘原因、成功标准和岗位边界开始审核。',
+          },
+          {
+            label: '招聘理由还不够清楚',
+            message: '业务提出了招聘需求，但招聘理由还不够清楚，请帮我梳理还需要向用人经理确认哪些信息。',
+          },
+        ],
+      }
+    : actor.role === 'ADMIN'
+      ? {
+          sidebarAction: '开始 Agent 测试对话',
+          emptyListHint: '在右侧验证 Agent 行为',
+          workspaceTitle: 'Agent 测试对话',
+          phaseLabel: '独立验证 Agent 行为',
+          introTitle: '选择你要验证的 Agent 行为',
+          introDescription: '企业管理员可以在这里独立测试岗位澄清与产物生成流程。经理和 HR 的真实会话不会显示在这里，请前往 Trace 控制台统一审计。',
+          policyLabel: '管理员对话',
+          policyStrong: '与业务会话隔离',
+          policyHint: '这里只保存你与 Agent 的测试消息，不会混入经理或 HR 的对话',
+          greeting: `你好，${actor.display_name}。你可以在这里测试 Agent 的澄清、追问和产物生成行为，或描述需要排查的流程问题。`,
+          prompt: '如果要查看经理或 HR 的真实运行记录，请使用 Trace 控制台；这里不会展示他们的聊天内容。',
+          starterLabel: '你可以这样开始验证',
+          starters: [
+            {
+              label: '测试岗位澄清流程',
+              message: '我要测试一条新的岗位澄清流程，请从岗位身份识别开始。',
+            },
+            {
+              label: '检查 Agent 的追问行为',
+              message: '我想检查 Agent 的主动澄清与追问是否符合规则，请从一个待识别岗位开始。',
+            },
+          ],
+        }
+    : {
+        sidebarAction: '开始新岗位对话',
+        emptyListHint: '直接在右侧和 Agent 聊聊',
+        workspaceTitle: '新岗位对话',
+        phaseLabel: '直接描述招聘需求',
+        introTitle: '先聊聊你为什么想招人',
+        introDescription: '不用先创建岗位或填写表单。直接描述业务问题，Agent 会在对话中识别岗位、补齐事实并逐步建立岗位画像。',
+        policyLabel: '岗位建立',
+        policyStrong: '从第一句话开始',
+        policyHint: '岗位名称、团队和成功标准会在对话中逐步补全',
+        greeting: `你好，${actor.display_name}。我们先从这次招聘要解决的业务问题聊起。`,
+        prompt: '你可以直接说：“最近业务遇到了什么问题，所以想招什么样的人？”我会边聊边帮你建立岗位。',
+        starterLabel: '你可以这样开始',
+        starters: [
+          {
+            label: '有业务目标，但岗位还没想清楚',
+            message: '我们有一个新的业务目标，但还不确定应该招聘什么岗位，你先帮我梳理一下。',
+          },
+          {
+            label: '已经知道想招什么岗位',
+            message: '我想招聘一位企业产品经理，请从招聘原因开始帮我澄清。',
+          },
+        ],
+      };
   return (
     <div className="app-shell empty-workspace-shell">
       <aside className="sidebar">
@@ -585,7 +698,7 @@ function EmptyWorkspace({
           </div>
         </div>
         <button className="new-project-button" onClick={onStartNew}>
-          <Plus size={17} /><span>开始新岗位对话</span>
+          <Plus size={17} /><span>{guidance.sidebarAction}</span>
         </button>
         <div className="sidebar-section-title">
           <span>最近会话</span>
@@ -598,7 +711,7 @@ function EmptyWorkspace({
           {roleSessions.length === 0 ? (
             <div className="empty-session-list">
               <span className="session-icon"><MessageSquare size={15} /></span>
-              <span><strong>还没有岗位会话</strong><small>直接在右侧和 Agent 聊聊</small></span>
+              <span><strong>还没有岗位会话</strong><small>{guidance.emptyListHint}</small></span>
             </div>
           ) : roleSessions.map((role) => (
             <button className="role-session-row" key={role.id} onClick={() => onChooseRole(role.id)}>
@@ -640,13 +753,13 @@ function EmptyWorkspace({
         <header className="workspace-header">
           <div className="title-stack">
             <div className="title-line">
-              <strong>新岗位对话</strong>
+              <strong>{guidance.workspaceTitle}</strong>
               <span className="role-stage-badge empty">等待识别</span>
             </div>
             <div className="preset-line">
               <span className="preset-badge"><ClarifierMark size={16} />画像澄清 Agent</span>
               <span className="phase-dot" />
-              <span>直接描述招聘需求</span>
+              <span>{guidance.phaseLabel}</span>
               <span className="phase-dot" />
               <span>未生成画像</span>
             </div>
@@ -686,26 +799,27 @@ function EmptyWorkspace({
                 <div className="session-intro">
                   <ClarifierMark size={40} plate />
                   <div>
-                    <h1>先聊聊你为什么想招人</h1>
-                    <p>不用先创建岗位或填写表单。直接描述业务问题，Agent 会在对话中识别岗位、补齐事实并逐步建立岗位画像。</p>
+                    <h1>{guidance.introTitle}</h1>
+                    <p>{guidance.introDescription}</p>
                   </div>
                 </div>
 
                 <div className="conversation-policy-strip empty-policy-strip">
-                  <span><CircleDot size={13} />岗位建立 <strong>从第一句话开始</strong></span>
-                  <span>岗位名称、团队和成功标准会在对话中逐步补全</span>
+                  <span><CircleDot size={13} />{guidance.policyLabel} <strong>{guidance.policyStrong}</strong></span>
+                  <span>{guidance.policyHint}</span>
                 </div>
 
                 <div className="message message-agent empty-onboarding-message">
                   <span className="agent-avatar"><ClarifierMark size={25} /></span>
                   <div className="message-body">
                     <div className="message-label">画像澄清 Agent</div>
-                    <p>你好，{actor.display_name}。我们不用从一张表单开始。</p>
-                    <p>你可以直接说：“最近业务遇到了什么问题，所以想招什么样的人？”我会边聊边帮你建立岗位。</p>
+                    <p>{guidance.greeting}</p>
+                    <p>{guidance.prompt}</p>
                     <div className="empty-chat-starters">
-                      <span><Sparkles size={14} />你可以这样开始</span>
-                      <button type="button" onClick={() => onSend('我们有一个新的业务目标，但还不确定应该招聘什么岗位，你先帮我梳理一下。')}>有业务目标，但岗位还没想清楚</button>
-                      <button type="button" onClick={() => onSend('我想招聘一位企业产品经理，请从招聘原因开始帮我澄清。')}>已经知道想招什么岗位</button>
+                      <span><Sparkles size={14} />{guidance.starterLabel}</span>
+                      {guidance.starters.map((starter) => (
+                        <button key={starter.label} type="button" onClick={() => onSend(starter.message)}>{starter.label}</button>
+                      ))}
                     </div>
                   </div>
                 </div>
@@ -735,11 +849,15 @@ function ConversationView({
 }) {
   const scrollRef = useRef(null);
   const budget = policy ? policy.initial_budget + policy.granted_rounds : 6;
+  const visibleMessages = useMemo(
+    () => privateMessagesForActor(messages, actor.user_id),
+    [messages, actor.user_id],
+  );
 
   useEffect(() => {
     const node = scrollRef.current;
     if (node) node.scrollTop = node.scrollHeight;
-  }, [messages, agentEvents]);
+  }, [visibleMessages, agentEvents]);
 
   return (
     <section className="conversation-surface real-conversation">
@@ -761,7 +879,7 @@ function ConversationView({
             <span>{policy?.status === 'LIMIT_REACHED' ? '已停止主动追问，正常对话仍可继续' : 'Agent会围绕尚未确认的岗位关键问题主动追问'}</span>
           </div>
 
-          {messages.length === 0 && (
+          {visibleMessages.length === 0 && (
             <div className="conversation-empty-state">
               <ClarifierMark size={34} plate />
               <strong>开始真实岗位对话</strong>
@@ -769,7 +887,7 @@ function ConversationView({
             </div>
           )}
 
-          {messages.map((message) => {
+          {visibleMessages.map((message) => {
             if (message.sender_type === 'HUMAN') {
               const roleLabel = message.sender_role === 'MANAGER' ? '用人经理' : message.sender_role === 'HR' ? 'HR' : '企业管理员';
               return (
@@ -1006,18 +1124,116 @@ function OutcomeChoice({ code, value, selected, onSelect, title, detail }) {
   );
 }
 
-function ProfileView({ viewerRole, onOpenEvidence, roleDetail, onArtifactAction, agentStatus }) {
+const artifactStatusLabel = (status) => ({
+  DRAFT: '草稿待确认',
+  CONFIRMED: '已确认',
+  INVALIDATED: '已失效',
+}[status] ?? '尚未生成');
+
+const assessmentMethodLabel = (type) => ({
+  STRUCTURED_BEHAVIORAL_INTERVIEW: '结构化行为面试',
+  WORK_SAMPLE: '工作样本',
+  CASE_EXERCISE: '案例演练',
+  PORTFOLIO_REVIEW: '作品集评审',
+  TECHNICAL_INTERVIEW: '专业面试',
+  ROLE_PLAY: '角色扮演',
+}[type] ?? type ?? '待定义');
+
+const publicFieldValue = (field, fallback = '待确认') => field?.value ?? fallback;
+
+function ArtifactEmptyState({ title, description, invalidated = false }) {
+  return (
+    <div className="profile-empty-document embedded-artifact-empty">
+      <span className="profile-empty-icon">{invalidated ? <AlertTriangle size={24} /> : <FileSearch size={24} />}</span>
+      <h2>{title}</h2>
+      <p>{description}</p>
+    </div>
+  );
+}
+
+function ProfileView({ viewerRole, onOpenEvidence, onOpenConversation, roleDetail, onArtifactAction, onConfirmFacts, agentStatus }) {
   const [section, setSection] = useState(viewerRole === 'hr' || viewerRole === 'admin' ? 'portrait' : 'basis');
-  const [expandedScenario, setExpandedScenario] = useState('T-01');
-  const [expandedRequirement, setExpandedRequirement] = useState('C-01');
-  const [expandedScore, setExpandedScore] = useState('A-01');
-  const meta = roleProfile.meta;
+  const [expandedScenario, setExpandedScenario] = useState(null);
+  const [expandedRequirement, setExpandedRequirement] = useState(null);
+  const [expandedScore, setExpandedScore] = useState(null);
+  const state = roleDetail?.state;
+  const profileArtifact = state?.latest_artifacts?.ROLE_PROFILE;
+  const assessmentArtifact = state?.latest_artifacts?.ASSESSMENT_SCORECARD;
+  const jdArtifact = state?.latest_artifacts?.PUBLIC_JD;
+  const recruitingArtifact = state?.latest_artifacts?.HR_RECRUITING_BRIEF;
+  const profile = profileArtifact?.content;
+  const pendingFacts = (state?.facts ?? []).filter((fact) => fact.status === 'DRAFT');
+  const confirmedCategories = new Set(
+    (state?.facts ?? [])
+      .filter((fact) => fact.status === 'CONFIRMED')
+      .map((fact) => fact.category),
+  );
+  const profileReady = confirmedCategories.has('HIRING_REASON')
+    && confirmedCategories.has('SUCCESS_CRITERION');
+
+  if (!profileArtifact) {
+    const stageLabel = stagePresentation[state?.stage]?.[0] ?? '岗位澄清中';
+    const roleIdentified = Boolean(state?.title && state.title !== '待识别岗位');
+    return (
+      <section className="profile-surface redesigned-profile empty-profile-surface">
+        <div className="profile-page profile-page-wide">
+          <div className="profile-heading profile-heading-rich">
+            <div>
+              <div className="document-kicker"><FileSearch size={15} />岗位画像 · 未生成</div>
+              <h1>{state?.title ?? '待识别岗位'}</h1>
+              <div className="profile-meta-line">
+                <span>{state?.department ?? '待确认团队'}</span><i>·</i><span>{stageLabel}</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="profile-empty-document">
+            <span className="profile-empty-icon"><FileSearch size={24} /></span>
+            <h2>岗位画像尚未生成</h2>
+            <p>
+              {roleIdentified
+                ? '当前只建立了待招岗位。请先在对话中确认招聘原因和成功标准；画像草稿生成后，这里才会展示真实岗位内容。'
+                : 'Agent 还在识别岗位名称和所属团队。请先继续对话；画像草稿生成后，这里才会展示真实岗位内容。'}
+            </p>
+            <div className="profile-readiness-list" aria-label="岗位画像生成条件">
+              <span className={roleIdentified ? 'ready' : ''}>{roleIdentified ? <Check size={13} /> : <CircleDot size={13} />}岗位身份</span>
+              <span className={confirmedCategories.has('HIRING_REASON') ? 'ready' : ''}>{confirmedCategories.has('HIRING_REASON') ? <Check size={13} /> : <CircleDot size={13} />}招聘原因</span>
+              <span className={confirmedCategories.has('SUCCESS_CRITERION') ? 'ready' : ''}>{confirmedCategories.has('SUCCESS_CRITERION') ? <Check size={13} /> : <CircleDot size={13} />}成功标准</span>
+            </div>
+            <button
+              className="primary-action"
+              disabled={agentStatus === 'running'}
+              onClick={() => profileReady ? onArtifactAction?.('ROLE_PROFILE') : onOpenConversation?.()}
+            >
+              {agentStatus === 'running'
+                ? 'Agent 生成中…'
+                : profileReady
+                  ? '生成岗位画像草稿'
+                  : '返回对话继续澄清'}
+              <ChevronRight size={16} />
+            </button>
+          </div>
+        </div>
+      </section>
+    );
+  }
+  const publicBasics = state?.public_job_basics ?? {};
+  const basicInfo = [
+    { label: '所属团队', value: state?.department ?? '待确认', confirmed: Boolean(state?.department) },
+    { label: '招聘类型', value: '待确认', confirmed: false },
+    { label: '职级', value: publicFieldValue(publicBasics.level), confirmed: Boolean(publicBasics.level) },
+    { label: '汇报对象', value: publicFieldValue(publicBasics.reporting_line), confirmed: Boolean(publicBasics.reporting_line) },
+    { label: '工作地点', value: publicFieldValue(publicBasics.location), confirmed: Boolean(publicBasics.location) },
+    { label: '雇佣类型', value: publicFieldValue(publicBasics.employment_type), confirmed: Boolean(publicBasics.employment_type) },
+    { label: '薪酬范围', value: publicFieldValue(publicBasics.compensation, '按权限可见'), restricted: !publicBasics.compensation },
+    { label: 'HC 状态', value: state?.hc_status === 'APPROVED' ? '已审批' : '待审批', confirmed: state?.hc_status === 'APPROVED' },
+  ];
 
   const allProfileTabs = [
-    { id: 'portrait', label: '招聘画像', meta: 'HR 寻源主视图' },
-    { id: 'basis', label: '画像依据', meta: '招聘原因 · 成功标准 · 岗位画像' },
-    { id: 'assessment', label: '评估方案', meta: `${roleProfile.scorecard.length} 个维度` },
-    { id: 'jd', label: '对外 JD', meta: '最终候选人发布物' },
+    { id: 'portrait', label: '招聘画像', meta: recruitingArtifact ? `v${recruitingArtifact.version} · ${artifactStatusLabel(recruitingArtifact.status)}` : '尚未生成' },
+    { id: 'basis', label: '画像依据', meta: `v${profileArtifact.version} · ${artifactStatusLabel(profileArtifact.status)}` },
+    { id: 'assessment', label: '评估方案', meta: assessmentArtifact ? `${assessmentArtifact.content?.dimensions?.length ?? 0} 个维度` : '尚未生成' },
+    { id: 'jd', label: '对外 JD', meta: jdArtifact ? `v${jdArtifact.version} · ${artifactStatusLabel(jdArtifact.status)}` : '尚未生成' },
   ];
   const profileTabs = viewerRole === 'hr' || viewerRole === 'admin' ? allProfileTabs : allProfileTabs.filter((item) => item.id !== 'portrait');
   const primaryActionLabel = section === 'jd'
@@ -1039,7 +1255,9 @@ function ProfileView({ viewerRole, onOpenEvidence, roleDetail, onArtifactAction,
     ? primaryActionLabel
     : latestArtifact?.status === 'CONFIRMED'
       ? '生成新版本'
-      : `生成${section === 'jd' ? ' JD' : '草稿'}`;
+      : latestArtifact?.status === 'INVALIDATED'
+        ? '基于最新事实重新生成'
+        : `生成${section === 'jd' ? ' JD' : '草稿'}`;
   const decisionSteps = ['招聘原因与成功标准', '岗位画像', '评估方案', '对外 JD'];
   const currentDecisionStep = section === 'assessment' ? 2 : section === 'jd' ? 3 : 1;
 
@@ -1048,10 +1266,10 @@ function ProfileView({ viewerRole, onOpenEvidence, roleDetail, onArtifactAction,
       <div className="profile-page profile-page-wide">
         <div className="profile-heading profile-heading-rich">
           <div>
-            <div className="document-kicker"><FileSearch size={15} />招聘识别画像 · {meta.version}</div>
-            <h1>{meta.title}</h1>
+            <div className="document-kicker"><FileSearch size={15} />招聘识别画像 · v{profileArtifact.version} · {artifactStatusLabel(profileArtifact.status)}</div>
+            <h1>{state?.title ?? '待识别岗位'}</h1>
             <div className="profile-meta-line">
-              <span className="approved-inline"><CheckCircle2 size={12} />HC 已审批</span><i>·</i><span>用人经理 陈晓</span><i>·</i><span>协作 HR 林薇</span>
+              <span className={state?.hc_status === 'APPROVED' ? 'approved-inline' : ''}><CheckCircle2 size={12} />HC {state?.hc_status === 'APPROVED' ? '已审批' : '待审批'}</span><i>·</i><span>{state?.department ?? '待确认团队'}</span>
             </div>
           </div>
           <div className="profile-heading-actions">
@@ -1067,7 +1285,7 @@ function ProfileView({ viewerRole, onOpenEvidence, roleDetail, onArtifactAction,
         </div>
 
         <div className="portrait-basic-strip" aria-label="招聘基本信息">
-          {recruitingPortrait.basicInfo.map((item) => (
+          {basicInfo.map((item) => (
             <div key={item.label} className={item.confirmed ? 'confirmed' : item.restricted ? 'restricted' : ''}>
               <span>{item.label}</span>
               <strong>{item.value}</strong>
@@ -1079,6 +1297,20 @@ function ProfileView({ viewerRole, onOpenEvidence, roleDetail, onArtifactAction,
           <ShieldCheck size={13} />
           <span>{viewerRole === 'admin' ? '企业管理员最高权限：可查看和处理企业内全部岗位、内部画像、产物与审计记录。' : viewerRole === 'hr' ? 'HR 权限：可查看内部寻源策略、候选人判断规则和全部协作产物。' : '用人经理权限：可确认画像依据、评估方案和对外 JD；HR 内部寻源策略不可见。'}</span>
         </div>
+
+        {profileArtifact.status === 'INVALIDATED' && (
+          <div className="profile-sync-notice stale">
+            <AlertTriangle size={15} />
+            <div><strong>当前岗位画像已失效</strong><span>会话中的已确认事实发生了变化。此版本仅供回看，请基于最新事实重新生成，评估方案、JD 和 HR 招聘画像也不能继续沿用。</span></div>
+          </div>
+        )}
+        {profileArtifact.status !== 'INVALIDATED' && pendingFacts.length > 0 && (
+          <div className="profile-sync-notice pending">
+            <CircleDot size={15} />
+            <div><strong>会话中有 {pendingFacts.length} 条待确认事实尚未进入当前画像</strong><span>当前页面只使用已确认事实生成。请先返回对话完成确认，再生成新版本，避免把未确认信息误写入正式画像。</span></div>
+            {(viewerRole === 'manager' || viewerRole === 'admin') && <button disabled={agentStatus === 'running'} onClick={() => onConfirmFacts?.(pendingFacts.map((fact) => fact.id))}>确认这些事实</button>}
+          </div>
+        )}
 
         {section !== 'portrait' && (
           <div className="decision-flow" aria-label="岗位画像产出流程">
@@ -1102,9 +1334,12 @@ function ProfileView({ viewerRole, onOpenEvidence, roleDetail, onArtifactAction,
         </nav>
 
         <div className="profile-content-frame">
-          {section === 'portrait' && <RecruitingPortrait onOpenEvidence={onOpenEvidence} />}
+          {section === 'portrait' && <RecruitingPortrait artifact={recruitingArtifact} profile={profile} />}
           {section === 'basis' && (
             <ProfileBasis
+              state={state}
+              profile={profile}
+              assessment={assessmentArtifact?.content}
               expandedScenario={expandedScenario}
               setExpandedScenario={setExpandedScenario}
               expandedRequirement={expandedRequirement}
@@ -1114,24 +1349,75 @@ function ProfileView({ viewerRole, onOpenEvidence, roleDetail, onArtifactAction,
           )}
           {section === 'assessment' && (
             <SuccessScorecard
+              artifact={assessmentArtifact}
               expandedScore={expandedScore}
               setExpandedScore={setExpandedScore}
             />
           )}
-          {section === 'jd' && <JDPreview jd={roleDetail?.state?.latest_artifacts?.PUBLIC_JD} />}
+          {section === 'jd' && <JDPreview jd={jdArtifact} state={state} />}
         </div>
       </div>
     </section>
   );
 }
 
-function RecruitingPortrait({ onOpenEvidence }) {
-  const portrait = recruitingPortrait;
-  const [managerDecisions, setManagerDecisions] = useState({});
-  const confirmedCount = Object.keys(managerDecisions).length;
+function buildRecruitingPortrait(artifact, profile) {
+  const content = artifact?.content;
+  if (!content) return null;
+  const nonTarget = content.resume_screen?.non_target_signals ?? [];
+  return {
+    version: artifact.version,
+    status: artifact.status,
+    candidateDefinition: content.target_candidate_summary,
+    approvedContext: {
+      evidence: [
+        ...(profile?.mission?.hiring_reason_fact_refs ?? []),
+        ...(profile?.mission?.success_criterion_fact_refs ?? []),
+      ],
+      coreProblem: profile?.mission?.statement ?? '岗位使命尚未形成',
+    },
+    sourcingBrief: {
+      targetTypes: (content.target_types ?? []).map((item, index) => ({
+        code: String.fromCharCode(65 + index),
+        title: item.label,
+        why: item.fit_rationale,
+        check: [...(item.requirement_refs ?? []), ...(item.work_refs ?? [])].join(' · '),
+      })),
+      query: content.search_strategy?.boolean_query ?? '',
+      titles: content.search_strategy?.titles ?? [],
+      keywords: (content.search_strategy?.keyword_groups ?? []).flatMap((group) => group.keywords ?? []),
+      nonTarget: nonTarget.map((item) => `${item.signal}：${item.reason}`),
+    },
+    resumeScreen: {
+      decision: '简历未写明时进入电话核实，不因信息缺失直接淘汰。',
+      coreSignals: (content.resume_screen?.thirty_second_checks ?? []).map((item, index) => ({
+        id: `S-${String(index + 1).padStart(2, '0')}`,
+        title: item.criterion,
+        required: true,
+        lookFor: item.evidence_to_find ?? [],
+        notEnough: '未发现时标记待核实，不直接拒绝。',
+      })),
+      rules: nonTarget.map((item) => ({
+        label: item.action === 'VERIFY' ? '需要核实' : 'HR 复核',
+        condition: `${item.signal}：${item.reason}`,
+        tone: 'review',
+      })),
+    },
+    phoneScreen: (content.phone_questions ?? []).map((item) => ({
+      question: item.prompt,
+      listenFor: item.evidence_to_collect?.join('；') ?? '',
+      risk: `追问：${item.probes?.join('；') ?? '无'}`,
+    })),
+    marketContext: content.market_context,
+    calibrationWatchpoints: content.calibration_watchpoints ?? [],
+    openQuestions: content.open_questions ?? [],
+  };
+}
 
-  function setCandidateDecision(candidateId, decision) {
-    setManagerDecisions((current) => ({ ...current, [candidateId]: decision }));
+function RecruitingPortrait({ artifact, profile }) {
+  const portrait = buildRecruitingPortrait(artifact, profile);
+  if (!portrait) {
+    return <ArtifactEmptyState title="HR 招聘画像尚未生成" description="请先确认岗位画像和评估方案，再生成与当前会话一致的寻源、简历初筛和电话筛选策略。" />;
   }
 
   return (
@@ -1139,7 +1425,7 @@ function RecruitingPortrait({ onOpenEvidence }) {
       <section className="action-portrait-hero">
         <div className="action-hero-heading">
           <div><Target size={15} /><span>今天就按这句话找人</span></div>
-          <button onClick={() => onOpenEvidence(portrait.approvedContext.evidence[0])}><CheckCircle2 size={12} />已获批业务目标<Link2 size={11} /></button>
+          <button disabled><CheckCircle2 size={12} />来自当前岗位画像 v{portrait.version}</button>
         </div>
         <h2>{portrait.candidateDefinition}</h2>
         <p><strong>业务要解决：</strong>{portrait.approvedContext.coreProblem}</p>
@@ -1202,32 +1488,18 @@ function RecruitingPortrait({ onOpenEvidence }) {
 
       <section className="action-section calibration-action-section">
         <div className="calibration-action-heading">
-          <ActionSectionHeading number="04" title="用首批候选人校准画像" description="用人经理只做推进判断，Agent 负责总结隐藏要求并形成下一版。" />
-          <div><span className="demo-data-label">{portrait.candidateCalibration.source}</span><button className="quiet-button"><Plus size={13} />导入简历</button></div>
+          <ActionSectionHeading number="04" title="校准观察点" description="达到样本门槛后再用真实候选人信号发起 HR 复核，不把演示数据当成事实。" />
+          <div><span className="demo-data-label">{portrait.marketContext?.note ?? '人才库状态未知'}</span></div>
         </div>
-        <div className="candidate-calibration-table">
-          <div className="candidate-table-head"><span>候选人</span><span>Agent 初判</span><span>已识别证据</span><span>尚需确认</span><span>用人经理判断</span></div>
-          {portrait.candidateCalibration.samples.map((candidate) => {
-            const managerDecision = managerDecisions[candidate.id];
-            return (
-              <div className="candidate-table-row" key={candidate.id}>
-                <div><strong>{candidate.name}</strong><small>{candidate.id} · {candidate.currentRole}</small></div>
-                <span className={`candidate-decision ${candidate.tone}`}>{candidate.agentDecision}</span>
-                <div className="evidence-tags">{candidate.evidence.map((item) => <span key={item}>{item}</span>)}</div>
-                <p>{candidate.gap}</p>
-                <div className="manager-decision-buttons">
-                  <button className={managerDecision === '推进' ? 'selected go' : ''} onClick={() => setCandidateDecision(candidate.id, '推进')}><Check size={11} />推进</button>
-                  <button className={managerDecision === '不推进' ? 'selected stop' : ''} onClick={() => setCandidateDecision(candidate.id, '不推进')}><X size={11} />不推进</button>
-                </div>
-              </div>
-            );
-          })}
+        <div className="calibration-watchpoint-list">
+          {portrait.calibrationWatchpoints.map((item, index) => (
+            <div key={`${item.signal}-${index}`}>
+              <CircleDot size={13} />
+              <div><strong>{item.signal}</strong><p>触发条件：至少 {item.trigger_rule.minimum_candidates} 位候选人、{item.trigger_rule.minimum_channels} 个渠道，同一信号重复 {item.trigger_rule.repeated_signal_count} 次；关联 {item.requirement_refs.join(' · ')}。</p></div>
+            </div>
+          ))}
         </div>
-        <div className="calibration-action-footer">
-          <div><Sparkles size={14} /><span>已完成 {confirmedCount} / {portrait.candidateCalibration.samples.length} 个判断</span></div>
-          <p>{confirmedCount === 0 ? '完成首批判断后，Agent 将识别隐藏偏好、画像宽窄和需要调整的筛选规则。' : `已记录 ${confirmedCount} 个真实判断；继续完成样本后生成画像校准建议。`}</p>
-          <button disabled={confirmedCount < portrait.candidateCalibration.samples.length}>生成校准建议<ChevronRight size={13} /></button>
-        </div>
+        {portrait.openQuestions.length > 0 && <div className="artifact-open-questions"><AlertTriangle size={14} /><div><strong>待 HR 补充</strong>{portrait.openQuestions.map((question) => <p key={question}>{question}</p>)}</div></div>}
       </section>
     </article>
   );
@@ -1242,7 +1514,7 @@ function ActionSectionHeading({ number, title, description }) {
   );
 }
 
-function ProfileBasis({ expandedScenario, setExpandedScenario, expandedRequirement, setExpandedRequirement, onOpenEvidence }) {
+function ProfileBasis({ state, profile, assessment, expandedScenario, setExpandedScenario, expandedRequirement, setExpandedRequirement, onOpenEvidence }) {
   const [basisView, setBasisView] = useState('job');
   return (
     <div className="profile-basis-wrap">
@@ -1252,94 +1524,81 @@ function ProfileBasis({ expandedScenario, setExpandedScenario, expandedRequireme
       </div>
       {basisView === 'job' ? (
         <>
-          <HiringReasonDecision onOpenEvidence={onOpenEvidence} />
-          <JobDefinition expandedScenario={expandedScenario} setExpandedScenario={setExpandedScenario} onOpenEvidence={onOpenEvidence} />
+          <HiringReasonDecision state={state} profile={profile} onOpenEvidence={onOpenEvidence} />
+          <JobDefinition state={state} profile={profile} expandedScenario={expandedScenario} setExpandedScenario={setExpandedScenario} onOpenEvidence={onOpenEvidence} />
         </>
       ) : (
-        <TalentSpecification expandedRequirement={expandedRequirement} setExpandedRequirement={setExpandedRequirement} onOpenEvidence={onOpenEvidence} />
+        <TalentSpecification profile={profile} assessment={assessment} expandedRequirement={expandedRequirement} setExpandedRequirement={setExpandedRequirement} onOpenEvidence={onOpenEvidence} />
       )}
     </div>
   );
 }
 
-function HiringReasonDecision({ onOpenEvidence }) {
-  const [confirmed, setConfirmed] = useState(false);
+function HiringReasonDecision({ state, profile, onOpenEvidence }) {
+  const factGroups = [
+    ['业务背景', 'BACKGROUND'],
+    ['招聘原因', 'HIRING_REASON'],
+    ['成功标准', 'SUCCESS_CRITERION'],
+    ['约束条件', 'CONSTRAINT'],
+  ].map(([label, category]) => ({
+    label,
+    category,
+    items: (state?.facts ?? []).filter((fact) => fact.category === category),
+  }));
+  const evidenceRefs = [...new Set(factGroups.flatMap((group) => group.items.flatMap((fact) => fact.evidence_refs ?? [])))];
   return (
     <section className="hiring-reason-decision">
-      <div className="hiring-boundary-note"><ShieldCheck size={14} /><span><strong>判断边界：</strong>HC 已审批，这里不重新判断“要不要招”，只确认获批原因是否被正确转成岗位成功标准。</span></div>
+      <div className="hiring-boundary-note"><ShieldCheck size={14} /><span><strong>数据边界：</strong>本页内容来自当前会话的岗位事实与岗位画像产物；草稿事实会展示状态，但不会被当作已确认依据。</span></div>
       <div className="hiring-reason-heading">
         <div><span>01</span><div><h2>为什么新增这个编制</h2><p>把招聘原因说清楚，后续岗位画像、评估方案和 JD 才不会发生偏移。</p></div></div>
-        <div className="reason-evidence-links">
-          {roleProfile.recruitment.evidence.slice(0, 3).map((id) => <button key={id} onClick={() => onOpenEvidence(id)}>{id}<Link2 size={10} /></button>)}
-        </div>
+        <EvidenceLinks ids={evidenceRefs} onOpenEvidence={onOpenEvidence} compact />
       </div>
-      <div className="hiring-judgement-chain">
-        <div><span>已审批事实</span><strong>新增正式编制 1 人</strong><p>不是人员替换，也不是临时项目增援。</p></div>
-        <ChevronRight size={15} />
-        <div><span>业务变化</span><strong>从定制交付转向标准产品经营</strong><p>相似客户能力正在被重复建设。</p></div>
-        <ChevronRight size={15} />
-        <div><span>组织缺口</span><strong>缺少跨项目的产品化责任主体</strong><p>没有人持续负责产品边界和复用价值。</p></div>
-        <ChevronRight size={15} />
-        <div className="conclusion"><span>招聘结论</span><strong>新增企业产品经理，而非交付项目经理</strong><p>核心任务是沉淀标准产品并完成多客户验证。</p></div>
+      <div className="dynamic-fact-grid">
+        {factGroups.map((group) => (
+          <div key={group.category}>
+            <span>{group.label}</span>
+            {group.items.length > 0
+              ? group.items.map((fact) => <p key={fact.id}><em className={fact.status === 'CONFIRMED' ? 'confirmed' : 'draft'}>{fact.status === 'CONFIRMED' ? '已确认' : '待确认'}</em>{fact.statement}<small>{fact.source}</small></p>)
+              : <p className="empty-fact">当前会话尚未形成</p>}
+          </div>
+        ))}
       </div>
       <div className="reason-impact-decision">
-        <div><Sparkles size={15} /><p><strong>Agent 判断：</strong>候选人的核心门槛应是“跨客户抽象＋产品化闭环”，同行业经验只能作为加分项，不能成为首要筛选条件。</p></div>
-        <button className={confirmed ? 'confirmed' : ''} onClick={() => setConfirmed(true)}>{confirmed ? <><Check size={13} />招聘原因已确认</> : <>确认招聘原因<ChevronRight size={13} /></>}</button>
+        <div><Sparkles size={15} /><p><strong>岗位使命：</strong>{profile?.mission?.statement ?? '尚未生成岗位使命'}</p></div>
+        <span className="profile-fact-source">引用 {(profile?.mission?.hiring_reason_fact_refs?.length ?? 0) + (profile?.mission?.success_criterion_fact_refs?.length ?? 0)} 条已确认事实</span>
       </div>
     </section>
   );
 }
 
-function JDPreview({ jd }) {
-  const fallbackResponsibilities = [
-    '分析多个客户与业务场景，识别可复用的共性问题，定义清晰的产品边界与路线。',
-    '定义标准能力的核心用户、使用场景、MVP 范围和验证方式，推动方案落地。',
-    '协同销售、交付、解决方案与研发，对客户承诺、短期收入和长期产品价值做出可解释的取舍。',
-    '设计并跟踪产品采用、复用与交付效率指标，把客户验证结果转化为产品迭代决策。',
-  ];
-
-  const fallbackCapabilities = [
-    {
-      title: '复杂 B 端问题抽象与产品化',
-      description: '能够从多个客户或业务场景中识别共性，并说清产品选择与边界。',
-    },
-    {
-      title: '从机会判断到 MVP 验证的闭环能力',
-      description: '不只停留在方案或上线，能用真实用户和结果完成验证与复盘。',
-    },
-    {
-      title: '跨角色的复杂决策推动',
-      description: '能够在没有直接汇报关系的情况下，用事实、取舍和清晰责任推动共识。',
-    },
-    {
-      title: '用指标验证产品价值',
-      description: '能定义有意义的观察指标，理解数据限制，并让数据真正改变产品决策。',
-    },
-  ];
+function JDPreview({ jd, state }) {
   const content = jd?.content;
-  const responsibilities = content?.what_you_will_do ?? fallbackResponsibilities;
-  const capabilities = content?.what_we_look_for?.map((item) => ({
+  if (!content) {
+    return <ArtifactEmptyState title="对外 JD 尚未生成" description="请先确认岗位画像和评估方案，并补齐可公开的工作地点、雇佣类型等基础字段。" />;
+  }
+  const responsibilities = content.what_you_will_do ?? [];
+  const capabilities = (content.what_we_look_for ?? []).map((item) => ({
     title: item,
     description: '',
-  })) ?? fallbackCapabilities;
+  }));
   const basics = content?.title_and_basics;
 
   return (
     <div className="jd-preview-shell">
       <div className="jd-toolbar">
-        <div><span className="jd-output-badge"><FileText size={12} />候选人版</span><strong>对外 JD · {jd?.status === 'CONFIRMED' ? '已确认' : '待用人经理确认'}</strong><span>严格保持候选人四段结构</span></div>
+        <div><span className="jd-output-badge"><FileText size={12} />候选人版</span><strong>对外 JD · {artifactStatusLabel(jd?.status)}</strong><span>内容来自当前会话的正式产物</span></div>
         <div className="jd-toolbar-actions"><button className="quiet-button"><FileText size={14} />复制 JD</button></div>
       </div>
+      {jd?.status === 'INVALIDATED' && <div className="artifact-inline-warning"><AlertTriangle size={14} />此 JD 的上游岗位事实或画像已变化，请重新生成后再发布。</div>}
       <article className="jd-document">
         <header>
-          <span>{roleProfile.meta.team} · {basics?.location ?? roleProfile.meta.location}</span>
-          <h1>{basics?.title ?? roleProfile.meta.title}</h1>
-          <p>一起把复杂问题转化为真正可验证的业务结果。</p>
-          <div className="jd-facts"><span>{basics?.employment_type ?? '全职'}</span><span>{roleProfile.meta.level}</span><span>汇报给{basics?.reporting_line ?? roleProfile.meta.reportsTo}</span></div>
+          <span>{basics?.department ?? state?.department} · {basics?.location}</span>
+          <h1>{basics?.title ?? state?.title}</h1>
+          <div className="jd-facts">{[basics?.employment_type, basics?.level, basics?.work_mode, basics?.reporting_line ? `汇报给${basics.reporting_line}` : null].filter(Boolean).map((item) => <span key={item}>{item}</span>)}</div>
         </header>
         <section className="jd-about-role">
           <h2>关于岗位</h2>
-          <p>{content?.about_the_role ?? '我们正在从项目交付走向标准产品。你会从多个客户场景中识别高价值共性需求，定义可复用的产品路线，并推动首个标准能力完成真实客户验证。这个岗位主导跨项目的产品化判断，不代替单个客户的项目交付。'}</p>
+          <p>{content.about_the_role}</p>
         </section>
         <section><h2>你会做什么</h2><ol className="jd-responsibility-list">
           {responsibilities.map((item) => <li key={item}>{item}</li>)}
@@ -1347,13 +1606,18 @@ function JDPreview({ jd }) {
         <section><h2>我们希望你具备</h2><div className="jd-capability-list">
           {capabilities.map((capability) => <div key={capability.title}><strong>{capability.title}</strong>{capability.description && <p>{capability.description}</p>}</div>)}
         </div></section>
-        <footer className="jd-document-footer"><span>候选人版预览 · 仅包含可公开字段</span><strong>版本 v{jd?.version ?? '0.5'} · {jd?.status === 'CONFIRMED' ? '已确认' : '待发布'}</strong></footer>
+        <footer className="jd-document-footer"><span>候选人版预览 · 仅包含可公开字段</span><strong>版本 v{jd?.version} · {artifactStatusLabel(jd?.status)}</strong></footer>
       </article>
     </div>
   );
 }
 
-function JobDefinition({ expandedScenario, setExpandedScenario, onOpenEvidence }) {
+function JobDefinition({ state, profile, expandedScenario, setExpandedScenario, onOpenEvidence }) {
+  const facts = state?.facts ?? [];
+  const factById = new Map(facts.map((fact) => [fact.id, fact]));
+  const successFacts = facts.filter((fact) => fact.category === 'SUCCESS_CRITERION');
+  const work = profile?.work ?? [];
+  const boundaries = profile?.boundaries ?? {};
   return (
     <article className="profile-document-new">
       <section className="document-section first-section">
@@ -1361,17 +1625,18 @@ function JobDefinition({ expandedScenario, setExpandedScenario, onOpenEvidence }
           <span>02</span><div><h2>成功标准</h2><p>从入职结果反推岗位任务，而不是从旧 JD 复制职责。</p></div>
         </div>
         <div className="outcome-list">
-          {roleProfile.outcomes.map((outcome) => (
-            <div className="outcome-row" key={outcome.id}>
-              <div className="outcome-time"><small>{outcome.id}</small><strong>{outcome.horizon}</strong></div>
+          {successFacts.map((fact, index) => (
+            <div className="outcome-row" key={fact.id}>
+              <div className="outcome-time"><small>SC-{String(index + 1).padStart(2, '0')}</small><strong>{fact.status === 'CONFIRMED' ? '已确认' : '待确认'}</strong></div>
               <div className="outcome-main">
-                <div><h3>{outcome.title}</h3><span className={`profile-status ${outcome.tone}`}>{outcome.status}</span></div>
-                <p>{outcome.definition}</p>
-                <div className="measure-list">{outcome.measures.map((measure) => <span key={measure}>{measure}</span>)}</div>
+                <div><h3>{fact.statement}</h3><span className={`profile-status ${fact.status === 'CONFIRMED' ? '' : 'warning'}`}>{fact.status === 'CONFIRMED' ? '正式依据' : '不进入生成'}</span></div>
+                <p>来源：{fact.source}</p>
+                <div className="measure-list"><span>更新时间 {new Date(fact.updated_at).toLocaleDateString('zh-CN')}</span></div>
               </div>
-              <EvidenceLinks ids={outcome.evidence} onOpenEvidence={onOpenEvidence} compact />
+              <EvidenceLinks ids={fact.evidence_refs ?? []} onOpenEvidence={onOpenEvidence} compact />
             </div>
           ))}
+          {successFacts.length === 0 && <p className="section-empty-copy">当前会话尚未形成成功标准。</p>}
         </div>
       </section>
 
@@ -1380,29 +1645,29 @@ function JobDefinition({ expandedScenario, setExpandedScenario, onOpenEvidence }
           <span>03</span><div><h2>关键工作场景</h2><p>聚焦最影响成功、最能区分候选人的真实工作。</p></div>
         </div>
         <div className="scenario-list">
-          {roleProfile.scenarios.map((scenario) => {
-            const expanded = expandedScenario === scenario.id;
+          {work.map((item) => {
+            const expanded = expandedScenario === item.id;
             return (
-              <div className={`scenario-row ${expanded ? 'expanded' : ''}`} key={scenario.id}>
-                <button className="scenario-summary" onClick={() => setExpandedScenario(expanded ? null : scenario.id)}>
-                  <span className="item-code">{scenario.id}</span>
-                  <span><strong>{scenario.title}</strong><small>{scenario.frequency}</small></span>
-                  <span className="outcome-map">{scenario.outcomes.join(' · ')}</span>
+              <div className={`scenario-row ${expanded ? 'expanded' : ''}`} key={item.id}>
+                <button className="scenario-summary" onClick={() => setExpandedScenario(expanded ? null : item.id)}>
+                  <span className="item-code">{item.id}</span>
+                  <span><strong>{item.title}</strong><small>{item.description}</small></span>
+                  <span className="outcome-map">{item.success_criterion_fact_refs?.join(' · ')}</span>
                   <ChevronDown size={16} />
                 </button>
                 {expanded && (
                   <div className="scenario-detail">
-                    <DefinitionItem label="触发情境" value={scenario.trigger} />
-                    <DefinitionItem label="关键动作" value={scenario.actions} />
-                    <DefinitionItem label="主要产出" value={scenario.output} />
-                    <DefinitionItem label="核心挑战" value={scenario.challenge} />
-                    <DefinitionItem label="协作对象" value={scenario.stakeholders} />
-                    <div className="detail-evidence"><span>依据</span><EvidenceLinks ids={scenario.evidence} onOpenEvidence={onOpenEvidence} compact /></div>
+                    <DefinitionItem label="工作定义" value={item.description} />
+                    <DefinitionItem label="主要产出" value={(item.deliverables ?? []).join('；')} />
+                    <DefinitionItem label="对应成功标准" value={(item.success_criterion_fact_refs ?? []).map((id) => factById.get(id)?.statement ?? id).join('；')} />
+                    <DefinitionItem label="其他依据" value={(item.other_fact_refs ?? []).map((id) => factById.get(id)?.statement ?? id).join('；') || '无'} />
+                    <div className="detail-evidence"><span>事实引用</span><EvidenceLinks ids={[...(item.success_criterion_fact_refs ?? []), ...(item.other_fact_refs ?? [])]} onOpenEvidence={onOpenEvidence} compact /></div>
                   </div>
                 )}
               </div>
             );
           })}
+          {work.length === 0 && <p className="section-empty-copy">当前画像尚未定义关键工作。</p>}
         </div>
       </section>
 
@@ -1411,95 +1676,116 @@ function JobDefinition({ expandedScenario, setExpandedScenario, onOpenEvidence }
           <span>04</span><div><h2>权责边界与资源</h2><p>避免把“产品负责人”写成没有权限的项目协调人。</p></div>
         </div>
         <div className="boundary-grid">
-          <div><h3>需要负责</h3>{roleProfile.boundaries.owns.map((item) => <p key={item}><Check size={13} />{item}</p>)}</div>
-          <div><h3>不直接负责</h3>{roleProfile.boundaries.notOwns.map((item) => <p key={item}><X size={13} />{item}</p>)}</div>
-          <div className="boundary-wide"><h3>决策权限</h3><p>{roleProfile.boundaries.decisionRights}</p></div>
-          <div className="boundary-wide"><h3>协作资源</h3><p>{roleProfile.boundaries.resources}</p></div>
+          <BoundaryGroup title="需要负责" items={boundaries.owns} icon="check" />
+          <BoundaryGroup title="不直接负责" items={boundaries.does_not_own} icon="cross" />
+          <BoundaryGroup title="决策权限" items={boundaries.decision_rights} wide />
+          <BoundaryGroup title="协作资源" items={boundaries.collaboration_and_resources} wide />
         </div>
+        {(profile?.open_questions?.length ?? 0) > 0 && <div className="artifact-open-questions"><AlertTriangle size={14} /><div><strong>画像仍有开放问题</strong>{profile.open_questions.map((item) => <p key={item.field_path}>{item.question}<small>{item.reason}</small></p>)}</div></div>}
       </section>
     </article>
   );
 }
 
-function TalentSpecification({ expandedRequirement, setExpandedRequirement, onOpenEvidence }) {
+function BoundaryGroup({ title, items = [], icon, wide = false }) {
+  return (
+    <div className={wide ? 'boundary-wide' : ''}>
+      <h3>{title}</h3>
+      {items.length > 0
+        ? items.map((item, index) => <p key={`${item.statement}-${index}`}>{icon === 'check' ? <Check size={13} /> : icon === 'cross' ? <X size={13} /> : null}{item.statement}</p>)
+        : <p className="empty-fact">当前会话尚未确认</p>}
+    </div>
+  );
+}
+
+function TalentSpecification({ profile, assessment, expandedRequirement, setExpandedRequirement, onOpenEvidence }) {
+  const requirements = profile?.requirements ?? [];
+  const dimensions = assessment?.dimensions ?? [];
   return (
     <article className="profile-document-new">
-      <div className="supply-callout">
-        <BarChart3 size={18} />
-        <div><strong>人才供给提醒</strong><p>同时硬筛“3 年同行业”和“平台产品落地”会使可触达样本降至约 13%。本画像将同行业经验定义为加分项，以相似复杂度和产品化结果作为替代证据。</p></div>
-        <button onClick={() => onOpenEvidence('E-06')}>查看证据 E-06</button>
-      </div>
-
       <section className="document-section first-section">
         <div className="document-section-heading">
           <span>01</span><div><h2>人才规格矩阵</h2><p>每项要求均包含业务原因、强证据、替代证据和风险信号。</p></div>
         </div>
         <div className="requirement-list">
           <div className="requirement-head"><span>优先级</span><span>能力要求</span><span>对应任务</span><span>评估方式</span><span /></div>
-          {roleProfile.requirements.map((requirement) => {
+          {requirements.map((requirement) => {
             const expanded = expandedRequirement === requirement.id;
+            const mappedDimensions = dimensions.filter((dimension) => dimension.requirement_refs?.includes(requirement.id));
             return (
               <div className={`requirement-row ${expanded ? 'expanded' : ''}`} key={requirement.id}>
                 <button className="requirement-summary" onClick={() => setExpandedRequirement(expanded ? null : requirement.id)}>
-                  <span className={`priority-label ${requirement.priority === 'Must-have' ? 'must' : 'preferred'}`}>{requirement.priority}</span>
-                  <span><strong>{requirement.id} · {requirement.title}</strong><small>{requirement.level}</small></span>
-                  <span>{requirement.mapping.join(' · ')}</span>
-                  <span>{requirement.assessment}</span>
+                  <span className={`priority-label ${requirement.priority === 'MUST_HAVE' ? 'must' : 'preferred'}`}>{requirement.priority === 'MUST_HAVE' ? 'Must-have' : 'Preferred'}</span>
+                  <span><strong>{requirement.id} · {requirement.name}</strong><small>{requirement.level}</small></span>
+                  <span>{requirement.work_refs?.join(' · ') || '事实依据'}</span>
+                  <span>{mappedDimensions.length > 0 ? mappedDimensions.map((item) => assessmentMethodLabel(item.method?.type)).join(' · ') : '评估方案待生成'}</span>
                   <ChevronDown size={16} />
                 </button>
                 {expanded && (
                   <div className="requirement-detail">
-                    <DefinitionItem label="为什么需要" value={requirement.why} />
-                    <DefinitionItem label="强证据" value={requirement.strongEvidence} tone="positive" />
-                    <DefinitionItem label="可接受替代" value={requirement.substitute} />
-                    <DefinitionItem label="风险信号" value={requirement.risk} tone="negative" />
-                    <div className="detail-evidence"><span>依据</span><EvidenceLinks ids={requirement.evidence} onOpenEvidence={onOpenEvidence} compact /></div>
+                    <DefinitionItem label="为什么需要" value={requirement.rationale} />
+                    <DefinitionItem label="强证据" value={requirement.strong_evidence?.join('；')} tone="positive" />
+                    <DefinitionItem label="可接受替代" value={requirement.acceptable_alternatives?.join('；') || '无'} />
+                    <DefinitionItem label="风险信号" value={requirement.risk_signals?.join('；')} tone="negative" />
+                    <div className="detail-evidence"><span>依据</span><EvidenceLinks ids={[...(requirement.work_refs ?? []), ...(requirement.success_criterion_fact_refs ?? []), ...(requirement.constraint_fact_refs ?? [])]} onOpenEvidence={onOpenEvidence} compact /></div>
                   </div>
                 )}
               </div>
             );
           })}
+          {requirements.length === 0 && <p className="section-empty-copy">当前画像尚未形成人才要求。</p>}
         </div>
       </section>
     </article>
   );
 }
 
-function SuccessScorecard({ expandedScore, setExpandedScore }) {
+function SuccessScorecard({ artifact, expandedScore, setExpandedScore }) {
+  const scorecard = artifact?.content;
+  if (!scorecard) {
+    return <ArtifactEmptyState title="评估方案尚未生成" description="请先确认当前岗位画像，再生成结构化评估维度、题目、证据标准和评分锚点。" />;
+  }
+  const dimensions = scorecard.dimensions ?? [];
+  const interviewPlan = scorecard.interview_plan ?? [];
+  const totalWeight = dimensions.reduce((total, item) => total + item.weight, 0);
   return (
     <article className="profile-document-new">
+      {artifact.status === 'INVALIDATED' && <div className="artifact-inline-warning"><AlertTriangle size={14} />此评估方案所依据的岗位画像已变化，请重新生成后再用于面试。</div>}
       <section className="scorecard-overview">
         <div>
           <div className="section-eyebrow"><ListChecks size={15} />统一招聘判断</div>
-          <h2>5 个维度，共 100 分</h2>
+          <h2>{dimensions.length} 个维度，共 {totalWeight} 分</h2>
           <p>面试官必须记录岗位相关证据；“感觉不错”不作为评分依据。</p>
         </div>
         <div className="weight-legend">
-          {roleProfile.scorecard.map((item, index) => <span key={item.id} style={{ width: `${item.weight}%` }} className={`weight-${index + 1}`}>{item.weight}%</span>)}
+          {dimensions.map((item, index) => <span key={item.id} style={{ width: `${item.weight}%` }} className={`weight-${(index % 5) + 1}`}>{item.weight}%</span>)}
         </div>
       </section>
 
       <section className="document-section first-section scorecard-section">
         <div className="scorecard-list">
           <div className="scorecard-head"><span>维度与权重</span><span>评估方式</span><span>责任人</span><span>映射</span><span /></div>
-          {roleProfile.scorecard.map((item) => {
+          {dimensions.map((item) => {
             const expanded = expandedScore === item.id;
+            const owners = interviewPlan.filter((stage) => stage.dimension_refs?.includes(item.id)).map((stage) => stage.interviewer_role);
             return (
               <div className={`scorecard-row ${expanded ? 'expanded' : ''}`} key={item.id}>
                 <button className="scorecard-summary" onClick={() => setExpandedScore(expanded ? null : item.id)}>
-                  <span><em>{item.weight}%</em><strong>{item.id} · {item.dimension}</strong></span>
-                  <span>{item.method}</span>
-                  <span>{item.owner}</span>
-                  <span>{item.mapsTo.join(' · ')}</span>
+                  <span><em>{item.weight}%</em><strong>{item.id} · {item.name}</strong></span>
+                  <span>{assessmentMethodLabel(item.method?.type)}</span>
+                  <span>{owners.join(' · ') || '待分配'}</span>
+                  <span>{[...(item.requirement_refs ?? []), ...(item.work_refs ?? [])].join(' · ')}</span>
                   <ChevronDown size={16} />
                 </button>
                 {expanded && (
                   <div className="scorecard-detail">
-                    <div className="scorecard-question"><span>核心题目</span><p>{item.prompt}</p><small>必须收集：{item.requiredEvidence}</small></div>
+                    <div className="scorecard-question"><span>执行说明</span><p>{item.method?.instructions}</p></div>
+                    {(item.questions ?? []).map((question, index) => <div className="scorecard-question" key={`${item.id}-q-${index}`}><span>核心题目 {index + 1}</span><p>{question.prompt}</p><small>追问：{question.probes?.join('；') || '无'}<br />必须收集：{question.evidence_to_collect?.join('；')}</small></div>)}
+                    <div className="assessment-evidence-criteria"><DefinitionItem label="强证据" value={item.evidence_criteria?.strong_evidence?.join('；')} tone="positive" /><DefinitionItem label="可接受证据" value={item.evidence_criteria?.acceptable_evidence?.join('；')} /><DefinitionItem label="风险信号" value={item.evidence_criteria?.risk_signals?.join('；')} tone="negative" /></div>
                     <div className="anchor-grid">
-                      <div className="anchor-1"><span>1 分 · 不符合</span><p>{item.anchors[1]}</p></div>
-                      <div className="anchor-3"><span>3 分 · 达到要求</span><p>{item.anchors[3]}</p></div>
-                      <div className="anchor-5"><span>5 分 · 显著超出</span><p>{item.anchors[5]}</p></div>
+                      <div className="anchor-1"><span>1 分 · 不符合</span><p>{item.anchors?.score_1}</p></div>
+                      <div className="anchor-3"><span>3 分 · 达到要求</span><p>{item.anchors?.score_3}</p></div>
+                      <div className="anchor-5"><span>5 分 · 显著超出</span><p>{item.anchors?.score_5}</p></div>
                     </div>
                   </div>
                 )}
@@ -1513,13 +1799,17 @@ function SuccessScorecard({ expandedScore, setExpandedScore }) {
 }
 
 function DefinitionItem({ label, value, tone = '' }) {
-  return <div className={`definition-item ${tone}`}><span>{label}</span><p>{value}</p></div>;
+  return <div className={`definition-item ${tone}`}><span>{label}</span><p>{value || '尚未定义'}</p></div>;
 }
 
 function EvidenceLinks({ ids, onOpenEvidence, compact = false }) {
+  const uniqueIds = [...new Set((ids ?? []).filter(Boolean))];
+  const displayRef = (id) => id.length > 22 ? `${id.slice(0, 10)}…${id.slice(-6)}` : id;
   return (
     <div className={`evidence-links ${compact ? 'compact' : ''}`}>
-      {ids.map((id) => <button key={id} onClick={() => onOpenEvidence(id)}>{id}<Link2 size={11} /></button>)}
+      {uniqueIds.map((id) => evidenceById[id]
+        ? <button key={id} onClick={() => onOpenEvidence(id)} title={id}>{displayRef(id)}<Link2 size={11} /></button>
+        : <span key={id} title={id}>{displayRef(id)}<Link2 size={11} /></span>)}
     </div>
   );
 }

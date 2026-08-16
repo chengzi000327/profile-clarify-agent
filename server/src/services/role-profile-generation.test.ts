@@ -121,3 +121,80 @@ describe('岗位画像生成门禁与引用校验', () => {
     })
   })
 })
+
+describe('会话事实与岗位画像版本同步', () => {
+  it('确认新的会话事实后，使当前画像及全部下游产物失效', async () => {
+    const store = new MemoryStore()
+    await store.initialize()
+    const service = new RoleService(store)
+
+    const draftState = await service.saveFactDraft(
+      DEMO_ROLE_SESSION_ID,
+      actor,
+      '该岗位还需要在六个月内建立跨团队商业化评审机制',
+      'SUCCESS_CRITERION',
+    )
+    const newFact = draftState.facts.find((fact) =>
+      fact.statement.includes('跨团队商业化评审机制'),
+    )
+    expect(newFact?.status).toBe('DRAFT')
+
+    const confirmedState = await service.confirmFacts(
+      DEMO_ROLE_SESSION_ID,
+      actor,
+      [newFact!.id],
+      draftState.revision,
+    )
+
+    expect(confirmedState.stage).toBe('PROFILE_DRAFT')
+    expect(Object.values(confirmedState.latest_artifacts)).toHaveLength(3)
+    expect(Object.values(confirmedState.latest_artifacts).every(
+      (artifact) => artifact?.status === 'INVALIDATED',
+    )).toBe(true)
+
+    const view = await service.get(DEMO_ROLE_SESSION_ID, {
+      tenant_id: 'tenant-demo',
+      user_id: 'admin-demo',
+      role: 'ADMIN',
+      display_name: '企业管理员',
+    })
+    expect(view.artifacts).toHaveLength(4)
+    expect(view.artifacts.every((artifact) => artifact.status === 'INVALIDATED')).toBe(true)
+  })
+
+  it('仅重复确认原有事实时，不使仍有效的产物失效', async () => {
+    const store = new MemoryStore()
+    await store.initialize()
+    const service = new RoleService(store)
+    const before = await service.get(DEMO_ROLE_SESSION_ID, actor)
+
+    const state = await service.confirmFacts(
+      DEMO_ROLE_SESSION_ID,
+      actor,
+      ['fact-02'],
+      before.state.revision,
+    )
+
+    expect(state.latest_artifacts.ROLE_PROFILE?.status).toBe('CONFIRMED')
+    expect(state.latest_artifacts.ASSESSMENT_SCORECARD?.status).toBe('CONFIRMED')
+    expect(state.latest_artifacts.PUBLIC_JD?.status).toBe('DRAFT')
+  })
+
+  it('岗位名称或团队在会话中变化后，使旧产物失效', async () => {
+    const store = new MemoryStore()
+    await store.initialize()
+    const service = new RoleService(store)
+
+    const state = await service.updateRoleIdentityDraft(
+      DEMO_ROLE_SESSION_ID,
+      actor,
+      { title: '商业化与增长产品负责人' },
+    )
+
+    expect(state.title).toBe('商业化与增长产品负责人')
+    expect(state.stage).toBe('PROFILE_DRAFT')
+    expect(Object.values(state.latest_artifacts).every(
+      (artifact) => artifact?.status === 'INVALIDATED',
+    )).toBe(true)
+  })
+})

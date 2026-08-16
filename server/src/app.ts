@@ -135,6 +135,7 @@ const recoverInterruptedRuns = async (store: ApplicationStore): Promise<void> =>
         id: randomUUID(),
         tenant_id: inputMessage.tenant_id,
         role_session_id: record.run.role_session_id,
+        conversation_user_id: record.run.actor_user_id,
         run_id: record.run.id,
         clarification_round_id: inputMessage.clarification_round_id,
         sender_type: 'SYSTEM',
@@ -909,7 +910,7 @@ export const buildApp = async (
         extension_size: z.number().int().min(1).max(10),
       })
       .parse(request.body)
-    const roles = await roleService.list(request.actor)
+    const roles = await store.listTenantRoleStates(request.actor.tenant_id)
     for (const role of roles) {
       const current = await store.getClarificationPolicy(role.id)
       await store.saveClarificationPolicy({
@@ -929,7 +930,7 @@ export const buildApp = async (
 
   app.get('/api/v1/admin/agent-policy', async (request) => {
     requireAdmin(request.actor)
-    const roles = await roleService.list(request.actor)
+    const roles = await store.listTenantRoleStates(request.actor.tenant_id)
     const policies = await Promise.all(
       roles.map((role) => store.getClarificationPolicy(role.id)),
     )

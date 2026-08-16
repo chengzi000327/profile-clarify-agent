@@ -672,6 +672,14 @@ describe('Role Clarifier API', () => {
     })
     expect(isolated.json().items).toEqual([])
 
+    const admin = await loginDynamic('admin-a', '管理员甲', 'ADMIN')
+    const adminConversations = await app.inject({
+      method: 'GET',
+      url: '/api/v1/role-sessions',
+      headers: { cookie: admin.cookie },
+    })
+    expect(adminConversations.json().items).toEqual([])
+
     const roleMismatch = await loginDynamic('zhangsan', '张三', 'HR')
     expect(roleMismatch.response.statusCode).toBe(409)
     expect(roleMismatch.response.json().error.code).toBe('ACCOUNT_ROLE_MISMATCH')
@@ -1361,6 +1369,9 @@ describe('Role Clarifier API', () => {
       ).json().items
       expect(conversation.filter((item: { sender_type: string }) => item.sender_type === 'HUMAN'))
         .toMatchObject([{ sender_user_id: userId }])
+      expect(conversation.every((item: { conversation_user_id: string | null }) =>
+        item.conversation_user_id === userId,
+      )).toBe(true)
       expect(conversation.every((item: { run_id: string | null; sender_user_id: string | null }) =>
         item.run_id === runId || item.sender_user_id === userId,
       )).toBe(true)
@@ -1812,6 +1823,7 @@ describe('Role Clarifier API', () => {
       id: '33333333-3333-4333-8333-333333333333',
       tenant_id: 'tenant-demo',
       role_session_id: DEMO_ROLE_SESSION_ID,
+      conversation_user_id: 'hr-demo',
       run_id: '22222222-2222-4222-8222-222222222222',
       clarification_round_id: null,
       sender_type: 'HUMAN',
