@@ -191,6 +191,7 @@ describe('Role Clarifier API', () => {
 
   it('飞书事件可开启同一岗位澄清链路并回传 Agent 与岗位画像卡片', async () => {
     const cards: Array<{ chatId: string; card: Record<string, unknown> }> = []
+    const texts: Array<{ chatId: string; text: string }> = []
     const feishuConfig = loadConfig({
       NODE_ENV: 'test',
       SESSION_SECRET: 'test-session-secret-that-is-long-enough',
@@ -205,6 +206,9 @@ describe('Role Clarifier API', () => {
       store: new MemoryStore(),
       feishuClient: {
         configured: () => true,
+        sendText: async (chatId, text) => {
+          texts.push({ chatId, text })
+        },
         sendCard: async (chatId, card) => {
           cards.push({ chatId, card })
         },
@@ -250,22 +254,24 @@ describe('Role Clarifier API', () => {
       payload: event('om_001', '我想招聘一位企业产品经理，请从招聘原因开始帮我澄清。'),
     })
     expect(first.statusCode, first.body).toBe(200)
-    for (let attempt = 0; attempt < 60 && cards.length < 1; attempt += 1) {
+    for (let attempt = 0; attempt < 60 && texts.length < 1; attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 10))
     }
-    expect(cards).toHaveLength(1)
-    expect(JSON.stringify(cards[0]?.card)).toContain('企业产品经理')
+    expect(texts).toHaveLength(1)
+    expect(texts[0]?.text).toContain('下一步需要你补充')
+    expect(cards).toHaveLength(0)
 
     await feishuApp.inject({
       method: 'POST',
       url: '/api/v1/integrations/feishu/events',
       payload: event('om_002', '生成岗位画像'),
     })
-    for (let attempt = 0; attempt < 60 && cards.length < 2; attempt += 1) {
+    for (let attempt = 0; attempt < 60 && cards.length < 1; attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 10))
     }
-    expect(cards).toHaveLength(2)
-    expect(JSON.stringify(cards[1]?.card)).toContain('岗位画像')
+    expect(cards).toHaveLength(1)
+    expect(JSON.stringify(cards[0]?.card)).toContain('岗位画像')
+    expect(JSON.stringify(cards[0]?.card)).not.toContain('"tag":"a"')
 
     const duplicate = await feishuApp.inject({
       method: 'POST',

@@ -54,6 +54,7 @@ type FeishuCard = Record<string, unknown>
 
 export interface FeishuClientLike {
   configured(): boolean
+  sendText?(chatId: string, text: string): Promise<void>
   sendCard(chatId: string, card: FeishuCard): Promise<void>
 }
 
@@ -72,6 +73,18 @@ export class FeishuOpenApiClient implements FeishuClientLike {
   }
 
   async sendCard(chatId: string, card: FeishuCard): Promise<void> {
+    await this.sendMessage(chatId, 'interactive', JSON.stringify(card))
+  }
+
+  async sendText(chatId: string, text: string): Promise<void> {
+    await this.sendMessage(chatId, 'text', JSON.stringify({ text: text.slice(0, 20_000) }))
+  }
+
+  private async sendMessage(
+    chatId: string,
+    messageType: 'text' | 'interactive',
+    content: string,
+  ): Promise<void> {
     const token = await this.getTenantAccessToken()
     const response = await fetch(
       `${this.config.FEISHU_API_BASE_URL}/im/v1/messages?receive_id_type=chat_id`,
@@ -83,8 +96,8 @@ export class FeishuOpenApiClient implements FeishuClientLike {
         },
         body: JSON.stringify({
           receive_id: chatId,
-          msg_type: 'interactive',
-          content: JSON.stringify(card),
+          msg_type: messageType,
+          content,
         }),
       },
     )
@@ -175,19 +188,14 @@ const markdownCard = (
   ],
 })
 
-const outputMessageCard = (
-  roleTitle: string,
-  message: ConversationMessage,
-  webOrigin: string,
-): FeishuCard => {
+const outputMessageText = (message: ConversationMessage): string => {
   const question = typeof message.structured_content?.question === 'string'
     ? message.structured_content.question
     : null
-  const body = [
+  return [
     message.content,
-    ...(question ? [`\n**下一步需要你补充**\n${question}`] : []),
-  ].join('\n')
-  return markdownCard(`${roleTitle} · 岗位澄清`, body, webOrigin)
+    ...(question ? [`下一步需要你补充：\n${question}`] : []),
+  ].join('\n\n')
 }
 
 const artifactMarkdown = (artifact: ArtifactEnvelope): string => {
@@ -291,25 +299,48 @@ export class FeishuGateway {
     }
   }
 
+  private async sendText(chatId: string, text: string): Promise<void> {
+    if (this.client.sendText) {
+      await this.client.sendText(chatId, text)
+      return
+    }
+    await this.client.sendCard(
+      chatId,
+      markdownCard('岗位澄清 Agent', text, this.config.WEB_ORIGIN),
+    )
+  }
+
+  private async sendArtifactCard(
+    chatId: string,
+    title: string,
+    markdown: string,
+    template: string,
+  ): Promise<void> {
+    try {
+      await this.client.sendCard(
+        chatId,
+        markdownCard(title, markdown, this.config.WEB_ORIGIN, template),
+      )
+    } catch (error) {
+      this.onError(error)
+      await this.sendText(chatId, `${title}\n\n${markdown}`)
+    }
+  }
+
   private async processMessage(event: z.infer<typeof FeishuMessageEventSchema>): Promise<void> {
     const { sender, message } = event.event
     if (sender.sender_type !== 'user') return
     if (message.chat_type !== 'p2p') {
-      await this.client.sendCard(
+      await this.sendText(
         message.chat_id,
-        markdownCard(
-          '岗位澄清 Agent',
-          '为避免把不同成员的岗位与权限混在一起，当前 MVP 请先在机器人单聊中进行岗位澄清。',
-          this.config.WEB_ORIGIN,
-          'orange',
-        ),
+        '为避免把不同成员的岗位与权限混在一起，当前 MVP 请先在机器人单聊中进行岗位澄清。',
       )
       return
     }
     if (message.message_type !== 'text') {
-      await this.client.sendCard(
+      await this.sendText(
         message.chat_id,
-        markdownCard('暂不支持这种消息', '当前请发送文字消息描述招聘需求。', this.config.WEB_ORIGIN, 'orange'),
+        '当前暂不支持这种消息，请发送文字描述招聘需求。',
       )
       return
     }
@@ -320,13 +351,9 @@ export class FeishuGateway {
 
     if (/^(新岗位|新建岗位|\/new)$/i.test(text)) {
       await this.roleService.createIntake(actor)
-      await this.client.sendCard(
+      await this.sendText(
         message.chat_id,
-        markdownCard(
-          '新的岗位对话已开始',
-          '不用填写表单。请直接说说你遇到了什么业务问题、为什么想招人，Agent 会在对话中建立岗位。',
-          this.config.WEB_ORIGIN,
-        ),
+        '新的岗位对话已开始。\n\n不用填写表单，请直接说说你遇到了什么业务问题、为什么想招人，Agent 会在对话中建立岗位。',
       )
       return
     }
@@ -352,9 +379,9 @@ export class FeishuGateway {
 
     const completed = await this.waitForRun(run.id)
     if (completed.status !== 'COMPLETED') {
-      await this.client.sendCard(
+      await this.sendText(
         message.chat_id,
-        markdownCard('Agent 本轮未完成', '消息已经保存，请稍后继续发送或到 Web 工作台查看 Trace。', this.config.WEB_ORIGIN, 'red'),
+        'Agent 本轮未完成。消息已经保存，请稍后继续发送，或到 Web 工作台查看 Trace。',
       )
       return
     }
@@ -365,14 +392,11 @@ export class FeishuGateway {
         .filter((item) => item.type === requestedArtifact)
         .sort((left, right) => right.version - left.version)[0]
       if (artifact) {
-        await this.client.sendCard(
+        await this.sendArtifactCard(
           message.chat_id,
-          markdownCard(
-            `${view.state.title} · ${artifactTitle[requestedArtifact]} v${artifact.version}`,
-            artifactMarkdown(artifact),
-            this.config.WEB_ORIGIN,
-            requestedArtifact === 'HR_RECRUITING_BRIEF' ? 'purple' : 'blue',
-          ),
+          `${view.state.title} · ${artifactTitle[requestedArtifact]} v${artifact.version}`,
+          artifactMarkdown(artifact),
+          requestedArtifact === 'HR_RECRUITING_BRIEF' ? 'purple' : 'blue',
         )
       }
       return
@@ -381,10 +405,7 @@ export class FeishuGateway {
     const messages = await this.store.listConversationMessages(role.id)
     const output = messages.find((item) => item.id === completed.output_message_id)
     if (output) {
-      await this.client.sendCard(
-        message.chat_id,
-        outputMessageCard(view.state.title, output, this.config.WEB_ORIGIN),
-      )
+      await this.sendText(message.chat_id, outputMessageText(output))
     }
   }
 
