@@ -2,9 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   Activity,
   AlertTriangle,
-  ArrowLeft,
   CheckCircle2,
-  ChevronRight,
   Clock3,
   Filter,
   RefreshCw,
@@ -131,7 +129,7 @@ export default function AdminTraceConsole() {
       setSelectedId((current) =>
         result.items.some((item) => item.run.id === current)
           ? current
-          : null,
+          : result.items[0]?.run.id ?? null,
       );
     } catch (loadError) {
       setError(loadError.message);
@@ -171,11 +169,6 @@ export default function AdminTraceConsole() {
     );
   }, [runs, query]);
 
-  const selectedRun = useMemo(
-    () => runs.find((item) => item.run.id === selectedId) ?? null,
-    [runs, selectedId],
-  );
-
   async function savePolicy() {
     setError('');
     try {
@@ -187,45 +180,51 @@ export default function AdminTraceConsole() {
     }
   }
 
-  function openTrace(runId) {
-    setTrace(null);
-    setError('');
-    setSelectedId(runId);
-  }
+  return (
+    <section className="admin-trace-console">
+      <header className="trace-console-header">
+        <div>
+          <span className="trace-kicker"><ShieldCheck size={14} />企业管理员最高权限</span>
+          <h1>Agent Trace 控制台</h1>
+          <p>查看企业内全部岗位的完整执行轨迹、模型路由、工具入参与返回、模型输入输出和运行指标。</p>
+        </div>
+        <div className="trace-policy-card">
+          <span><Settings2 size={14} />企业澄清策略</span>
+          <label>初始轮数<input type="number" min="1" max="30" value={initialBudget} onChange={(event) => setInitialBudget(event.target.value)} /></label>
+          <label>每次增加<input type="number" min="1" max="10" value={extensionSize} onChange={(event) => setExtensionSize(event.target.value)} /></label>
+          <button onClick={savePolicy}>{policySaved ? '已保存' : '应用到全部岗位'}</button>
+        </div>
+      </header>
 
-  function closeTrace() {
-    setSelectedId(null);
-    setTrace(null);
-    setError('');
-  }
+      {error && <div className="trace-console-error"><AlertTriangle size={14} />{error}</div>}
 
-  if (selectedId) {
-    return (
-      <section className="admin-trace-console trace-detail-screen">
-        <header className="trace-detail-page-header">
-          <button className="trace-back-button" type="button" onClick={closeTrace}>
-            <ArrowLeft size={15} />
-            返回运行记录
-          </button>
-          <div className="trace-detail-breadcrumb">
-            <span>Agent Trace 控制台</span>
-            <ChevronRight size={13} />
-            <strong>{selectedRun?.role_title ?? '运行详情'}</strong>
-          </div>
-        </header>
+      <div className="trace-toolbar">
+        <label className="trace-search"><Search size={14} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索岗位、操作者、Run ID" /></label>
+        <label><Filter size={13} /><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="">全部状态</option>{Object.entries(statusLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+        <label><Activity size={13} /><select value={modelTier} onChange={(event) => setModelTier(event.target.value)}><option value="">全部模型</option><option value="FLASH">Flash</option><option value="PRO">Pro</option></select></label>
+        <button onClick={loadRuns}><RefreshCw size={13} />刷新</button>
+      </div>
 
-        {error && <div className="trace-console-error"><AlertTriangle size={14} />{error}</div>}
+      <div className="trace-console-grid">
+        <aside className="trace-run-list">
+          <div className="trace-list-heading"><strong>运行记录</strong><span>{filteredRuns.length}</span></div>
+          {loading && <div className="trace-empty">正在读取运行记录…</div>}
+          {!loading && filteredRuns.length === 0 && <div className="trace-empty">暂无符合条件的运行记录</div>}
+          {filteredRuns.map((item) => (
+            <button className={selectedId === item.run.id ? 'active' : ''} key={item.run.id} onClick={() => setSelectedId(item.run.id)}>
+              <div><strong>{item.role_title}</strong><em className={item.run.status.toLowerCase()}>{statusLabel[item.run.status]}</em></div>
+              <p>{item.actor_display_name} · {item.run.model_tier} · {item.run.task}</p>
+              <span>{formatTime(item.run.started_at)}<code>{item.run.id.slice(0, 8)}</code></span>
+            </button>
+          ))}
+        </aside>
 
-        <article className="trace-detail trace-detail-page">
-          {!trace && <div className="trace-empty large">正在读取完整执行轨迹…</div>}
+        <main className="trace-detail">
+          {!trace && <div className="trace-empty large">选择一次运行查看完整执行轨迹</div>}
           {trace && (
             <>
               <div className="trace-detail-heading">
-                <div>
-                  <span>RUN {trace.run.id}</span>
-                  <h2>{trace.run.task}</h2>
-                  {selectedRun && <p>{selectedRun.role_title} · {selectedRun.actor_display_name}</p>}
-                </div>
+                <div><span>RUN {trace.run.id}</span><h2>{trace.run.task}</h2></div>
                 <em className={trace.run.status.toLowerCase()}>{statusLabel[trace.run.status]}</em>
               </div>
               <div className="trace-metrics">
@@ -250,66 +249,8 @@ export default function AdminTraceConsole() {
               </div>
             </>
           )}
-        </article>
-      </section>
-    );
-  }
-
-  return (
-    <section className="admin-trace-console trace-list-screen">
-      <header className="trace-console-header">
-        <div>
-          <span className="trace-kicker"><ShieldCheck size={14} />企业管理员最高权限</span>
-          <h1>Agent Trace 控制台</h1>
-          <p>查看企业内全部岗位的完整执行轨迹、模型路由、工具入参与返回、模型输入输出和运行指标。</p>
-        </div>
-        <div className="trace-policy-card">
-          <span><Settings2 size={14} />企业澄清策略</span>
-          <label>初始轮数<input type="number" min="1" max="30" value={initialBudget} onChange={(event) => setInitialBudget(event.target.value)} /></label>
-          <label>每次增加<input type="number" min="1" max="10" value={extensionSize} onChange={(event) => setExtensionSize(event.target.value)} /></label>
-          <button onClick={savePolicy}>{policySaved ? '已保存' : '应用到全部岗位'}</button>
-        </div>
-      </header>
-
-      {error && <div className="trace-console-error"><AlertTriangle size={14} />{error}</div>}
-
-      <div className="trace-toolbar">
-        <label className="trace-search"><Search size={14} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索岗位、操作者、Run ID" /></label>
-        <label><Filter size={13} /><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="">全部状态</option>{Object.entries(statusLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-        <label><Activity size={13} /><select value={modelTier} onChange={(event) => setModelTier(event.target.value)}><option value="">全部模型</option><option value="FLASH">Flash</option><option value="PRO">Pro</option></select></label>
-        <button onClick={loadRuns}><RefreshCw size={13} />刷新</button>
+        </main>
       </div>
-
-      <section className="trace-run-page">
-        <div className="trace-list-heading">
-          <div><strong>运行记录</strong><small>点击任意记录进入独立详情页</small></div>
-          <span>{filteredRuns.length} 次运行</span>
-        </div>
-        <div className="trace-run-table-scroll">
-          <div className="trace-run-table">
-            <div className="trace-run-table-head" aria-hidden="true">
-              <span>岗位与 Run</span>
-              <span>操作者与任务</span>
-              <span>模型</span>
-              <span>开始时间</span>
-              <span>状态</span>
-              <span />
-            </div>
-          {loading && <div className="trace-empty">正在读取运行记录…</div>}
-          {!loading && filteredRuns.length === 0 && <div className="trace-empty">暂无符合条件的运行记录</div>}
-          {filteredRuns.map((item) => (
-            <button className="trace-run-row" key={item.run.id} type="button" onClick={() => openTrace(item.run.id)}>
-              <span className="trace-run-identity"><strong>{item.role_title}</strong><code>{item.run.id}</code></span>
-              <span className="trace-run-actor"><strong>{item.actor_display_name}</strong><small>{item.run.task}</small></span>
-              <span className="trace-run-model"><strong>{item.run.model_tier}</strong><small>{item.run.model_name}</small></span>
-              <time>{formatTime(item.run.started_at)}</time>
-              <em className={item.run.status.toLowerCase()}>{statusLabel[item.run.status]}</em>
-              <ChevronRight className="trace-row-arrow" size={15} />
-            </button>
-          ))}
-          </div>
-        </div>
-      </section>
     </section>
   );
 }
