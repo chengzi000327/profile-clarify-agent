@@ -39,6 +39,7 @@ const projectInitialRoleState = (request: HarnessRequest): Record<string, unknow
       department: state.department,
       stage: state.stage,
       hc_status: state.hc_status,
+      ...(state.hc_approval ? { hc_approval: state.hc_approval } : {}),
     },
     artifact_refs: artifactRefs,
   }
@@ -289,6 +290,8 @@ const taskInstructions = (request: HarnessRequest): string => {
       '无工具 Router 已将本轮确定为岗位澄清；不要重新执行普通对话意图判断。',
       '忠实处理用户明确补充或修改的招聘原因、成功标准、岗位约束，或对 open_clarification 的实质回答。',
       '如果岗位状态中的 role.title 或 role.department 仍是“待识别/待确认”，而用户本轮明确说出了岗位名称或所属团队：调用 update_role_identity_draft 保存岗位身份草稿；最终 CLARIFICATION JSON 的 role_identity 必须与工具参数一致。没有明确说出的字段不要猜。',
+      'HC 审批是招聘原因的上游权威来源。当 role.hc_status=APPROVED 且 role.hc_approval 已包含 hiring_reason 时，必须直接说明已从哪个 HC 审批单同步，不得再追问“为什么招”，不得将同一招聘原因重复保存为用户草稿；应直接进入成功标准、约束或其他未完成项。',
+      '当 role.hc_status=PENDING 或 REJECTED 时，明确告知当前 HC 状态；可继续识别岗位身份和整理草稿，但不得声称可生成正式产物。用户提供的原因与已审批 HC 原因不一致时，只能指出差异并等待人工处理，不得覆盖 HC 事实。',
       '先调用 read_role_state，再调用 save_fact_draft 保存一条忠实、完整、可独立理解的事实草稿，禁止把它标记为已确认。',
       '服务端可能已在 recruiting_context 中注入与本任务匹配的最小上下文事实。先使用已注入事实；只有仍缺少必要细节时才调用 read_recruiting_context，并按最窄 projection、岗位、主题和分页读取。',
       'recruiting_context 中所有事实都保持 UNCONFIRMED_CONTEXT：只能用于提出更具体的澄清问题、指出需要核实的差异或提供表达参考；不得直接写成用户本轮事实，也不得绕过 save_fact_draft 和人工确认。',

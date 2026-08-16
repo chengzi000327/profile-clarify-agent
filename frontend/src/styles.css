@@ -1360,6 +1360,60 @@ textarea:focus-visible {
   background: #f1fbf6;
 }
 
+.empty-profile-hc-context {
+  width: 100%;
+  max-width: 590px;
+  margin: 0 0 12px;
+  padding: 13px 14px;
+  border: 1px solid #bfe4d0;
+  border-radius: 10px;
+  background: #f1fbf6;
+  text-align: left;
+}
+
+.empty-profile-hc-context > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.empty-profile-hc-context > div > span {
+  padding: 3px 6px;
+  border-radius: 5px;
+  color: #16834f;
+  background: #dff5e9;
+  font-size: 9px;
+  font-weight: 650;
+}
+
+.empty-profile-hc-context > div > strong {
+  color: #226341;
+  font-size: 11px;
+}
+
+.empty-profile-hc-context > div > small {
+  margin-left: auto;
+  color: #688274;
+  font-size: 9px;
+}
+
+.empty-profile-hc-context > p {
+  margin: 9px 0 0;
+  color: #3f5d4c;
+  font-size: 10px;
+  line-height: 17px;
+}
+
+.empty-profile-hc-context.pending {
+  border-color: #efd4aa;
+  background: #fffbf2;
+}
+
+.empty-profile-hc-context.rejected {
+  border-color: #efc2bd;
+  background: #fff7f6;
+}
+
 .empty-profile-fact-review {
   width: 100%;
   max-width: 590px;

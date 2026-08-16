@@ -88,6 +88,7 @@ export interface TraceAccessAuditRecord {
 }
 
 export const RECRUITING_CONTEXT_RECORD_TYPES = [
+  'HC_APPROVAL',
   'ORGANIZATION_UNIT',
   'EMPLOYEE',
   'PARTICIPANT_PERSONA',

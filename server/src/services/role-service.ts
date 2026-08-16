@@ -4,6 +4,7 @@ import {
   ARTIFACT_VISIBILITY,
   CalibrationAdviceSchema,
   CandidateEvidenceSchema,
+  HCApprovalSchema,
   HRRecruitingBriefSchema,
   PublicJDSchema,
   RoleProfileSchema,
@@ -16,6 +17,7 @@ import {
   type CandidateEvidence,
   type CandidateEvidenceFailure,
   type FactCategory,
+  type HCApproval,
   type HRRecruitingBrief,
   type HRRecruitingContext,
   type PublicJD,
@@ -41,6 +43,7 @@ import type {
   ManagerTaskRecord,
   RoleAggregate,
   RoleAggregateReadOptions,
+  RecruitingContextRecord,
 } from '../store/index.js'
 import {
   projectRoleStateForTask,
@@ -48,6 +51,27 @@ import {
 } from './role-state-projection.js'
 
 const nowIso = (): string => new Date().toISOString()
+
+const hcApprovalFromRecord = (record: RecruitingContextRecord): HCApproval | null => {
+  const parsed = HCApprovalSchema.safeParse({
+    approval_id: record.external_id,
+    status: record.content.approval_status,
+    role_title: record.role_title ?? record.content.role_title,
+    department: record.content.department,
+    request_type: record.content.request_type,
+    headcount: record.content.headcount,
+    hiring_reason: record.content.hiring_reason,
+    business_goal: record.content.business_goal ?? null,
+    requested_by_role: record.content.requested_by_role,
+    approved_by_role: record.content.approved_by_role ?? null,
+    requested_at: record.content.requested_at,
+    approved_at: record.content.approved_at ?? null,
+    source_system: record.source_system,
+    source_ref: `${/MOCK|SYNTHETIC|TEST/i.test(record.source_system) ? 'mock' : 'hris'}://hc/${record.external_id}`,
+    synthetic: /MOCK|SYNTHETIC|TEST/i.test(record.source_system),
+  })
+  return parsed.success ? parsed.data : null
+}
 
 export type RoleProfileGenerationBlockCode =
   | 'HC_APPROVAL_REQUIRED'
@@ -63,13 +87,6 @@ export type RoleProfileGenerationReadiness =
 export const evaluateRoleProfileGenerationReadiness = (
   state: RoleState,
 ): RoleProfileGenerationReadiness => {
-  if (state.hc_status !== 'APPROVED') {
-    return {
-      allowed: false,
-      code: 'HC_APPROVAL_REQUIRED',
-      reason: '当前 HC 尚未审批，需先完成 HC 审批后再生成岗位画像。',
-    }
-  }
   if (
     !state.title.trim()
     || !state.department.trim()
@@ -80,6 +97,13 @@ export const evaluateRoleProfileGenerationReadiness = (
       allowed: false,
       code: 'ROLE_IDENTITY_REQUIRED',
       reason: '岗位名称或所属团队尚未明确，需先完成岗位身份澄清。',
+    }
+  }
+  if (state.hc_status !== 'APPROVED') {
+    return {
+      allowed: false,
+      code: 'HC_APPROVAL_REQUIRED',
+      reason: '当前 HC 尚未审批，需先完成 HC 审批后再生成岗位画像。',
     }
   }
   if (state.conflicts.some((conflict) => conflict.status === 'OPEN')) {
@@ -1280,6 +1304,106 @@ export interface RoleView {
 export class RoleService {
   constructor(private readonly store: ApplicationStore) {}
 
+  private async findHcApproval(
+    actor: ActorContext,
+    title: string,
+    department: string,
+  ): Promise<HCApproval | null> {
+    if (!title.trim() || /待识别|待确认/.test(title)) return null
+    const records = await this.store.listRecruitingContextRecords(actor, {
+      record_types: ['HC_APPROVAL'],
+      role_title: title.trim(),
+      limit: 20,
+    })
+    const approvals = records
+      .map(hcApprovalFromRecord)
+      .filter((approval): approval is HCApproval => approval !== null)
+    const exactDepartment = approvals.find((approval) => approval.department === department.trim())
+    return exactDepartment ?? (approvals.length === 1 ? approvals[0]! : null)
+  }
+
+  private applyHcApproval(
+    current: RoleState,
+    approval: HCApproval | null,
+  ): { state: RoleState; changed: boolean } {
+    const previousSnapshot = JSON.stringify({
+      hc_status: current.hc_status,
+      hc_approval: current.hc_approval,
+      stage: current.stage,
+      facts: current.facts,
+    })
+    const facts = current.facts.map((fact) => {
+      const isHcFact = fact.category === 'HIRING_REASON'
+        && fact.evidence_refs.some((reference) => /^(mock|hris):\/\/hc\//.test(reference))
+      if (!isHcFact || fact.evidence_refs.includes(approval?.source_ref ?? '')) return fact
+      return fact.status === 'STALE'
+        ? fact
+        : { ...fact, status: 'STALE' as const, updated_at: nowIso() }
+    })
+
+    if (approval?.status === 'APPROVED') {
+      const source = `${approval.synthetic ? 'Mock ' : ''}HC 审批单 ${approval.approval_id}`
+      const factIndex = facts.findIndex((fact) =>
+        fact.category === 'HIRING_REASON'
+        && fact.evidence_refs.includes(approval.source_ref),
+      )
+      const confirmedFact = {
+        id: factIndex >= 0 ? facts[factIndex]!.id : randomUUID(),
+        category: 'HIRING_REASON' as const,
+        statement: approval.hiring_reason,
+        source,
+        status: 'CONFIRMED' as const,
+        evidence_refs: [approval.source_ref],
+        visible_to: 'ALL' as const,
+        updated_at: approval.approved_at ?? approval.requested_at,
+      }
+      if (factIndex >= 0) facts[factIndex] = confirmedFact
+      else facts.push(confirmedFact)
+    }
+
+    const state: RoleState = {
+      ...current,
+      hc_status: approval?.status ?? 'PENDING',
+      ...(approval ? { hc_approval: approval } : { hc_approval: undefined }),
+      stage: approval?.status === 'APPROVED' && current.stage === 'REASON_CLARIFYING'
+        ? 'SUCCESS_CLARIFYING'
+        : current.stage,
+      facts,
+    }
+    const nextSnapshot = JSON.stringify({
+      hc_status: state.hc_status,
+      hc_approval: state.hc_approval,
+      stage: state.stage,
+      facts: state.facts,
+    })
+    return { state, changed: nextSnapshot !== previousSnapshot }
+  }
+
+  async reconcileHcApprovalsForTenant(tenantId: string): Promise<number> {
+    const actor: ActorContext = {
+      tenant_id: tenantId,
+      user_id: 'system-hc-sync',
+      role: 'ADMIN',
+      display_name: 'HC 同步服务',
+    }
+    const states = await this.store.listTenantRoleStates(tenantId)
+    let updated = 0
+    for (const current of states) {
+      const approval = await this.findHcApproval(actor, current.title, current.department)
+      if (!approval) continue
+      const applied = this.applyHcApproval(current, approval)
+      if (!applied.changed) continue
+      const state: RoleState = {
+        ...applied.state,
+        revision: current.revision + 1,
+        updated_at: nowIso(),
+      }
+      await this.persistState(state, current.revision)
+      updated += 1
+    }
+    return updated
+  }
+
   async list(actor: ActorContext): Promise<RoleState[]> {
     const states = await this.store.listRoleStates(actor)
     return states.map((state) => this.filterState(state, actor))
@@ -1353,7 +1477,7 @@ export class RoleService {
       department: '待确认团队',
       stage: 'REASON_CLARIFYING',
       revision: 0,
-      hc_status: 'APPROVED',
+      hc_status: 'PENDING',
       facts: [],
       conflicts: [],
       latest_artifacts: {},
@@ -1395,7 +1519,7 @@ export class RoleService {
           latest: aggregate.state.latest_artifacts,
           invalidatedTypes: [] as ArtifactType[],
         }
-    const state: RoleState = {
+    const identityState: RoleState = {
       ...aggregate.state,
       ...(title ? { title } : {}),
       ...(department ? { department } : {}),
@@ -1404,11 +1528,19 @@ export class RoleService {
       revision: aggregate.state.revision + 1,
       updated_at: timestamp,
     }
+    const approval = await this.findHcApproval(
+      actor,
+      identityState.title,
+      identityState.department,
+    )
+    const state = this.applyHcApproval(identityState, approval).state
     await this.persistState(state, aggregate.state.revision)
     if (identityChanged) {
       await this.audit(actor, roleSessionId, 'UPDATE_ROLE_IDENTITY', 'ROLE_SESSION', roleSessionId, {
         title: title ?? aggregate.state.title,
         department: department ?? aggregate.state.department,
+        hc_approval_id: state.hc_approval?.approval_id ?? null,
+        hc_status: state.hc_status,
         invalidated_artifact_types: invalidation.invalidatedTypes,
       })
     }
@@ -1537,9 +1669,6 @@ export class RoleService {
     category: FactCategory,
   ): Promise<RoleState> {
     const aggregate = await this.requireAggregate(roleSessionId, actor)
-    if (aggregate.state.hc_status !== 'APPROVED') {
-      throw new DomainError('HC_NOT_APPROVED', 'HC 未审批，不能进入岗位澄清', 409)
-    }
     const timestamp = nowIso()
     const state: RoleState = {
       ...aggregate.state,

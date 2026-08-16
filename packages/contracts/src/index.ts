@@ -131,6 +131,25 @@ export const PublicJobBasicsUpdateSchema = z.object({
 }).strict()
 export type PublicJobBasicsUpdate = z.infer<typeof PublicJobBasicsUpdateSchema>
 
+export const HCApprovalSchema = z.object({
+  approval_id: z.string().trim().min(1).max(160),
+  status: z.enum(['PENDING', 'APPROVED', 'REJECTED']),
+  role_title: z.string().trim().min(1).max(160),
+  department: z.string().trim().min(1).max(160),
+  request_type: z.enum(['NEW', 'REPLACEMENT', 'EXPANSION']),
+  headcount: z.number().int().positive().max(100),
+  hiring_reason: z.string().trim().min(1).max(2_000),
+  business_goal: z.string().trim().min(1).max(2_000).nullable(),
+  requested_by_role: z.string().trim().min(1).max(160),
+  approved_by_role: z.string().trim().min(1).max(160).nullable(),
+  requested_at: z.string().datetime(),
+  approved_at: z.string().datetime().nullable(),
+  source_system: z.string().trim().min(1).max(160),
+  source_ref: z.string().trim().min(1).max(240),
+  synthetic: z.boolean(),
+}).strict()
+export type HCApproval = z.infer<typeof HCApprovalSchema>
+
 const HRSourceRefListSchema = z.array(z.string().trim().min(1).max(240)).max(20)
 
 export const HRRecruitingContextSchema = z.object({
@@ -1000,6 +1019,7 @@ export const AgentEventSchema = z.object({
 export type AgentEvent = z.infer<typeof AgentEventSchema>
 
 export const RecruitingContextProjectionSchema = z.enum([
+  'HC_APPROVAL',
   'ORGANIZATION',
   'CLARIFICATION_HISTORY',
   'RECRUITING_FUNNEL',
@@ -1008,6 +1028,7 @@ export const RecruitingContextProjectionSchema = z.enum([
 export type RecruitingContextProjection = z.infer<typeof RecruitingContextProjectionSchema>
 
 export const RecruitingContextFactCategorySchema = z.enum([
+  'HC_APPROVAL',
   'TEAM_MISSION',
   'TEAM_CAPABILITY',
   'HISTORICAL_CONFLICT',
@@ -1152,6 +1173,7 @@ export const RoleStateSchema = z.object({
   stage: RoleSessionStageSchema,
   revision: z.number().int().nonnegative(),
   hc_status: z.enum(['PENDING', 'APPROVED', 'REJECTED']),
+  hc_approval: HCApprovalSchema.optional(),
   facts: z.array(FactSchema),
   conflicts: z.array(ConflictSchema),
   public_job_basics: PublicJobBasicsSchema.optional(),

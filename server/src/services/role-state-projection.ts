@@ -79,6 +79,7 @@ export interface RoleStateProjection {
     department: string
     stage: RoleState['stage']
     hc_status: RoleState['hc_status']
+    hc_approval?: RoleState['hc_approval']
   }
   facts: ProjectedFact[]
   conflicts: ProjectedConflict[]
@@ -240,6 +241,7 @@ export const projectRoleStateForTask = (
       department: state.department,
       stage: state.stage,
       hc_status: state.hc_status,
+      ...(state.hc_approval ? { hc_approval: state.hc_approval } : {}),
     },
     facts: selectFacts(state, task),
     conflicts: ['CLARIFY_MESSAGE', 'GENERATE_ROLE_PROFILE'].includes(task)

@@ -53,6 +53,7 @@ const roleBusinessState = (
   state: RoleState,
 ): RoleSessionRow['businessState'] => ({
   hc_status: state.hc_status,
+  ...(state.hc_approval ? { hc_approval: state.hc_approval } : {}),
   facts: state.facts,
   conflicts: state.conflicts,
   ...(state.public_job_basics ? { public_job_basics: state.public_job_basics } : {}),

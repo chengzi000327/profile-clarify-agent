@@ -42,6 +42,7 @@ import {
   RecruitingContextService,
 } from './services/recruiting-context-service.js'
 import { createStore, type ApplicationStore } from './store/index.js'
+import { seedMockHcApprovals } from './store/mock-hc-fixtures.js'
 import { writeSseEvent } from './http/sse.js'
 import {
   FeishuGateway,
@@ -204,8 +205,13 @@ export const buildApp = async (
   })
   const store = dependencies.store ?? createStore(config)
   await store.initialize()
+  await seedMockHcApprovals(store)
   await recoverInterruptedRuns(store)
   const roleService = new RoleService(store)
+  const reconciledHcRoles = await roleService.reconcileHcApprovalsForTenant('tenant-demo')
+  if (reconciledHcRoles > 0) {
+    app.log.info({ reconciledHcRoles }, 'mock HC approvals synchronized')
+  }
   const recruitingContextService = new RecruitingContextService(store)
   const runner = new AgentRunner(
     store,
@@ -441,6 +447,10 @@ export const buildApp = async (
         saved: true,
         revision: state.revision,
         role_identity: { title: state.title, department: state.department },
+        hc: {
+          status: state.hc_status,
+          approval: state.hc_approval ?? null,
+        },
       }
     }
     if (tool_name === 'save_artifact_draft') {

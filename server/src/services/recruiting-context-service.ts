@@ -16,6 +16,7 @@ import {
 } from './recruiting-context-provider.js'
 
 export const RECRUITING_CONTEXT_PROJECTIONS = [
+  'HC_APPROVAL',
   'ORGANIZATION',
   'CLARIFICATION_HISTORY',
   'RECRUITING_FUNNEL',
@@ -129,6 +130,9 @@ export class RecruitingContextService {
 
     const limit = Math.min(Math.max(input.limit ?? 20, 1), 30)
     const offset = Math.min(Math.max(input.offset ?? 0, 0), 1_000)
+    if (input.projection === 'HC_APPROVAL') {
+      return this.readHcApproval(actor, aggregate.state, offset, limit)
+    }
     if (input.projection === 'ORGANIZATION') {
       return this.readOrganization(actor, aggregate.state, input.team_id, offset, limit)
     }
@@ -183,13 +187,13 @@ export class RecruitingContextService {
 
     const plan: RecruitingContextProjection[] = task === 'CLARIFY_MESSAGE'
       ? [
+          'HC_APPROVAL',
           'ORGANIZATION',
           'CLARIFICATION_HISTORY',
           ...(actor.role === 'MANAGER' ? [] : ['RECRUITING_FUNNEL'] as const),
-          'MARKET_JD_REFERENCE',
         ]
       : task === 'GENERATE_ROLE_PROFILE'
-        ? ['ORGANIZATION', 'CLARIFICATION_HISTORY']
+        ? ['HC_APPROVAL', 'ORGANIZATION', 'CLARIFICATION_HISTORY']
         : task === 'GENERATE_ASSESSMENT'
           ? ['CLARIFICATION_HISTORY']
           : task === 'GENERATE_JD'
@@ -246,6 +250,30 @@ export class RecruitingContextService {
 
     for (const projection of plan) {
       try {
+        if (projection === 'HC_APPROVAL') {
+          const result = await this.readHcApproval(actor, aggregate.state, 0, 3)
+          for (const approval of recordArray(result.approvals)) {
+            const approvalId = text(approval.approval_id)
+            const source = isRecord(approval.source) ? approval.source : {}
+            const status = text(approval.status)
+            addFact(makeFact({
+              fact_id: `CTX-HC-${approvalId}`,
+              category: 'HC_APPROVAL',
+              statement: `HC ${approvalId} 状态为${status}；申请类型：${text(approval.request_type)}；批准编制：${number(approval.headcount)}；招聘原因：${text(approval.hiring_reason)}${text(approval.business_goal) ? `；业务目标：${text(approval.business_goal)}` : ''}`,
+              authority: 'AUTHORITATIVE',
+              data_classification: 'MINIMIZED_INTERNAL',
+              team_id: nullableText(approval.department),
+              role_title: nullableText(approval.role_title),
+              system: text(source.system) || 'HRIS_HC',
+              record_type: 'HC_APPROVAL',
+              record_id: approvalId,
+              observed_at: nullableText(approval.approved_at) ?? nullableText(approval.requested_at),
+              synthetic: Boolean(source.synthetic),
+              verification_status: status,
+            }))
+          }
+          continue
+        }
         if (projection === 'ORGANIZATION') {
           const result = await this.readOrganization(actor, aggregate.state, undefined, 0, 3)
           const team = recordArray(result.teams)[0]
@@ -430,6 +458,66 @@ export class RecruitingContextService {
         may_support_clarification: true,
         may_guide_draft_style: true,
         may_become_role_fact_without_human_confirmation: false,
+      },
+    }
+  }
+
+  private async readHcApproval(
+    actor: ActorContext,
+    state: RoleState,
+    offset: number,
+    limit: number,
+  ): Promise<JsonRecord> {
+    const roleTitle = state.title.trim()
+    if (!roleTitle || /待识别|待确认/.test(roleTitle)) {
+      return {
+        projection: 'HC_APPROVAL',
+        data_classification: 'MINIMIZED_INTERNAL',
+        approvals: [],
+        match_status: 'ROLE_IDENTITY_REQUIRED',
+        pagination: { offset, limit, returned: 0, total: 0, next_offset: null },
+      }
+    }
+    const rows = await this.provider.list(actor, {
+      record_types: ['HC_APPROVAL'],
+      role_title: roleTitle,
+      limit: 100,
+    })
+    const matched = rows.filter((record) =>
+      !state.department.trim()
+      || /待识别|待确认/.test(state.department)
+      || text(record.content.department) === state.department.trim(),
+    )
+    const approvals = matched.slice(offset, offset + limit).map((record) => ({
+      approval_id: record.external_id,
+      status: text(record.content.approval_status),
+      role_title: record.role_title,
+      department: text(record.content.department),
+      request_type: text(record.content.request_type),
+      headcount: number(record.content.headcount),
+      hiring_reason: text(record.content.hiring_reason),
+      business_goal: nullableText(record.content.business_goal),
+      requested_by_role: text(record.content.requested_by_role),
+      approved_by_role: nullableText(record.content.approved_by_role),
+      requested_at: text(record.content.requested_at),
+      approved_at: nullableText(record.content.approved_at),
+      source: {
+        system: record.source_system,
+        record_id: record.external_id,
+        synthetic: isSyntheticSystem(record.source_system),
+      },
+    }))
+    return {
+      projection: 'HC_APPROVAL',
+      data_classification: 'MINIMIZED_INTERNAL',
+      approvals,
+      match_status: approvals.length > 0 ? 'MATCHED' : 'NOT_FOUND',
+      pagination: {
+        offset,
+        limit,
+        returned: approvals.length,
+        total: matched.length,
+        next_offset: offset + approvals.length < matched.length ? offset + approvals.length : null,
       },
     }
   }

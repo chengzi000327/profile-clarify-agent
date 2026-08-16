@@ -1168,6 +1168,7 @@ function ProfileView({ viewerRole, onOpenEvidence, onOpenConversation, roleDetai
   const assessmentArtifact = state?.latest_artifacts?.ASSESSMENT_SCORECARD;
   const jdArtifact = state?.latest_artifacts?.PUBLIC_JD;
   const recruitingArtifact = state?.latest_artifacts?.HR_RECRUITING_BRIEF;
+  const hcApproval = state?.hc_approval;
   const profile = profileArtifact?.content;
   const pendingFacts = (state?.facts ?? []).filter((fact) => fact.status === 'DRAFT');
   const pendingFactSignature = pendingFacts.map((fact) => `${fact.id}:${fact.category}`).join('|');
@@ -1177,6 +1178,7 @@ function ProfileView({ viewerRole, onOpenEvidence, onOpenConversation, roleDetai
       .filter((fact) => fact.status === 'CONFIRMED')
       .map((fact) => fact.category),
   );
+  const confirmedFactSignature = [...confirmedCategories].sort().join('|');
   const profileReady = confirmedCategories.has('HIRING_REASON')
     && confirmedCategories.has('SUCCESS_CRITERION');
   const canConfirmFacts = viewerRole === 'manager' || viewerRole === 'admin';
@@ -1184,12 +1186,15 @@ function ProfileView({ viewerRole, onOpenEvidence, onOpenConversation, roleDetai
   useEffect(() => {
     const latestRecommendedByCategory = new Map();
     pendingFacts.forEach((fact) => {
-      if (['HIRING_REASON', 'SUCCESS_CRITERION', 'CONSTRAINT'].includes(fact.category)) {
+      if (
+        ['HIRING_REASON', 'SUCCESS_CRITERION', 'CONSTRAINT'].includes(fact.category)
+        && !confirmedCategories.has(fact.category)
+      ) {
         latestRecommendedByCategory.set(fact.category, fact.id);
       }
     });
     setSelectedPendingFactIds([...latestRecommendedByCategory.values()]);
-  }, [state?.id, pendingFactSignature]);
+  }, [state?.id, pendingFactSignature, confirmedFactSignature]);
 
   if (!profileArtifact) {
     const stageLabel = stagePresentation[state?.stage]?.[0] ?? '岗位澄清中';
@@ -1222,6 +1227,17 @@ function ProfileView({ viewerRole, onOpenEvidence, onOpenConversation, roleDetai
               <span className={confirmedCategories.has('HIRING_REASON') ? 'ready' : ''}>{confirmedCategories.has('HIRING_REASON') ? <Check size={13} /> : <CircleDot size={13} />}招聘原因</span>
               <span className={confirmedCategories.has('SUCCESS_CRITERION') ? 'ready' : ''}>{confirmedCategories.has('SUCCESS_CRITERION') ? <Check size={13} /> : <CircleDot size={13} />}成功标准</span>
             </div>
+
+            {hcApproval && (
+              <div className={`empty-profile-hc-context ${hcApproval.status.toLowerCase()}`}>
+                <div>
+                  <span>HC {hcApproval.status === 'APPROVED' ? '已审批' : hcApproval.status === 'REJECTED' ? '已驳回' : '审批中'}</span>
+                  <strong>{hcApproval.approval_id}</strong>
+                  <small>{hcApproval.synthetic ? 'Mock HRIS' : hcApproval.source_system}</small>
+                </div>
+                <p>{hcApproval.hiring_reason}</p>
+              </div>
+            )}
 
             {pendingFacts.length > 0 && (
               <div className="empty-profile-fact-review">

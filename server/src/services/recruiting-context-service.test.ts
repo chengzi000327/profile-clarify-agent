@@ -288,15 +288,14 @@ describe('read_recruiting_context tool', () => {
       '商业化产品负责人',
     )
     expect(clarification.projections).toEqual([
+      'HC_APPROVAL',
       'ORGANIZATION',
       'CLARIFICATION_HISTORY',
-      'MARKET_JD_REFERENCE',
     ])
     expect(clarification.facts.map((fact) => fact.category)).toEqual(expect.arrayContaining([
       'TEAM_MISSION',
       'TEAM_CAPABILITY',
       'HISTORICAL_CONFLICT',
-      'MARKET_REFERENCE',
     ]))
     expect(clarification.facts.every((fact) =>
       fact.confirmation_status === 'UNCONFIRMED_CONTEXT'
