@@ -6,6 +6,7 @@ RUN corepack enable
 
 WORKDIR /app
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
+COPY packages/agent-spec/package.json packages/agent-spec/package.json
 COPY packages/contracts/package.json packages/contracts/package.json
 COPY packages/domain/package.json packages/domain/package.json
 COPY server/package.json server/package.json
