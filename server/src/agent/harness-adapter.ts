@@ -16,6 +16,32 @@ import {
 } from '@role-clarifier/contracts'
 import type { AppConfig } from '../config.js'
 
+const TRANSIENT_SIDECAR_STATUSES = new Set([429, 502, 503, 504])
+
+const isTransientFetchError = (error: unknown): boolean =>
+  error instanceof TypeError
+  || (error instanceof Error
+    && /fetch failed|ECONNRESET|ECONNREFUSED|UND_ERR_SOCKET/i.test(error.message))
+
+const abortableDelay = async (milliseconds: number, signal: AbortSignal): Promise<void> => {
+  if (milliseconds <= 0) return
+  await new Promise<void>((resolve, reject) => {
+    if (signal.aborted) {
+      reject(signal.reason ?? new DOMException('The operation was aborted', 'AbortError'))
+      return
+    }
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', abort)
+      resolve()
+    }, milliseconds)
+    const abort = (): void => {
+      clearTimeout(timer)
+      reject(signal.reason ?? new DOMException('The operation was aborted', 'AbortError'))
+    }
+    signal.addEventListener('abort', abort, { once: true })
+  })
+}
+
 export type HarnessTask = HarnessDomainTask
 
 export interface CandidateImportItem {
@@ -126,20 +152,101 @@ export interface HarnessAdapter {
   run(request: HarnessRequest, hooks: HarnessHooks): Promise<HarnessResult>
 }
 
+interface SidecarRecoveryOptions {
+  maximumRetries?: number
+  retryDelayMs?: number
+  readinessTimeoutMs?: number
+}
+
 export class SidecarHarnessAdapter implements HarnessAdapter {
-  constructor(private readonly config: AppConfig) {}
+  private readonly maximumRetries: number
+  private readonly retryDelayMs: number
+  private readonly readinessTimeoutMs: number
+
+  constructor(
+    private readonly config: AppConfig,
+    options: SidecarRecoveryOptions = {},
+  ) {
+    this.maximumRetries = options.maximumRetries ?? 2
+    this.retryDelayMs = options.retryDelayMs ?? 750
+    this.readinessTimeoutMs = options.readinessTimeoutMs ?? 60_000
+  }
+
+  private async waitForSidecarReadiness(signal: AbortSignal): Promise<void> {
+    const deadline = Date.now() + this.readinessTimeoutMs
+    while (Date.now() < deadline) {
+      if (signal.aborted) {
+        throw signal.reason ?? new DOMException('The operation was aborted', 'AbortError')
+      }
+      try {
+        const response = await fetch(`${this.config.HARNESS_BASE_URL}/healthz`, {
+          signal: AbortSignal.any([signal, AbortSignal.timeout(3_000)]),
+        })
+        if (response.ok) return
+        await response.body?.cancel()
+      } catch (error) {
+        if (signal.aborted) throw error
+      }
+      await abortableDelay(this.retryDelayMs, signal)
+    }
+    throw new Error('Harness Sidecar readiness timed out during recovery')
+  }
+
+  private async postWithRecovery(
+    path: string,
+    body: unknown,
+    hooks: HarnessHooks,
+    retryable: boolean,
+  ): Promise<Response> {
+    let retryCount = 0
+    while (true) {
+      try {
+        const response = await fetch(`${this.config.HARNESS_BASE_URL}${path}`, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            authorization: `Bearer ${this.config.HARNESS_SIDECAR_TOKEN}`,
+          },
+          body: JSON.stringify(body),
+          signal: hooks.signal,
+        })
+        if (
+          !retryable
+          || response.ok
+          || !TRANSIENT_SIDECAR_STATUSES.has(response.status)
+          || retryCount >= this.maximumRetries
+        ) {
+          return response
+        }
+        await response.body?.cancel()
+      } catch (error) {
+        if (
+          !retryable
+          || hooks.signal.aborted
+          || !isTransientFetchError(error)
+          || retryCount >= this.maximumRetries
+        ) {
+          throw error
+        }
+      }
+
+      retryCount += 1
+      await hooks.onStatus(
+        `Harness Sidecar 暂时不可用，等待恢复后重试（${retryCount}/${this.maximumRetries}）`,
+      )
+      await this.waitForSidecarReadiness(hooks.signal)
+      await abortableDelay(this.retryDelayMs * retryCount, hooks.signal)
+    }
+  }
 
   async route(request: AgentRouteRequest, hooks: HarnessHooks): Promise<AgentRouteResult> {
     await hooks.onStatus('DeepSeek Harness Sidecar 正在识别意图')
-    const response = await fetch(`${this.config.HARNESS_BASE_URL}/v1/role-clarifier/routes`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${this.config.HARNESS_SIDECAR_TOKEN}`,
-      },
-      body: JSON.stringify(request),
-      signal: hooks.signal,
-    })
+    const response = await this.postWithRecovery(
+      '/v1/role-clarifier/routes',
+      request,
+      hooks,
+      true,
+    )
     if (!response.ok) {
       const body = await response.text()
       let detail = body.slice(0, 500)
@@ -173,15 +280,12 @@ export class SidecarHarnessAdapter implements HarnessAdapter {
 
   async run(request: HarnessRequest, hooks: HarnessHooks): Promise<HarnessResult> {
     await hooks.onStatus('DeepSeek Harness Sidecar 正在执行')
-    const response = await fetch(`${this.config.HARNESS_BASE_URL}/v1/role-clarifier/runs`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${this.config.HARNESS_SIDECAR_TOKEN}`,
-      },
-      body: JSON.stringify(request),
-      signal: hooks.signal,
-    })
+    const response = await this.postWithRecovery(
+      '/v1/role-clarifier/runs',
+      request,
+      hooks,
+      request.maximum_transitions === 0,
+    )
     if (!response.ok) {
       const body = await response.text()
       let detail = body.slice(0, 500)

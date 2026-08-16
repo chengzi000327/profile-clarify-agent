@@ -124,9 +124,19 @@ export interface AppDependencies {
   harness?: HarnessAdapter
 }
 
-const recoverInterruptedRuns = async (store: ApplicationStore): Promise<void> => {
+const ACTIVE_RUN_STALE_AFTER_MS = 10 * 60 * 1_000
+const AGENT_SHUTDOWN_GRACE_MS = 9 * 60 * 1_000
+
+const recoverInterruptedRuns = async (
+  store: ApplicationStore,
+  minimumRunningAgeMs = 0,
+): Promise<void> => {
   const interrupted = await store.listActiveRuns()
   for (const record of interrupted) {
+    if (record.run.status === 'RUNNING' && record.run.started_at) {
+      const runningAgeMs = Date.now() - Date.parse(record.run.started_at)
+      if (Number.isFinite(runningAgeMs) && runningAgeMs < minimumRunningAgeMs) continue
+    }
     const completedAt = new Date().toISOString()
     const priorEvents = await store.listRunEvents(record.run.id)
     let sequence = priorEvents.at(-1)?.sequence ?? 0
@@ -210,7 +220,7 @@ export const buildApp = async (
   const store = dependencies.store ?? createStore(config)
   await store.initialize()
   await seedMockHcApprovals(store)
-  await recoverInterruptedRuns(store)
+  await recoverInterruptedRuns(store, ACTIVE_RUN_STALE_AFTER_MS)
   const roleService = new RoleService(store)
   const approvedHcIntakeService = new ApprovedHcIntakeService(store, roleService)
   const reconciledHcRoles = await roleService.reconcileHcApprovalsForTenant('tenant-demo')
@@ -1026,6 +1036,10 @@ export const buildApp = async (
   }))
 
   app.addHook('onClose', async () => {
+    const drained = await runner.waitForIdle(AGENT_SHUTDOWN_GRACE_MS)
+    if (!drained) {
+      app.log.warn('Agent Run 在优雅停机期限内未完成，实例将继续关闭')
+    }
     await store.close()
   })
 

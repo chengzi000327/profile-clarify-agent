@@ -808,6 +808,53 @@ describe('Role Clarifier API', () => {
     expect(texts[0]?.text).toContain('下一步需要你补充')
     expect(cards).toHaveLength(0)
 
+    const adminLogin = await feishuApp.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: {
+        workspace_id: 'conversation-first-demo',
+        account_id: 'trace-admin',
+        display_name: 'Trace 管理员',
+        role: 'ADMIN',
+      },
+    })
+    const adminCookie = cookieFrom(adminLogin)
+    const traceRuns = await feishuApp.inject({
+      method: 'GET',
+      url: '/api/v1/admin/agent-runs',
+      headers: { cookie: adminCookie },
+    })
+    expect(traceRuns.statusCode, traceRuns.body).toBe(200)
+    expect(traceRuns.json().items).toHaveLength(1)
+    const feishuRunId = traceRuns.json().items[0].run.id
+    const feishuTrace = await feishuApp.inject({
+      method: 'GET',
+      url: `/api/v1/admin/agent-runs/${feishuRunId}/trace`,
+      headers: { cookie: adminCookie },
+    })
+    expect(feishuTrace.statusCode, feishuTrace.body).toBe(200)
+    const feishuEvents = feishuTrace.json().events
+    const runStarted = feishuEvents.find((item: { type: string }) => item.type === 'run.started')
+    expect(runStarted.payload.origin).toMatchObject({
+      channel: 'FEISHU',
+      verification: { token_verified: true, deduplication: 'CLAIMED' },
+      identity_mapping: { actor_role: 'MANAGER', source: 'FALLBACK_MAPPING' },
+      role_routing: { resolution: 'AUTO_CREATED_SESSION', role_title: '待识别岗位' },
+      command: { kind: 'MESSAGE' },
+    })
+    expect(runStarted.payload.origin.webhook_event.chat_ref).toMatch(/^chat-/)
+    expect(runStarted.payload.origin.webhook_event.sender_ref).toMatch(/^sender-/)
+    expect(JSON.stringify(runStarted.payload.origin)).not.toContain('verification-token')
+    expect(JSON.stringify(runStarted.payload.origin)).not.toContain('oc_p2p_chat')
+    expect(JSON.stringify(runStarted.payload.origin)).not.toContain('ou_manager_one')
+    expect(feishuEvents.map((item: { type: string }) => item.type)).toEqual(expect.arrayContaining([
+      'channel.received',
+      'context.snapshot',
+      'channel.response.sent',
+    ]))
+    expect(feishuEvents.find((item: { type: string }) => item.type === 'channel.response.sent').payload)
+      .toMatchObject({ channel: 'FEISHU', delivery: 'TEXT' })
+
     await feishuApp.inject({
       method: 'POST',
       url: '/api/v1/integrations/feishu/events',
@@ -961,6 +1008,8 @@ describe('Role Clarifier API', () => {
     expect(contextEvent.payload.current_user_input.content.message).toContain('半年内要建立')
     expect(contextEvent.payload.short_term_memory.source).toBe('RECENT_CONVERSATION')
     expect(contextEvent.payload.long_term_memory.source).toBe('BUSINESS_DATABASE')
+    expect(trace.events.find((event: { type: string }) => event.type === 'run.started').payload.origin)
+      .toMatchObject({ channel: 'WEB', source: 'WEB_WORKSPACE' })
     expect(trace.events.map((event: { type: string }) => event.type)).toContain('model.request')
     expect(trace.events.map((event: { type: string }) => event.type)).toContain('model.response')
     expect(trace.events.find((event: { type: string }) => event.type === 'tool.started').payload)
@@ -1799,7 +1848,7 @@ describe('Role Clarifier API', () => {
   it('服务重启后会关闭中断的 Run，并在对话中保留可重试提示', async () => {
     const store = new MemoryStore()
     await store.initialize()
-    const createdAt = new Date().toISOString()
+    const createdAt = new Date(Date.now() - 11 * 60 * 1_000).toISOString()
     await store.createRun({
       id: '22222222-2222-4222-8222-222222222222',
       role_session_id: DEMO_ROLE_SESSION_ID,
@@ -1849,5 +1898,39 @@ describe('Role Clarifier API', () => {
     expect(messages.at(-1)?.content).toContain('原消息已保留')
     expect(events.map((event) => event.type)).toEqual(['run.failed', 'assistant.completed'])
     await recoveringApp.close()
+  })
+
+  it('滚动部署的新实例不会把旧实例仍在执行的 Run 误判为中断', async () => {
+    const store = new MemoryStore()
+    await store.initialize()
+    const startedAt = new Date().toISOString()
+    await store.createRun({
+      id: '44444444-4444-4444-8444-444444444444',
+      role_session_id: DEMO_ROLE_SESSION_ID,
+      actor_user_id: 'hr-demo',
+      status: 'RUNNING',
+      model_tier: 'PRO',
+      task: 'GENERATE_ROLE_PROFILE',
+      harness_session_id: `role-${DEMO_ROLE_SESSION_ID}`,
+      prompt_version: 'role-clarifier-v9',
+      model_name: 'deepseek-v4-pro',
+      tool_count: 0,
+      input_tokens: 0,
+      output_tokens: 0,
+      started_at: startedAt,
+      completed_at: null,
+      error_code: null,
+      input_message_id: null,
+      output_message_id: null,
+    })
+
+    const overlappingApp = await buildApp(config, { store, harness: testHarness })
+    const active = await store.getRun('44444444-4444-4444-8444-444444444444')
+    const events = await store.listRunEvents('44444444-4444-4444-8444-444444444444')
+
+    expect(active?.run.status).toBe('RUNNING')
+    expect(active?.run.error_code).toBeNull()
+    expect(events).toEqual([])
+    await overlappingApp.close()
   })
 })

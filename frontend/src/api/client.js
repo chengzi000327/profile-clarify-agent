@@ -123,6 +123,9 @@ export const api = {
     const source = new EventSource(`${API_BASE}${streamUrl}`, { withCredentials: true });
     const names = [
       'run.started',
+      'channel.received',
+      'channel.response.sent',
+      'channel.response.failed',
       'agent.status',
       'message.accepted',
       'context.snapshot',

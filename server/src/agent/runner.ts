@@ -46,6 +46,12 @@ interface PendingRun {
   }
   inputMessage?: ConversationMessage
   answeredRound?: ClarificationRound
+  origin?: AgentRunOrigin
+}
+
+export interface AgentRunOrigin {
+  channel: 'WEB' | 'FEISHU'
+  [key: string]: unknown
 }
 
 const taskModelTier = (task: HarnessTask): 'FLASH' | 'PRO' =>
@@ -101,6 +107,7 @@ export class AgentRunner {
   private readonly pending: PendingRun[] = []
   private readonly activeRoleRuns = new Map<string, string>()
   private readonly controllers = new Map<string, AbortController>()
+  private readonly idleWaiters = new Set<() => void>()
   private readonly recruitingContextService: RecruitingContextService
   private runningCount = 0
 
@@ -119,11 +126,13 @@ export class AgentRunner {
     roleSessionId: string,
     actor: ActorContext,
     message: string,
+    origin?: AgentRunOrigin,
   ): Promise<{ run: AgentRun; message: ConversationMessage }> {
     const answeredRound = await this.store.getOpenClarificationRound(roleSessionId, actor.user_id)
     const run = await this.enqueue(roleSessionId, actor, 'ROUTE_MESSAGE', {
       message,
       ...(answeredRound ? { answeredRound } : {}),
+      ...(origin ? { origin } : {}),
     })
     const messages = await this.store.listConversationMessages(roleSessionId)
     const stored = messages.find((item) => item.id === run.input_message_id)
@@ -135,6 +144,7 @@ export class AgentRunner {
     roleSessionId: string,
     actor: ActorContext,
     artifactType: ArtifactType,
+    origin?: AgentRunOrigin,
   ): Promise<AgentRun> {
     if (artifactType === 'HR_RECRUITING_BRIEF' && !['HR', 'ADMIN'].includes(actor.role)) {
       throw new DomainError('FORBIDDEN', '仅 HR 可以生成内部招聘画像', 403)
@@ -167,7 +177,12 @@ export class AgentRunner {
         throw new DomainError(readiness.code, readiness.reason, 409)
       }
     }
-    return this.enqueue(roleSessionId, actor, artifactTaskMap[artifactType])
+    return this.enqueue(
+      roleSessionId,
+      actor,
+      artifactTaskMap[artifactType],
+      origin ? { origin } : {},
+    )
   }
 
   async submitCandidates(
@@ -208,8 +223,49 @@ export class AgentRunner {
           completed_at: new Date().toISOString(),
         }
         await this.store.updateRun(cancelled)
+        this.notifyIdle()
       }
     }
+  }
+
+  async appendPostRunChannelEvent(
+    runId: string,
+    type: 'channel.response.sent' | 'channel.response.failed',
+    payload: Record<string, unknown>,
+  ): Promise<void> {
+    const record = await this.store.getRun(runId)
+    if (!record) throw new Error('Agent Run does not exist')
+    const events = await this.store.listRunEvents(runId)
+    await this.store.appendRunEvent({
+      id: randomUUID(),
+      run_id: runId,
+      sequence: (events.at(-1)?.sequence ?? 0) + 1,
+      type,
+      payload,
+      created_at: new Date().toISOString(),
+    })
+  }
+
+  async waitForIdle(timeoutMs: number): Promise<boolean> {
+    if (this.runningCount === 0 && this.pending.length === 0) return true
+    return new Promise<boolean>((resolve) => {
+      let settled = false
+      const finish = (idle: boolean): void => {
+        if (settled) return
+        settled = true
+        clearTimeout(timeout)
+        this.idleWaiters.delete(onIdle)
+        resolve(idle)
+      }
+      const onIdle = (): void => finish(true)
+      const timeout = setTimeout(() => finish(false), timeoutMs)
+      this.idleWaiters.add(onIdle)
+    })
+  }
+
+  private notifyIdle(): void {
+    if (this.runningCount !== 0 || this.pending.length !== 0) return
+    for (const resolve of [...this.idleWaiters]) resolve()
   }
 
   private async enqueue(
@@ -220,10 +276,12 @@ export class AgentRunner {
       message?: string
       candidates?: CandidateImportItem[]
       answeredRound?: ClarificationRound
+      origin?: AgentRunOrigin
     } = {},
   ): Promise<AgentRun> {
     await this.roleService.get(roleSessionId, actor)
-    if (this.activeRoleRuns.has(roleSessionId)) {
+    const persistedActive = await this.store.findActiveRunByRole(roleSessionId)
+    if (this.activeRoleRuns.has(roleSessionId) || persistedActive) {
       throw new DomainError(
         'ROLE_AGENT_RUN_ACTIVE',
         '该岗位已有一个 Agent Run 正在执行，请完成或取消后重试',
@@ -278,6 +336,7 @@ export class AgentRunner {
       ...(input.candidates !== undefined ? { candidates: input.candidates } : {}),
       ...(inputMessage ? { inputMessage } : {}),
       ...(input.answeredRound ? { answeredRound: input.answeredRound } : {}),
+      ...(input.origin ? { origin: input.origin } : {}),
     })
     queueMicrotask(() => void this.drain())
     return run
@@ -292,6 +351,7 @@ export class AgentRunner {
         this.runningCount -= 1
         this.activeRoleRuns.delete(pending.run.role_session_id)
         void this.drain()
+        this.notifyIdle()
       })
     }
   }
@@ -330,7 +390,15 @@ export class AgentRunner {
       run_id: run.id,
       model_tier: run.model_tier,
       task: run.task,
+      channel: pending.origin?.channel ?? 'WEB',
+      origin: pending.origin ?? {
+        channel: 'WEB',
+        source: 'WEB_WORKSPACE',
+      },
     })
+    if (pending.origin?.channel === 'FEISHU') {
+      await emit('channel.received', pending.origin)
+    }
     if (pending.inputMessage) {
       await emit('message.accepted', {
         message_id: pending.inputMessage.id,

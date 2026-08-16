@@ -361,16 +361,42 @@ export class FeishuGateway {
     title: string,
     markdown: string,
     template: string,
-  ): Promise<void> {
+  ): Promise<'ARTIFACT_CARD' | 'TEXT_FALLBACK'> {
     try {
       await this.client.sendCard(
         chatId,
         markdownCard(title, markdown, this.config.WEB_ORIGIN, template),
       )
+      return 'ARTIFACT_CARD'
     } catch (error) {
       this.onError(error)
       await this.sendText(chatId, `${title}\n\n${markdown}`)
+      return 'TEXT_FALLBACK'
     }
+  }
+
+  private async deliverRunResponse(
+    runId: string,
+    payload: Record<string, unknown>,
+    deliver: () => Promise<Record<string, unknown> | void>,
+  ): Promise<void> {
+    let deliveryResult: Record<string, unknown> = {}
+    try {
+      deliveryResult = await deliver() ?? {}
+    } catch (error) {
+      await this.runner.appendPostRunChannelEvent(runId, 'channel.response.failed', {
+        channel: 'FEISHU',
+        ...payload,
+        error_code: 'FEISHU_DELIVERY_FAILED',
+        error_message: error instanceof Error ? error.message : '未知飞书回传错误',
+      })
+      throw error
+    }
+    await this.runner.appendPostRunChannelEvent(runId, 'channel.response.sent', {
+      channel: 'FEISHU',
+      ...payload,
+      ...deliveryResult,
+    })
   }
 
   private async processMessage(event: z.infer<typeof FeishuMessageEventSchema>): Promise<void> {
@@ -392,7 +418,8 @@ export class FeishuGateway {
     }
     const text = parseTextMessage(message.content)
     if (!text) return
-    const actor = this.actorFor(sender.sender_id.open_id)
+    const openId = sender.sender_id.open_id
+    const actor = this.actorFor(openId)
     await this.store.saveUser({ ...actor, active: true })
 
     if (/^(新岗位|新建岗位|\/new)$/i.test(text)) {
@@ -406,10 +433,12 @@ export class FeishuGateway {
 
     let roles = await this.roleService.list(actor)
     let role = roles[0]
+    let roleResolution = 'MOST_RECENT_SESSION'
     if (!role) {
       const created = await this.roleService.createIntake(actor)
       role = created.state
       roles = [role]
+      roleResolution = 'AUTO_CREATED_SESSION'
     }
 
     const artifactCommand: Array<[RegExp, ArtifactType]> = [
@@ -419,11 +448,42 @@ export class FeishuGateway {
       [/生成.*HR.*画像|输出.*HR.*画像/i, 'HR_RECRUITING_BRIEF'],
     ]
     const requestedArtifact = artifactCommand.find(([pattern]) => pattern.test(text))?.[1]
+    const origin = {
+      channel: 'FEISHU' as const,
+      received_at: new Date().toISOString(),
+      webhook_event: {
+        event_id: event.header.event_id,
+        event_type: event.header.event_type,
+        message_id: message.message_id,
+        chat_ref: stableId('chat', message.chat_id),
+        sender_ref: stableId('sender', openId),
+        chat_type: message.chat_type,
+        message_type: message.message_type,
+      },
+      verification: {
+        token_verified: true,
+        deduplication: 'CLAIMED',
+      },
+      identity_mapping: {
+        source: this.mappings[openId] ? 'CONFIGURED_MAPPING' : 'FALLBACK_MAPPING',
+        actor_user_id: actor.user_id,
+        actor_role: actor.role,
+        actor_display_name: actor.display_name,
+      },
+      role_routing: {
+        resolution: roleResolution,
+        role_session_id: role.id,
+        role_title: role.title,
+      },
+      command: requestedArtifact
+        ? { kind: 'GENERATE_ARTIFACT', artifact_type: requestedArtifact }
+        : { kind: 'MESSAGE', text_length: text.length },
+    }
     let run
     try {
       run = requestedArtifact
-        ? await this.runner.submitArtifact(role.id, actor, requestedArtifact)
-        : (await this.runner.submitMessage(role.id, actor, text)).run
+        ? await this.runner.submitArtifact(role.id, actor, requestedArtifact, origin)
+        : (await this.runner.submitMessage(role.id, actor, text, origin)).run
     } catch (error) {
       if (error instanceof DomainError) {
         await this.sendText(message.chat_id, error.message)
@@ -434,10 +494,16 @@ export class FeishuGateway {
 
     const completed = await this.waitForRun(run.id)
     if (completed.status !== 'COMPLETED') {
-      await this.sendText(
-        message.chat_id,
-        'Agent 本轮未完成。消息已经保存，请稍后继续发送，或到 Web 工作台查看 Trace。',
-      )
+      await this.deliverRunResponse(run.id, {
+        delivery: 'TEXT',
+        purpose: 'RUN_FAILURE_NOTICE',
+        run_status: completed.status,
+      }, async () => {
+        await this.sendText(
+          message.chat_id,
+          'Agent 本轮未完成。消息已经保存，请稍后继续发送，或到 Web 工作台查看 Trace。',
+        )
+      })
       return
     }
 
@@ -447,12 +513,19 @@ export class FeishuGateway {
         .filter((item) => item.type === requestedArtifact)
         .sort((left, right) => right.version - left.version)[0]
       if (artifact) {
-        await this.sendArtifactCard(
-          message.chat_id,
-          `${view.state.title} · ${artifactTitle[requestedArtifact]} v${artifact.version}`,
-          artifactMarkdown(artifact),
-          requestedArtifact === 'HR_RECRUITING_BRIEF' ? 'purple' : 'blue',
-        )
+        await this.deliverRunResponse(run.id, {
+          delivery: 'ARTIFACT',
+          artifact_type: requestedArtifact,
+          artifact_id: artifact.id,
+          artifact_version: artifact.version,
+        }, async () => ({
+          delivery: await this.sendArtifactCard(
+            message.chat_id,
+            `${view.state.title} · ${artifactTitle[requestedArtifact]} v${artifact.version}`,
+            artifactMarkdown(artifact),
+            requestedArtifact === 'HR_RECRUITING_BRIEF' ? 'purple' : 'blue',
+          ),
+        }))
       }
       return
     }
@@ -460,7 +533,12 @@ export class FeishuGateway {
     const messages = await this.store.listConversationMessages(role.id)
     const output = messages.find((item) => item.id === completed.output_message_id)
     if (output) {
-      await this.sendText(message.chat_id, outputMessageText(output))
+      await this.deliverRunResponse(run.id, {
+        delivery: 'TEXT',
+        output_message_id: output.id,
+      }, async () => {
+        await this.sendText(message.chat_id, outputMessageText(output))
+      })
     }
   }
 

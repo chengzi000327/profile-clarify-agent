@@ -989,6 +989,9 @@ export type AgentRun = z.infer<typeof AgentRunSchema>
 
 export const AgentEventTypeSchema = z.enum([
   'run.started',
+  'channel.received',
+  'channel.response.sent',
+  'channel.response.failed',
   'agent.status',
   'message.accepted',
   'context.snapshot',
