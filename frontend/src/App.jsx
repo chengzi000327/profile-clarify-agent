@@ -74,6 +74,10 @@ const actorRoleLabel = {
   ADMIN: '企业管理员 · 最高权限',
 };
 
+function isAgentBusy(status) {
+  return status === 'running' || status === 'reconnecting';
+}
+
 function displayInitial(name, role) {
   const value = String(name ?? '').trim();
   if (value) return Array.from(value)[0];
@@ -192,7 +196,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [actor, activeRoleId, activeView]);
+  }, [actor, activeRoleId]);
 
   async function loadRoleSessions(cancelled = false, preferredRoleId = null) {
     const result = await api.listRoleSessions();
@@ -288,7 +292,9 @@ function App() {
       runInfo.stream_url,
       (event) => {
         setAgentEvents((current) => [...current, event]);
-        if (event.type === 'agent.status') setAgentStatus(event.payload.status);
+        // agent.status carries human-readable progress copy, not a lifecycle state.
+        // Keep the run busy until the terminal run.completed/run.failed event arrives.
+        if (event.type === 'agent.status') setAgentStatus('running');
         if (event.type === 'run.completed') {
           setAgentStatus('completed');
           Promise.all([refreshActiveRole(roleId), refreshConversation(roleId)])
@@ -303,7 +309,7 @@ function App() {
           refreshConversation(roleId).catch(() => {});
         }
       },
-      () => setAgentStatus((current) => current === 'running' ? 'reconnecting' : current),
+      () => setAgentStatus((current) => isAgentBusy(current) ? 'reconnecting' : current),
     );
   }
 
@@ -367,7 +373,7 @@ function App() {
   }
 
   async function handleArtifactAction(type) {
-    if (!activeRoleId || !roleDetail) return;
+    if (!activeRoleId || !roleDetail || isAgentBusy(agentStatus)) return;
     const latest = roleDetail.state.latest_artifacts?.[type];
     try {
       if (latest?.status === 'DRAFT') {
@@ -379,10 +385,14 @@ function App() {
         );
         await refreshActiveRole();
       } else {
+        // Lock the action before the create-run request returns to prevent double clicks.
+        setRequestError('');
+        setAgentStatus('running');
         const run = await api.generateArtifact(activeRoleId, type);
         connectRun(run);
       }
     } catch (error) {
+      setAgentStatus('failed');
       setRequestError(error.message);
     }
   }
@@ -1159,6 +1169,7 @@ function ArtifactEmptyState({ title, description, invalidated = false }) {
 }
 
 function ProfileView({ viewerRole, onOpenEvidence, onOpenConversation, roleDetail, onArtifactAction, onConfirmFacts, agentStatus }) {
+  const agentBusy = isAgentBusy(agentStatus);
   const [section, setSection] = useState(viewerRole === 'hr' || viewerRole === 'admin' ? 'portrait' : 'basis');
   const [expandedScenario, setExpandedScenario] = useState(null);
   const [expandedRequirement, setExpandedRequirement] = useState(null);
@@ -1271,7 +1282,7 @@ function ProfileView({ viewerRole, onOpenEvidence, onOpenConversation, roleDetai
             )}
             <button
               className="primary-action"
-              disabled={agentStatus === 'running' || (!profileReady && canConfirmFacts && pendingFacts.length > 0 && selectedPendingFactIds.length === 0)}
+              disabled={agentBusy || (!profileReady && canConfirmFacts && pendingFacts.length > 0 && selectedPendingFactIds.length === 0)}
               onClick={() => {
                 if (profileReady) {
                   onArtifactAction?.('ROLE_PROFILE');
@@ -1284,8 +1295,8 @@ function ProfileView({ viewerRole, onOpenEvidence, onOpenConversation, roleDetai
                 onOpenConversation?.();
               }}
             >
-              {agentStatus === 'running'
-                ? 'Agent 生成中…'
+              {agentBusy
+                ? '正在生成岗位画像…'
                 : profileReady
                   ? '生成岗位画像草稿'
                 : pendingFacts.length > 0 && canConfirmFacts
@@ -1357,10 +1368,10 @@ function ProfileView({ viewerRole, onOpenEvidence, onOpenConversation, roleDetai
             <button className="quiet-button"><History size={15} />查看版本</button>
             <button
               className="primary-action"
-              disabled={agentStatus === 'running'}
+              disabled={agentBusy}
               onClick={() => onArtifactAction?.(artifactType)}
             >
-              {agentStatus === 'running' ? 'Agent 生成中…' : connectedActionLabel}<ChevronRight size={16} />
+              {agentBusy ? '正在生成岗位画像…' : connectedActionLabel}<ChevronRight size={16} />
             </button>
           </div>
         </div>
@@ -1389,7 +1400,7 @@ function ProfileView({ viewerRole, onOpenEvidence, onOpenConversation, roleDetai
           <div className="profile-sync-notice pending">
             <CircleDot size={15} />
             <div><strong>会话中有 {pendingFacts.length} 条待确认事实尚未进入当前画像</strong><span>当前页面只使用已确认事实生成。请在此核对并确认，再生成新版本，避免把未确认信息误写入正式画像。</span></div>
-            {(viewerRole === 'manager' || viewerRole === 'admin') && <button disabled={agentStatus === 'running'} onClick={() => onConfirmFacts?.(pendingFacts.map((fact) => fact.id))}>确认这些事实</button>}
+            {(viewerRole === 'manager' || viewerRole === 'admin') && <button disabled={agentBusy} onClick={() => onConfirmFacts?.(pendingFacts.map((fact) => fact.id))}>确认这些事实</button>}
           </div>
         )}
 

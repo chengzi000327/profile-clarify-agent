@@ -636,9 +636,10 @@ textarea:focus-visible {
 }
 
 .primary-action:disabled {
-  border-color: #8eaff9;
-  background: #8eaff9;
-  cursor: default;
+  border-color: #b8c0cc;
+  color: #f8fafc;
+  background: #b8c0cc;
+  cursor: not-allowed;
 }
 
 .text-action {
