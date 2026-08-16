@@ -26,7 +26,9 @@ const nextPassword = randomBytes(36).toString('base64url')
 
 const current = postgres(oldUrl, { max: 1, prepare: false })
 try {
-  await current`ALTER ROLE postgres PASSWORD ${nextPassword}`
+  const safeRole = String(config.PGUSER).replaceAll('"', '""')
+  const safePassword = nextPassword.replaceAll("'", "''")
+  await current.unsafe(`ALTER ROLE "${safeRole}" PASSWORD '${safePassword}'`)
 } finally {
   await current.end()
 }
