@@ -145,6 +145,14 @@ export const invalidateDownstreamArtifacts = (
 const phonePattern = /(?<!\d)(?:\+?86[- ]?)?1[3-9]\d{9}(?!\d)/
 const emailPattern = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i
 const explicitNamePattern = /(?:姓名|name)\s*[:：]\s*[\p{L}·]{2,30}/iu
+const sensitiveFieldPatterns: Array<[string, RegExp]> = [
+  ['AGE', /(?:年龄|age)\s*[:：]\s*\d{1,3}\b/iu],
+  ['GENDER', /(?:性别|gender)\s*[:：]\s*(?:男|女|男性|女性|male|female)(?:\s|[,，。;；]|$)/iu],
+  ['MARITAL_OR_FAMILY', /(?:婚姻|婚育|生育|家庭状况|marital_status|family_status)\s*[:：]/iu],
+  ['HEALTH_OR_DISABILITY', /(?:健康状况|残障|残疾|health_status|disability)\s*[:：]/iu],
+  ['IDENTITY_DOCUMENT', /(?:身份证|身份证号|证件号码|identity_document)\s*[:：]/iu],
+  ['ADDRESS', /(?:住址|家庭地址|address)\s*[:：]/iu],
+]
 
 export const detectPII = (value: unknown): string[] => {
   const text = typeof value === 'string' ? value : JSON.stringify(value)
@@ -152,6 +160,9 @@ export const detectPII = (value: unknown): string[] => {
   if (phonePattern.test(text)) findings.push('PHONE')
   if (emailPattern.test(text)) findings.push('EMAIL')
   if (explicitNamePattern.test(text)) findings.push('NAME')
+  for (const [label, pattern] of sensitiveFieldPatterns) {
+    if (pattern.test(text)) findings.push(label)
+  }
   return findings
 }
 
@@ -197,22 +208,29 @@ export const evaluateCalibrationBoundary = (
   }
 }
 
-export const makeDefaultJD = (title: string, department: string): PublicJD => ({
+export const makeDefaultJD = (
+  title: string,
+  department: string,
+  location: string,
+  employmentType: string,
+): PublicJD => ({
   title_and_basics: {
     title,
-    location: '上海 / 可协商',
-    employment_type: '全职',
-    reporting_line: `${department}负责人`,
+    department,
+    location,
+    employment_type: employmentType,
   },
   about_the_role: `你将加入${department}，围绕关键业务目标定义问题、推动方案落地，并对可验证的业务结果负责。`,
   what_you_will_do: [
     '与业务、产品和交付团队澄清目标，将复杂问题拆成可执行的路线图',
     '建立结果指标与复盘机制，持续推动跨团队协作和交付质量',
     '基于用户与业务反馈迭代方案，对关键取舍给出清晰判断',
+    '沉淀关键决策与验证结论，为后续产品演进提供清晰依据',
   ],
   what_we_look_for: [
     '具备复杂问题抽象、结构化分析和端到端推动能力',
     '能用事实与结果沟通，并在信息不完整时做出高质量判断',
-    '认同协作透明、责任清晰、持续复盘的工作方式',
+    '能够通过用户、数据或实验结果验证方案并持续迭代',
+    '能够清晰说明本人在复杂协作中的职责、行动和结果',
   ],
 })

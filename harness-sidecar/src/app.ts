@@ -1,11 +1,17 @@
 import Fastify, { type FastifyInstance } from 'fastify'
+import { AgentRouteRequestSchema, type AgentRouteRequest } from '@role-clarifier/contracts'
 import { ZodError } from 'zod'
 import type { SidecarConfig } from './config.js'
-import { HarnessExecutor, type SidecarExecution } from './executor.js'
+import {
+  HarnessExecutor,
+  type SidecarExecution,
+  type SidecarRouteExecution,
+} from './executor.js'
 import { HarnessRequestSchema, type HarnessRequest } from './schemas.js'
 
 export interface ExecutorLike {
   readiness(): { runtime: boolean; credential: boolean }
+  route(request: AgentRouteRequest, signal: AbortSignal): Promise<SidecarRouteExecution>
   execute(request: HarnessRequest, signal: AbortSignal): Promise<SidecarExecution>
 }
 
@@ -49,6 +55,35 @@ export const buildSidecarApp = (
     active += 1
     try {
       return await executor.execute(input, controller.signal)
+    } finally {
+      request.raw.off('aborted', abort)
+      active -= 1
+    }
+  })
+
+  app.post('/v1/role-clarifier/routes', async (request, reply) => {
+    if (request.headers.authorization !== `Bearer ${config.HARNESS_SIDECAR_TOKEN}`) {
+      return reply.status(401).send({ error: { code: 'SIDECAR_UNAUTHORIZED' } })
+    }
+    if (active >= config.SIDECAR_CONCURRENCY) {
+      return reply.status(429).send({ error: { code: 'SIDECAR_BUSY' } })
+    }
+    const parsed = AgentRouteRequestSchema.safeParse(request.body)
+    if (!parsed.success) {
+      return reply.status(400).send({
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'Router request is invalid',
+          fields: parsed.error.issues.map((issue) => issue.path.join('.')).filter(Boolean),
+        },
+      })
+    }
+    const controller = new AbortController()
+    const abort = (): void => controller.abort()
+    request.raw.once('aborted', abort)
+    active += 1
+    try {
+      return await executor.route(parsed.data, controller.signal)
     } finally {
       request.raw.off('aborted', abort)
       active -= 1

@@ -4,6 +4,7 @@ import type { FastifyInstance } from 'fastify'
 import { buildApp } from '../app.js'
 import type { HarnessAdapter, HarnessTask } from '../agent/harness-adapter.js'
 import { loadConfig } from '../config.js'
+import { RoleService } from './role-service.js'
 import { MemoryStore } from '../store/memory-store.js'
 import { DEMO_ROLE_SESSION_ID } from '../store/seed.js'
 
@@ -13,6 +14,9 @@ const config = loadConfig({
 })
 
 const unusedHarness: HarnessAdapter = {
+  async route() {
+    throw new Error('Router should not run in read_role_state projection tests')
+  },
   async run() {
     throw new Error('Harness should not run in read_role_state projection tests')
   },
@@ -28,9 +32,29 @@ const candidate = (
   channel,
   source_format: 'TEXT' as const,
   evidence: [{
+    requirement_ref: 'R-01',
     criterion: '业务判断',
+    dimension_refs: ['D-01'],
+    evidence_status: signal === 'STRONG'
+      ? 'SUPPORTED' as const
+      : signal === 'WEAK'
+        ? 'MISMATCH' as const
+        : signal === 'MISSING'
+          ? 'NOT_MENTIONED' as const
+          : 'POSSIBLE_SUPPORT' as const,
     signal,
-    excerpt: `不得返回给模型的原始摘录-${candidateRef}`,
+    confidence: 'MEDIUM' as const,
+    quote_span: signal === 'MISSING'
+      ? null
+      : {
+          quote: `不得返回给模型的原始摘录-${candidateRef}`,
+          locator: '第1段',
+        },
+    rationale: '用于投影聚合测试的候选人证据。',
+    needs_interview: signal === 'MISSING' || signal === 'MIXED',
+    interview_question: signal === 'MISSING' || signal === 'MIXED'
+      ? '请补充相关岗位证据。'
+      : null,
   }],
   bottlenecks,
 })
@@ -127,29 +151,57 @@ describe('read_role_state task projection', () => {
     )
   })
 
-  it('生成 JD 只注入已确认的岗位画像和评分卡一次', async () => {
-    await createActiveRun('GENERATE_JD', 'hr-demo')
-
-    const result = await readRoleState()
-
-    expect(result.projection).toBe('JD')
-    expect(result.task_context.artifacts.map((item: { type: string }) => item.type)).toEqual([
-      'ROLE_PROFILE',
-      'ASSESSMENT_SCORECARD',
-    ])
-    expect(result.task_context.artifacts.every(
-      (item: { status: string }) => item.status === 'CONFIRMED',
-    )).toBe(true)
-    expect(result.task_context.artifacts.map((item: { type: string }) => item.type)).not.toContain(
-      'PUBLIC_JD',
-    )
-    expect(result.artifact_refs.every(
-      (item: Record<string, unknown>) => !Object.hasOwn(item, 'content'),
-    )).toBe(true)
-    expect(result.facts.every((fact: { status: string }) => fact.status === 'CONFIRMED')).toBe(true)
+  it('服务端拒绝当前任务白名单之外的工具', async () => {
+    await createActiveRun('CLARIFY_MESSAGE', 'manager-demo')
+    const response = await app.inject({
+      method: 'POST',
+      url: '/internal/v1/harness/tools/save_artifact_draft',
+      headers: {
+        authorization: `Bearer ${config.ROLE_AGENT_TOOL_TOKEN}`,
+        'x-harness-session-id': `role-${DEMO_ROLE_SESSION_ID}`,
+      },
+      payload: {
+        artifact_type: 'PUBLIC_JD',
+        content: {},
+      },
+    })
+    expect(response.statusCode).toBe(403)
+    expect(response.json().error.code).toBe('HARNESS_TOOL_NOT_ALLOWED_FOR_TASK')
   })
 
-  it('校准任务只返回有上限的候选人聚合，不返回候选人引用和原始摘录', async () => {
+  it('生成 JD 禁止模型再调用 read_role_state', async () => {
+    await createActiveRun('GENERATE_JD', 'hr-demo')
+    const response = await app.inject({
+      method: 'POST',
+      url: '/internal/v1/harness/tools/read_role_state',
+      headers: {
+        authorization: `Bearer ${config.ROLE_AGENT_TOOL_TOKEN}`,
+        'x-harness-session-id': `role-${DEMO_ROLE_SESSION_ID}`,
+      },
+      payload: {},
+    })
+
+    expect(response.statusCode).toBe(403)
+    expect(response.json().error.code).toBe('HARNESS_TOOL_NOT_ALLOWED_FOR_TASK')
+  })
+
+  it('生成 HR 招聘画像禁止模型再调用 read_role_state', async () => {
+    await createActiveRun('GENERATE_HR_BRIEF', 'hr-demo')
+    const response = await app.inject({
+      method: 'POST',
+      url: '/internal/v1/harness/tools/read_role_state',
+      headers: {
+        authorization: `Bearer ${config.ROLE_AGENT_TOOL_TOKEN}`,
+        'x-harness-session-id': `role-${DEMO_ROLE_SESSION_ID}`,
+      },
+      payload: {},
+    })
+
+    expect(response.statusCode).toBe(403)
+    expect(response.json().error.code).toBe('HARNESS_TOOL_NOT_ALLOWED_FOR_TASK')
+  })
+
+  it('服务端为零工具校准任务注入有上限的聚合，不返回候选人引用和原始摘录', async () => {
     await store.insertCandidates(
       DEMO_ROLE_SESSION_ID,
       [
@@ -159,9 +211,13 @@ describe('read_role_state task projection', () => {
       ],
       'hr-demo',
     )
-    await createActiveRun('CALIBRATION_ADVICE', 'hr-demo')
-
-    const result = await readRoleState()
+    const service = new RoleService(store)
+    const result = await service.readStateForTask(DEMO_ROLE_SESSION_ID, {
+      tenant_id: 'tenant-demo',
+      user_id: 'hr-demo',
+      role: 'HR',
+      display_name: 'HR · 林夏',
+    }, 'CALIBRATION_ADVICE')
     const serialized = JSON.stringify(result)
 
     expect(result.projection).toBe('CALIBRATION')
@@ -169,14 +225,49 @@ describe('read_role_state task projection', () => {
       total_candidates: 3,
       channels: ['猎头', '内推'],
       criteria: [{
+        requirement_ref: 'R-01',
         criterion: '业务判断',
         evidence_count: 3,
         signals: { STRONG: 1, MIXED: 0, WEAK: 1, MISSING: 1 },
+        evidence_statuses: {
+          SUPPORTED: 1,
+          POSSIBLE_SUPPORT: 0,
+          NOT_MENTIONED: 1,
+          MISMATCH: 1,
+          INTERVIEW_NEEDED: 0,
+        },
       }],
       top_bottlenecks: [{ label: '业务判断证据不足', count: 2 }],
     })
-    expect(result.candidates).toBeUndefined()
+    expect(result.task_context.calibration_policy).toEqual({
+      minimum_candidates: 10,
+      minimum_channels: 2,
+      repeated_signal_count: 2,
+    })
+    expect(result.task_context.calibration_evaluation).toMatchObject({
+      eligible: false,
+      candidate_count: 3,
+      channel_count: 2,
+      repeated_bottlenecks: [{ label: '业务判断证据不足', count: 2 }],
+    })
+    expect(result).not.toHaveProperty('candidates')
     expect(serialized).not.toContain('CAND-001')
     expect(serialized).not.toContain('不得返回给模型的原始摘录')
+  })
+
+  it('校准任务禁止模型调用 read_role_state', async () => {
+    await createActiveRun('CALIBRATION_ADVICE', 'hr-demo')
+    const response = await app.inject({
+      method: 'POST',
+      url: '/internal/v1/harness/tools/read_role_state',
+      headers: {
+        authorization: `Bearer ${config.ROLE_AGENT_TOOL_TOKEN}`,
+        'x-harness-session-id': `role-${DEMO_ROLE_SESSION_ID}`,
+      },
+      payload: {},
+    })
+
+    expect(response.statusCode).toBe(403)
+    expect(response.json().error.code).toBe('HARNESS_TOOL_NOT_ALLOWED_FOR_TASK')
   })
 })

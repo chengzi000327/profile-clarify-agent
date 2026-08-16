@@ -18,6 +18,9 @@ import type {
   ManagerTaskRecord,
   RoleAggregate,
   RoleAggregateReadOptions,
+  RecruitingContextImport,
+  RecruitingContextQuery,
+  RecruitingContextRecord,
   RunRecord,
   StoredUser,
   TraceAccessAuditRecord,
@@ -33,17 +36,28 @@ export class MemoryStore implements ApplicationStore {
   private readonly events = new Map<string, AgentEvent[]>()
   private readonly messages = new Map<string, ConversationMessage[]>()
   private readonly policies = new Map<string, ClarificationPolicy>()
+  private readonly tenantPolicyDefaults = new Map<
+    string,
+    Pick<ClarificationPolicy, 'initial_budget' | 'extension_size'>
+  >()
   private readonly rounds = new Map<string, ClarificationRound[]>()
   private readonly subscribers = new Map<string, Set<EventSubscriber>>()
   private readonly decisions: DecisionRecord[] = []
   private readonly traceAudits: TraceAccessAuditRecord[] = []
   private readonly externalEvents = new Set<string>()
+  private readonly recruitingContextImports = new Map<string, RecruitingContextImport>()
+  private readonly recruitingContextRecords = new Map<string, RecruitingContextRecord>()
 
   async initialize(): Promise<void> {
     for (const user of demoUsers) this.users.set(user.user_id, clone(user))
     const aggregate = createDemoAggregate()
     this.roles.set(aggregate.state.id, aggregate)
-    this.policies.set(aggregate.state.id, this.makeDefaultPolicy(aggregate.state.id))
+    const policy = this.makeDefaultPolicy(aggregate.state.id)
+    this.policies.set(aggregate.state.id, policy)
+    this.tenantPolicyDefaults.set(aggregate.state.tenant_id, {
+      initial_budget: policy.initial_budget,
+      extension_size: policy.extension_size,
+    })
   }
 
   async close(): Promise<void> {}
@@ -68,8 +82,15 @@ export class MemoryStore implements ApplicationStore {
       .filter(
         ({ state, member_ids }) =>
           state.tenant_id === actor.tenant_id &&
-          (actor.role === 'ADMIN' || member_ids.includes(actor.user_id)),
+          member_ids.includes(actor.user_id),
       )
+      .map(({ state }) => clone(state))
+      .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
+  }
+
+  async listTenantRoleStates(tenantId: string): Promise<RoleState[]> {
+    return [...this.roles.values()]
+      .filter(({ state }) => state.tenant_id === tenantId)
       .map(({ state }) => clone(state))
       .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
   }
@@ -98,7 +119,13 @@ export class MemoryStore implements ApplicationStore {
 
   async createRoleAggregate(aggregate: RoleAggregate): Promise<void> {
     this.roles.set(aggregate.state.id, clone(aggregate))
-    this.policies.set(aggregate.state.id, this.makeDefaultPolicy(aggregate.state.id))
+    this.policies.set(
+      aggregate.state.id,
+      this.makeDefaultPolicy(
+        aggregate.state.id,
+        this.tenantPolicyDefaults.get(aggregate.state.tenant_id),
+      ),
+    )
   }
 
   async saveRoleState(state: RoleState, expectedRevision: number): Promise<boolean> {
@@ -241,6 +268,19 @@ export class MemoryStore implements ApplicationStore {
     )
   }
 
+  async listConversationMessagesForActor(
+    roleSessionId: string,
+    actorUserId: string,
+    afterSequence = 0,
+  ): Promise<ConversationMessage[]> {
+    return clone(
+      (this.messages.get(roleSessionId) ?? []).filter((message) => {
+        if (message.sequence <= afterSequence) return false
+        return message.conversation_user_id === actorUserId
+      }),
+    )
+  }
+
   async appendConversationMessage(message: ConversationMessage): Promise<void> {
     const messages = this.messages.get(message.role_session_id) ?? []
     messages.push(clone(message))
@@ -263,10 +303,23 @@ export class MemoryStore implements ApplicationStore {
 
   async saveClarificationPolicy(policy: ClarificationPolicy): Promise<void> {
     this.policies.set(policy.role_session_id, clone(policy))
+    const tenantId = this.roles.get(policy.role_session_id)?.state.tenant_id
+    if (tenantId) {
+      this.tenantPolicyDefaults.set(tenantId, {
+        initial_budget: policy.initial_budget,
+        extension_size: policy.extension_size,
+      })
+    }
   }
 
-  async getOpenClarificationRound(roleSessionId: string): Promise<ClarificationRound | null> {
-    const round = (this.rounds.get(roleSessionId) ?? []).find((item) => item.status === 'OPEN')
+  async getOpenClarificationRound(
+    roleSessionId: string,
+    actorUserId: string,
+  ): Promise<ClarificationRound | null> {
+    const round = (this.rounds.get(roleSessionId) ?? []).findLast(
+      (item) => item.status === 'OPEN'
+        && this.runs.get(item.opened_by_run_id)?.run.actor_user_id === actorUserId,
+    )
     return clone(round ?? null)
   }
 
@@ -313,12 +366,53 @@ export class MemoryStore implements ApplicationStore {
     )
   }
 
-  private makeDefaultPolicy(roleSessionId: string): ClarificationPolicy {
+  async upsertRecruitingContextImport(
+    batch: RecruitingContextImport,
+    records: RecruitingContextRecord[],
+  ): Promise<void> {
+    if (records.some((record) => record.tenant_id !== batch.tenant_id)) {
+      throw new Error('RECRUITING_CONTEXT_TENANT_MISMATCH')
+    }
+    this.recruitingContextImports.set(batch.id, clone(batch))
+    for (const record of records) {
+      const key = `${record.tenant_id}\u0000${record.record_type}\u0000${record.external_id}`
+      this.recruitingContextRecords.set(key, clone(record))
+    }
+  }
+
+  async listRecruitingContextRecords(
+    actor: ActorContext,
+    query: RecruitingContextQuery,
+  ): Promise<RecruitingContextRecord[]> {
+    const allowedTypes = new Set(query.record_types)
+    return clone(
+      [...this.recruitingContextRecords.values()]
+        .filter((record) =>
+          record.tenant_id === actor.tenant_id
+          && allowedTypes.has(record.record_type)
+          && (!query.team_id || record.team_id === query.team_id)
+          && (!query.role_title || record.role_title === query.role_title),
+        )
+        .sort((left, right) =>
+          left.record_type.localeCompare(right.record_type)
+          || left.external_id.localeCompare(right.external_id),
+        )
+        .slice(0, Math.min(Math.max(query.limit ?? 1_000, 1), 1_000)),
+    )
+  }
+
+  private makeDefaultPolicy(
+    roleSessionId: string,
+    defaults: Pick<ClarificationPolicy, 'initial_budget' | 'extension_size'> = {
+      initial_budget: 6,
+      extension_size: 2,
+    },
+  ): ClarificationPolicy {
     return {
       role_session_id: roleSessionId,
-      initial_budget: 6,
+      initial_budget: defaults.initial_budget,
       granted_rounds: 0,
-      extension_size: 2,
+      extension_size: defaults.extension_size,
       completed_rounds: 0,
       opened_rounds: 0,
       open_round_id: null,

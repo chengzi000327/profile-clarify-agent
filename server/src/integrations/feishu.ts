@@ -7,6 +7,7 @@ import type {
   ArtifactType,
   ConversationMessage,
 } from '@role-clarifier/contracts'
+import { DomainError } from '@role-clarifier/domain'
 import type { AppConfig } from '../config.js'
 import type { AgentRunner } from '../agent/runner.js'
 import type { RoleService } from '../services/role-service.js'
@@ -201,29 +202,74 @@ const outputMessageText = (message: ConversationMessage): string => {
 const artifactMarkdown = (artifact: ArtifactEnvelope): string => {
   const content = artifact.content as Record<string, unknown>
   if (artifact.type === 'ROLE_PROFILE') {
-    const outcomes = Array.isArray(content.outcomes)
-      ? content.outcomes.map((item) => {
+    const missionValue = content.mission
+    const mission = missionValue && typeof missionValue === 'object' && !Array.isArray(missionValue)
+      ? String((missionValue as Record<string, unknown>).statement ?? '待补充')
+      : String(missionValue ?? '待补充')
+    const workSource = Array.isArray(content.work) ? content.work : content.outcomes
+    const work = Array.isArray(workSource)
+      ? workSource.map((item) => {
           const value = item as Record<string, unknown>
-          return `- **${String(value.horizon ?? '阶段')}**：${String(value.result ?? '')}`
+          return `- **${String(value.title ?? value.horizon ?? '关键工作')}**：${String(value.description ?? value.result ?? '')}`
         }).join('\n')
       : ''
-    const capabilities = Array.isArray(content.capabilities)
-      ? content.capabilities.map((item) => {
+    const requirementSource = Array.isArray(content.requirements)
+      ? content.requirements
+      : content.capabilities
+    const requirements = Array.isArray(requirementSource)
+      ? requirementSource.map((item) => {
           const value = item as Record<string, unknown>
-          return `- **${String(value.name ?? '')}**（${String(value.level ?? '')}）：${String(value.evidence ?? '')}`
+          const priority = value.priority ? ` · ${String(value.priority)}` : ''
+          return `- **${String(value.name ?? '')}**（${String(value.level ?? '')}${priority}）：${String(value.rationale ?? value.evidence ?? '')}`
         }).join('\n')
       : ''
-    return `**岗位使命**\n${String(content.mission ?? '待补充')}\n\n**预期结果**\n${outcomes || '- 待补充'}\n\n**关键能力**\n${capabilities || '- 待补充'}`
+    return `**岗位使命**\n${mission}\n\n**关键工作**\n${work || '- 待补充'}\n\n**人才要求**\n${requirements || '- 待补充'}`
   }
   if (artifact.type === 'PUBLIC_JD') {
     const header = content.title_and_basics as Record<string, unknown> | undefined
+    const basics = [
+      header?.department,
+      header?.location,
+      header?.employment_type,
+      header?.level,
+      header?.work_mode,
+      header?.reporting_line,
+      header?.compensation,
+    ].filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
     const duties = Array.isArray(content.what_you_will_do)
       ? content.what_you_will_do.map((item) => `- ${String(item)}`).join('\n')
       : '- 待补充'
     const requirements = Array.isArray(content.what_we_look_for)
       ? content.what_we_look_for.map((item) => `- ${String(item)}`).join('\n')
       : '- 待补充'
-    return `**职位标题与基本信息**\n${String(header?.title ?? '待补充')} · ${String(header?.location ?? '')}\n\n**关于岗位**\n${String(content.about_the_role ?? '')}\n\n**你会做什么**\n${duties}\n\n**我们希望你具备**\n${requirements}`
+    return `**职位标题与基本信息**\n${String(header?.title ?? '待补充')}\n${basics.join(' · ')}\n\n**关于岗位**\n${String(content.about_the_role ?? '')}\n\n**你会做什么**\n${duties}\n\n**我们希望你具备**\n${requirements}`
+  }
+  if (artifact.type === 'HR_RECRUITING_BRIEF') {
+    const targetTypes = Array.isArray(content.target_types)
+      ? content.target_types.map((item) => {
+          const value = item as Record<string, unknown>
+          return `- **${String(value.label ?? '')}**：${String(value.fit_rationale ?? '')}`
+        }).join('\n')
+      : '- 待补充'
+    const search = content.search_strategy as Record<string, unknown> | undefined
+    const titles = Array.isArray(search?.titles)
+      ? search.titles.map((item) => `- ${String(item)}`).join('\n')
+      : '- 待补充'
+    const screen = content.resume_screen as Record<string, unknown> | undefined
+    const checks = Array.isArray(screen?.thirty_second_checks)
+      ? screen.thirty_second_checks.map((item) => {
+          const value = item as Record<string, unknown>
+          return `- ${String(value.criterion ?? '')}`
+        }).join('\n')
+      : '- 待补充'
+    const questions = Array.isArray(content.phone_questions)
+      ? content.phone_questions.map((item) => {
+          const value = item as Record<string, unknown>
+          return `- ${String(value.prompt ?? '')}`
+        }).join('\n')
+      : '- 待补充'
+    const market = content.market_context as Record<string, unknown> | undefined
+    return `**目标候选人**\n${String(content.target_candidate_summary ?? '')}\n\n**优先人才类型**\n${targetTypes}\n\n**检索职称**\n${titles}\n\n**布尔检索式**\n${String(search?.boolean_query ?? '')}\n\n**30 秒简历初筛**\n${checks}\n\n**电话初筛问题**\n${questions}\n\n**人才市场数据**\n${String(market?.note ?? '')}`
   }
   return `\`\`\`json\n${JSON.stringify(content, null, 2).slice(0, 9_000)}\n\`\`\``
 }
@@ -373,9 +419,18 @@ export class FeishuGateway {
       [/生成.*HR.*画像|输出.*HR.*画像/i, 'HR_RECRUITING_BRIEF'],
     ]
     const requestedArtifact = artifactCommand.find(([pattern]) => pattern.test(text))?.[1]
-    const run = requestedArtifact
-      ? await this.runner.submitArtifact(role.id, actor, requestedArtifact)
-      : (await this.runner.submitMessage(role.id, actor, text)).run
+    let run
+    try {
+      run = requestedArtifact
+        ? await this.runner.submitArtifact(role.id, actor, requestedArtifact)
+        : (await this.runner.submitMessage(role.id, actor, text)).run
+    } catch (error) {
+      if (error instanceof DomainError) {
+        await this.sendText(message.chat_id, error.message)
+        return
+      }
+      throw error
+    }
 
     const completed = await this.waitForRun(run.id)
     if (completed.status !== 'COMPLETED') {

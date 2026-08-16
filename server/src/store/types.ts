@@ -87,6 +87,52 @@ export interface TraceAccessAuditRecord {
   created_at: string
 }
 
+export const RECRUITING_CONTEXT_RECORD_TYPES = [
+  'HC_APPROVAL',
+  'ORGANIZATION_UNIT',
+  'EMPLOYEE',
+  'PARTICIPANT_PERSONA',
+  'HISTORICAL_ROLE_SESSION',
+  'CLARIFICATION_MESSAGE',
+  'RECRUITING_FUNNEL',
+  'MARKET_JD_REFERENCE',
+  'DATA_DICTIONARY',
+  'SOURCE_METADATA',
+] as const
+
+export type RecruitingContextRecordType = (typeof RECRUITING_CONTEXT_RECORD_TYPES)[number]
+
+export interface RecruitingContextImport {
+  id: string
+  tenant_id: string
+  source_revision: string
+  source_file: string
+  excluded_sheets: string[]
+  record_counts: Record<string, number>
+  imported_at: string
+}
+
+export interface RecruitingContextRecord {
+  tenant_id: string
+  record_type: RecruitingContextRecordType
+  external_id: string
+  team_id: string | null
+  role_title: string | null
+  conversation_id: string | null
+  source_system: string
+  data_classification: string
+  effective_at: string | null
+  content: Record<string, unknown>
+  import_id: string
+}
+
+export interface RecruitingContextQuery {
+  record_types: RecruitingContextRecordType[]
+  team_id?: string
+  role_title?: string
+  limit?: number
+}
+
 export type EventSubscriber = (event: AgentEvent) => void
 
 export interface ApplicationStore {
@@ -96,6 +142,7 @@ export interface ApplicationStore {
   saveUser(user: StoredUser): Promise<void>
   claimExternalEvent(channel: string, eventId: string): Promise<boolean>
   listRoleStates(actor: ActorContext): Promise<RoleState[]>
+  listTenantRoleStates(tenantId: string): Promise<RoleState[]>
   getRoleAggregate(
     roleSessionId: string,
     actor: ActorContext,
@@ -125,14 +172,30 @@ export interface ApplicationStore {
   listRunEvents(runId: string, afterSequence?: number): Promise<AgentEvent[]>
   subscribeToRun(runId: string, subscriber: EventSubscriber): () => void
   listConversationMessages(roleSessionId: string, afterSequence?: number): Promise<ConversationMessage[]>
+  listConversationMessagesForActor(
+    roleSessionId: string,
+    actorUserId: string,
+    afterSequence?: number,
+  ): Promise<ConversationMessage[]>
   appendConversationMessage(message: ConversationMessage): Promise<void>
   updateConversationMessage(message: ConversationMessage): Promise<void>
   getClarificationPolicy(roleSessionId: string): Promise<ClarificationPolicy>
   saveClarificationPolicy(policy: ClarificationPolicy): Promise<void>
-  getOpenClarificationRound(roleSessionId: string): Promise<ClarificationRound | null>
+  getOpenClarificationRound(
+    roleSessionId: string,
+    actorUserId: string,
+  ): Promise<ClarificationRound | null>
   insertClarificationRound(round: ClarificationRound): Promise<void>
   updateClarificationRound(round: ClarificationRound): Promise<void>
   listRunsForTenant(tenantId: string): Promise<AdminRunRecord[]>
   appendTraceAccessAudit(record: TraceAccessAuditRecord): Promise<void>
   listTraceAccessAudits(tenantId: string): Promise<TraceAccessAuditRecord[]>
+  upsertRecruitingContextImport(
+    batch: RecruitingContextImport,
+    records: RecruitingContextRecord[],
+  ): Promise<void>
+  listRecruitingContextRecords(
+    actor: ActorContext,
+    query: RecruitingContextQuery,
+  ): Promise<RecruitingContextRecord[]>
 }

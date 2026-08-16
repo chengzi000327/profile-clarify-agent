@@ -1,0 +1,159 @@
+fixture_id: s04-candidate-batch-v1
+role_session_id: rs-eval-s04
+batch_id: batch-eval-s04-001
+policy:
+  min_candidates: 10
+  min_channels: 2
+  min_repeated_bottlenecks: 2
+criteria:
+  - id: req_industry
+    text: 3年以上制造业产品经验
+  - id: req_platform
+    text: 多租户平台产品经验
+candidates:
+  - candidate_ref: CAND-001
+    channel: 定向寻访
+    format: TEXT
+    content: |
+      负责制造企业SaaS产品4年，覆盖生产排程、质量和设备流程。
+      主导统一租户、组织、权限和配置中心，服务60余家企业客户。
+      将7个客户的质量流程差异抽象为可配置规则。
+    expected:
+      req_industry: SUPPORTED
+      req_platform: SUPPORTED
+  - candidate_ref: CAND-002
+    channel: 定向寻访
+    format: TEXT
+    content: |
+      负责制造执行系统产品5年，长期参与工厂现场调研。
+      简历未描述租户模型、平台架构或多客户配置能力。
+    expected:
+      req_industry: SUPPORTED
+      req_platform: NOT_MENTIONED
+  - candidate_ref: CAND-003
+    channel: 内推
+    format: TEXT
+    content: |
+      负责工厂质量流程数字化，覆盖来料、制程和出货质量。
+      主要描述需求与交付结果，未提及多租户平台。
+    expected:
+      req_industry: SUPPORTED
+      req_platform: NOT_MENTIONED
+  - candidate_ref: CAND-004
+    channel: 招聘平台
+    format: TEXT
+    content: |
+      3年制造业供应链产品经历，负责采购协同和库存计划。
+      平台架构与租户隔离经验未在简历中出现。
+    expected:
+      req_industry: SUPPORTED
+      req_platform: NOT_MENTIONED
+  - candidate_ref: CAND-005
+    channel: 定向寻访
+    format: TEXT
+    content: |
+      工业软件产品负责人，服务汽车零部件企业。
+      所有项目均为单客户私有部署，未描述多租户设计。
+    expected:
+      req_industry: SUPPORTED
+      req_platform: NOT_MENTIONED
+  - candidate_ref: CAND-006
+    channel: 内推
+    format: TEXT
+    content: |
+      4年制造企业产品经验，熟悉生产和供应链流程。
+      提到“推动平台化”，但没有说明是否包含租户隔离、统一权限或配置能力。
+    expected:
+      req_industry: SUPPORTED
+      req_platform: INTERVIEW_NEEDED
+  - candidate_ref: CAND-007
+    channel: 招聘平台
+    format: TEXT
+    content: |
+      长期服务制造业客户，负责设备管理产品。
+      建设统一平台承载多个业务线，是否为多租户需要面试核实。
+    expected:
+      req_industry: SUPPORTED
+      req_platform: INTERVIEW_NEEDED
+  - candidate_ref: CAND-008
+    channel: 定向寻访
+    format: TEXT
+    content: |
+      主导企业SaaS多租户平台，负责租户生命周期、计费和权限。
+      客户行业没有说明，不能从产品名称推断制造业经验。
+    expected:
+      req_industry: NOT_MENTIONED
+      req_platform: SUPPORTED
+  - candidate_ref: CAND-009
+    channel: 内推
+    format: TEXT
+    content: |
+      负责组织、角色、权限和租户模型，服务超过100家企业。
+      简历没有出现制造、工厂、供应链或工业客户信息。
+    expected:
+      req_industry: NOT_MENTIONED
+      req_platform: SUPPORTED
+  - candidate_ref: CAND-010
+    channel: 招聘平台
+    format: TEXT
+    content: |
+      多租户PaaS产品经历，负责配置中心和扩展机制。
+      服务行业未写明，不可推断为非制造业。
+    expected:
+      req_industry: NOT_MENTIONED
+      req_platform: SUPPORTED
+  - candidate_ref: CAND-011
+    channel: 定向寻访
+    format: TEXT
+    content: |
+      负责复杂供应链客户和经销网络产品。
+      有完整多租户平台设计经历。
+      是否达到“制造业”口径需要面试核实客户类型和本人职责。
+    expected:
+      req_industry: INTERVIEW_NEEDED
+      req_platform: SUPPORTED
+  - candidate_ref: CAND-012
+    channel: 招聘平台
+    format: TEXT
+    content: |
+      平台产品经验充分，主导租户、权限和可配置流程。
+      只写“服务大型实体企业”，行业描述不足。
+    expected:
+      req_industry: INTERVIEW_NEEDED
+      req_platform: SUPPORTED
+  - candidate_ref: CAND-013
+    channel: 内推
+    format: TEXT
+    content: |
+      负责消费者增长产品，描述活动、推荐和转化漏斗。
+      未提供企业客户、制造业或多租户平台相关信息。
+    expected:
+      req_industry: NOT_MENTIONED
+      req_platform: NOT_MENTIONED
+  - candidate_ref: CAND-014
+    channel: 定向寻访
+    format: TEXT
+    content: |
+      明确说明职业经历全部为消费互联网，无企业或制造业客户经验。
+      主导内部多业务线平台，但该平台不对外提供租户隔离。
+    expected:
+      req_industry: MISMATCH
+      req_platform: INTERVIEW_NEEDED
+  - candidate_ref: CAND-015
+    channel: 招聘平台
+    format: TEXT
+    content: |
+      5年制造业产品经验，熟悉生产与质量流程。
+      明确说明产品只支持单租户私有部署，本人未参与多租户架构。
+    expected:
+      req_industry: SUPPORTED
+      req_platform: MISMATCH
+expected_aggregate:
+  candidate_count: 15
+  channel_count: 3
+  both_supported: 1
+  cannot_verify_both: 14
+  not_mentioned_industry: 4
+  not_mentioned_platform: 5
+  eligible_for_hr_review: true
+  must_not_claim: 整体市场不存在同时满足两项要求的人

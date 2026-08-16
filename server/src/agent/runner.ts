@@ -3,6 +3,8 @@ import type {
   ActorContext,
   AgentEvent,
   AgentEventType,
+  AgentRouteRequest,
+  AgentRouteResult,
   AgentRun,
   ArtifactType,
   ClarificationRound,
@@ -11,11 +13,20 @@ import type {
 } from '@role-clarifier/contracts'
 import { DomainError } from '@role-clarifier/domain'
 import type { AppConfig } from '../config.js'
-import { RoleService } from '../services/role-service.js'
+import {
+  RoleService,
+  evaluateAssessmentGenerationReadiness,
+  evaluateCandidateEvidenceExtractionReadiness,
+  evaluateHRBriefGenerationReadiness,
+  evaluatePublicJDGenerationReadiness,
+  evaluateRoleProfileGenerationReadiness,
+} from '../services/role-service.js'
+import { RecruitingContextService } from '../services/recruiting-context-service.js'
 import type { ApplicationStore } from '../store/index.js'
 import type {
   CandidateImportItem,
   HarnessAdapter,
+  HarnessHooks,
   HarnessRequest,
   HarnessResult,
   HarnessTask,
@@ -25,15 +36,54 @@ import type {
 interface PendingRun {
   run: AgentRun
   actor: ActorContext
-  task: HarnessTask
+  task: HarnessTask | 'ROUTE_MESSAGE'
   message?: string
   candidates?: CandidateImportItem[]
+  versionComparison?: {
+    artifact_type: ArtifactType
+    from_version: number
+    to_version: number
+  }
   inputMessage?: ConversationMessage
   answeredRound?: ClarificationRound
 }
 
 const taskModelTier = (task: HarnessTask): 'FLASH' | 'PRO' =>
   task === 'CLARIFY_MESSAGE' || task === 'EXTRACT_CANDIDATES' ? 'FLASH' : 'PRO'
+
+const CANDIDATE_MODEL_BATCH_MAX_ITEMS = 10
+const CANDIDATE_MODEL_BATCH_MAX_EVIDENCE_ITEMS = 48
+const CANDIDATE_MODEL_BATCH_MAX_CHARACTERS = 60_000
+const CANDIDATE_MODEL_BATCH_CONCURRENCY = 3
+
+export const partitionCandidateImports = (
+  candidates: CandidateImportItem[],
+  requirementCount = 1,
+): CandidateImportItem[][] => {
+  const maximumItems = Math.min(
+    CANDIDATE_MODEL_BATCH_MAX_ITEMS,
+    Math.max(1, Math.floor(CANDIDATE_MODEL_BATCH_MAX_EVIDENCE_ITEMS / Math.max(1, requirementCount))),
+  )
+  const batches: CandidateImportItem[][] = []
+  let current: CandidateImportItem[] = []
+  let currentCharacters = 0
+  for (const candidate of candidates) {
+    const candidateCharacters = JSON.stringify(candidate).length
+    if (
+      current.length > 0
+      && (current.length >= maximumItems
+        || currentCharacters + candidateCharacters > CANDIDATE_MODEL_BATCH_MAX_CHARACTERS)
+    ) {
+      batches.push(current)
+      current = []
+      currentCharacters = 0
+    }
+    current.push(candidate)
+    currentCharacters += candidateCharacters
+  }
+  if (current.length > 0) batches.push(current)
+  return batches
+}
 
 const artifactTaskMap: Record<ArtifactType, HarnessTask> = {
   ROLE_PROFILE: 'GENERATE_ROLE_PROFILE',
@@ -42,10 +92,16 @@ const artifactTaskMap: Record<ArtifactType, HarnessTask> = {
   HR_RECRUITING_BRIEF: 'GENERATE_HR_BRIEF',
 }
 
+const handoffTask = (route: AgentRouteResult): HarnessTask | null => {
+  if (route.action !== 'HANDOFF') return null
+  return route.task
+}
+
 export class AgentRunner {
   private readonly pending: PendingRun[] = []
   private readonly activeRoleRuns = new Map<string, string>()
   private readonly controllers = new Map<string, AbortController>()
+  private readonly recruitingContextService: RecruitingContextService
   private runningCount = 0
 
   constructor(
@@ -53,23 +109,19 @@ export class AgentRunner {
     private readonly roleService: RoleService,
     private readonly harness: HarnessAdapter,
     private readonly config: AppConfig,
-  ) {}
+    recruitingContextService?: RecruitingContextService,
+  ) {
+    this.recruitingContextService = recruitingContextService
+      ?? new RecruitingContextService(store)
+  }
 
   async submitMessage(
     roleSessionId: string,
     actor: ActorContext,
     message: string,
   ): Promise<{ run: AgentRun; message: ConversationMessage }> {
-    const policy = await this.store.getClarificationPolicy(roleSessionId)
-    const answeredRound = await this.store.getOpenClarificationRound(roleSessionId)
-    if (answeredRound && policy.status === 'LIMIT_REACHED') {
-      throw new DomainError(
-        'CLARIFICATION_LIMIT_REACHED',
-        '主动澄清预算已用完，请先增加轮数或生成当前岗位画像',
-        409,
-      )
-    }
-    const run = await this.enqueue(roleSessionId, actor, 'CLARIFY_MESSAGE', {
+    const answeredRound = await this.store.getOpenClarificationRound(roleSessionId, actor.user_id)
+    const run = await this.enqueue(roleSessionId, actor, 'ROUTE_MESSAGE', {
       message,
       ...(answeredRound ? { answeredRound } : {}),
     })
@@ -87,6 +139,34 @@ export class AgentRunner {
     if (artifactType === 'HR_RECRUITING_BRIEF' && !['HR', 'ADMIN'].includes(actor.role)) {
       throw new DomainError('FORBIDDEN', '仅 HR 可以生成内部招聘画像', 403)
     }
+    if (artifactType === 'ROLE_PROFILE') {
+      const view = await this.roleService.get(roleSessionId, actor)
+      const readiness = evaluateRoleProfileGenerationReadiness(view.state)
+      if (!readiness.allowed) {
+        throw new DomainError(readiness.code, readiness.reason, 409)
+      }
+    }
+    if (artifactType === 'ASSESSMENT_SCORECARD') {
+      const view = await this.roleService.get(roleSessionId, actor)
+      const readiness = evaluateAssessmentGenerationReadiness(view.state)
+      if (!readiness.allowed) {
+        throw new DomainError(readiness.code, readiness.reason, 409)
+      }
+    }
+    if (artifactType === 'PUBLIC_JD') {
+      const view = await this.roleService.get(roleSessionId, actor)
+      const readiness = evaluatePublicJDGenerationReadiness(view.state)
+      if (!readiness.allowed) {
+        throw new DomainError(readiness.code, readiness.reason, 409)
+      }
+    }
+    if (artifactType === 'HR_RECRUITING_BRIEF') {
+      const view = await this.roleService.get(roleSessionId, actor)
+      const readiness = evaluateHRBriefGenerationReadiness(view.state)
+      if (!readiness.allowed) {
+        throw new DomainError(readiness.code, readiness.reason, 409)
+      }
+    }
     return this.enqueue(roleSessionId, actor, artifactTaskMap[artifactType])
   }
 
@@ -97,6 +177,11 @@ export class AgentRunner {
   ): Promise<AgentRun> {
     if (!['HR', 'ADMIN'].includes(actor.role)) throw new DomainError('FORBIDDEN', '仅 HR 或企业管理员可以导入候选人', 403)
     for (const candidate of candidates) this.roleService.rejectCandidatePII(candidate.content)
+    const view = await this.roleService.get(roleSessionId, actor)
+    const readiness = evaluateCandidateEvidenceExtractionReadiness(view.state)
+    if (!readiness.allowed) {
+      throw new DomainError(readiness.code, readiness.reason, 409)
+    }
     return this.enqueue(roleSessionId, actor, 'EXTRACT_CANDIDATES', { candidates })
   }
 
@@ -130,7 +215,7 @@ export class AgentRunner {
   private async enqueue(
     roleSessionId: string,
     actor: ActorContext,
-    task: HarnessTask,
+    task: HarnessTask | 'ROUTE_MESSAGE',
     input: {
       message?: string
       candidates?: CandidateImportItem[]
@@ -145,7 +230,7 @@ export class AgentRunner {
         409,
       )
     }
-    const modelTier = taskModelTier(task)
+    const modelTier = task === 'ROUTE_MESSAGE' ? 'FLASH' : taskModelTier(task)
     const inputMessageId = input.message !== undefined ? randomUUID() : null
     const run: AgentRun = {
       id: randomUUID(),
@@ -155,7 +240,7 @@ export class AgentRunner {
       model_tier: modelTier,
       task,
       harness_session_id: null,
-      prompt_version: 'role-clarifier-v2',
+      prompt_version: task === 'ROUTE_MESSAGE' ? 'role-router-v2' : 'role-clarifier-v9',
       model_name:
         modelTier === 'FLASH'
           ? this.config.DEEPSEEK_FLASH_MODEL
@@ -266,44 +351,34 @@ export class AgentRunner {
         agent_run_id: run.id,
         trace_id: randomUUID(),
       }
-      const conversationMessages = pending.task === 'CLARIFY_MESSAGE'
-        ? await this.store.listConversationMessages(run.role_session_id)
+      const conversationMessages = pending.message !== undefined
+        ? await this.store.listConversationMessagesForActor(
+            run.role_session_id,
+            pending.actor.user_id,
+          )
         : []
-      const request: HarnessRequest = {
-        task: pending.task,
-        role_state: view.state,
-        execution_context: executionContext,
-        maximum_transitions: 10,
-        structured_output_repair_attempts: 1,
-        ...(pending.task === 'CLARIFY_MESSAGE'
+      const conversationContext: AgentRouteRequest['conversation_context'] = {
+        current_user_role: pending.actor.role,
+        open_clarification: pending.answeredRound
           ? {
-              conversation_context: {
-                current_user_role: pending.actor.role,
-                open_clarification: pending.answeredRound
-                  ? {
-                      ordinal: pending.answeredRound.ordinal,
-                      question: pending.answeredRound.question,
-                    }
-                  : null,
-                recent_messages: conversationMessages
-                  .filter((message) =>
-                    message.id !== pending.inputMessage?.id
-                    && message.status === 'COMPLETED'
-                    && (message.sender_type === 'HUMAN' || message.sender_type === 'AGENT'),
-                  )
-                  .slice(-8)
-                  .map((message) => ({
-                    sender_type: message.sender_type as 'HUMAN' | 'AGENT',
-                    sender_role: message.sender_role,
-                    content: message.content,
-                  })),
-              },
+              ordinal: pending.answeredRound.ordinal,
+              question: pending.answeredRound.question,
             }
-          : {}),
-        ...(pending.message !== undefined ? { message: pending.message } : {}),
-        ...(pending.candidates !== undefined ? { candidates: pending.candidates } : {}),
+          : null,
+        recent_messages: conversationMessages
+          .filter((message) =>
+            message.id !== pending.inputMessage?.id
+            && message.status === 'COMPLETED'
+            && (message.sender_type === 'HUMAN' || message.sender_type === 'AGENT'),
+          )
+          .slice(-8)
+          .map((message) => ({
+            sender_type: message.sender_type as 'HUMAN' | 'AGENT',
+            sender_role: message.sender_role,
+            content: message.content,
+          })),
       }
-      const result = await this.harness.run(request, {
+      const hooks: HarnessHooks = {
         signal: controller.signal,
         onStatus: async (status) => emit('agent.status', { status }),
         onContextSnapshot: async (snapshot) => emit(
@@ -324,9 +399,251 @@ export class AgentRunner {
         onToolCompleted: async (name, summary, resultValue) =>
           emit('tool.completed', { name, summary, result: resultValue ?? null }),
         onTrace: async (trace) => {
-          harnessTrace = trace
+          harnessTrace = harnessTrace
+            ? {
+                ...trace,
+                tool_count: harnessTrace.tool_count + trace.tool_count,
+                input_tokens: harnessTrace.input_tokens + trace.input_tokens,
+                output_tokens: harnessTrace.output_tokens + trace.output_tokens,
+                duration_ms: harnessTrace.duration_ms + trace.duration_ms,
+                repaired: harnessTrace.repaired || trace.repaired,
+                recovered_from_tool:
+                  Boolean(harnessTrace.recovered_from_tool) || Boolean(trace.recovered_from_tool),
+              }
+            : trace
         },
-      })
+      }
+
+      let result: HarnessResult | undefined
+      let domainTask: HarnessTask | null = pending.task === 'ROUTE_MESSAGE' ? null : pending.task
+      if (pending.task === 'ROUTE_MESSAGE') {
+        if (pending.message === undefined) throw new Error('ROUTE_MESSAGE requires message input')
+        const route = await this.harness.route({
+          message: pending.message,
+          role_state: view.state,
+          conversation_context: conversationContext,
+        }, hooks)
+        if (route.action !== 'HANDOFF') {
+          const answer = route.action === 'ASK' ? route.question : route.answer
+          run = {
+            ...run,
+            task: route.action === 'ASK' ? 'ROUTER_ASK' : 'ROUTER_RESPOND',
+            prompt_version: 'role-router-v2',
+          }
+          await this.store.updateRun(run)
+          result = {
+            kind: 'CONVERSATION',
+            persistence: 'NONE',
+            answer,
+            route_action: route.action,
+          }
+        } else {
+          let denialReason: string | null = null
+          if (
+            (route.task === 'GENERATE_HR_BRIEF'
+              || (route.task === 'VERSION_COMPARISON'
+                && route.artifact_type === 'HR_RECRUITING_BRIEF'))
+            && !['HR', 'ADMIN'].includes(pending.actor.role)
+          ) {
+            denialReason = '只有 HR 或企业管理员可以访问 HR 招聘画像。'
+          }
+          if (route.task === 'CALIBRATION_ADVICE') {
+            const readiness = await this.roleService.calibrationAdviceReadiness(
+              run.role_session_id,
+              pending.actor,
+            )
+            if (!readiness.allowed) denialReason = readiness.reason
+          }
+          if (route.task === 'GENERATE_ROLE_PROFILE') {
+            const readiness = evaluateRoleProfileGenerationReadiness(view.state)
+            if (!readiness.allowed) denialReason = readiness.reason
+          }
+          if (route.task === 'GENERATE_ASSESSMENT') {
+            const readiness = evaluateAssessmentGenerationReadiness(view.state)
+            if (!readiness.allowed) denialReason = readiness.reason
+          }
+          if (route.task === 'GENERATE_JD') {
+            const readiness = evaluatePublicJDGenerationReadiness(view.state)
+            if (!readiness.allowed) denialReason = readiness.reason
+          }
+          if (route.task === 'GENERATE_HR_BRIEF' && !denialReason) {
+            const readiness = evaluateHRBriefGenerationReadiness(view.state)
+            if (!readiness.allowed) denialReason = readiness.reason
+          }
+          if (denialReason) {
+            domainTask = null
+            run = {
+              ...run,
+              task: route.task,
+              prompt_version: 'role-router-v2',
+            }
+            if (pending.inputMessage?.clarification_round_id) {
+              pending.inputMessage = {
+                ...pending.inputMessage,
+                clarification_round_id: null,
+              }
+              await this.store.updateConversationMessage(pending.inputMessage)
+            }
+            delete pending.answeredRound
+            await this.store.updateRun(run)
+            outputCharacters += denialReason.length
+            await emit('assistant.delta', { delta: denialReason })
+            result = {
+              kind: 'CONVERSATION',
+              persistence: 'NONE',
+              answer: denialReason,
+              route_action: route.action,
+              route_task: route.task,
+            }
+          } else {
+            domainTask = handoffTask(route)
+            if (!domainTask) throw new Error('Router HANDOFF did not provide a domain task')
+            pending.task = domainTask
+            if (route.task === 'VERSION_COMPARISON') {
+              pending.versionComparison = {
+                artifact_type: route.artifact_type,
+                from_version: route.from_version,
+                to_version: route.to_version,
+              }
+            }
+            if (route.task !== 'CLARIFY_MESSAGE') {
+              if (pending.inputMessage?.clarification_round_id) {
+                pending.inputMessage = {
+                  ...pending.inputMessage,
+                  clarification_round_id: null,
+                }
+                await this.store.updateConversationMessage(pending.inputMessage)
+              }
+              delete pending.answeredRound
+            }
+            const modelTier = taskModelTier(domainTask)
+            run = {
+              ...run,
+              task: domainTask,
+              model_tier: modelTier,
+              model_name: modelTier === 'FLASH'
+                ? this.config.DEEPSEEK_FLASH_MODEL
+                : this.config.DEEPSEEK_PRO_MODEL,
+              prompt_version: 'role-router-v2+role-clarifier-v10',
+            }
+            await this.store.updateRun(run)
+            await emit('agent.status', {
+              status: `Router 已交接领域任务 ${domainTask}`,
+            })
+          }
+        }
+      }
+
+      if (domainTask) {
+        const calibrationProjection = domainTask === 'CALIBRATION_ADVICE'
+          ? await this.roleService.readStateForTask(
+              run.role_session_id,
+              pending.actor,
+              domainTask,
+            )
+          : null
+        const calibrationContext = calibrationProjection
+          ? {
+              calibration_policy: calibrationProjection.task_context.calibration_policy!,
+              candidate_summary: calibrationProjection.task_context.candidate_summary!,
+              calibration_evaluation: calibrationProjection.task_context.calibration_evaluation!,
+            }
+          : undefined
+        const recruitingContext = await this.recruitingContextService.buildTaskContext(
+          run.role_session_id,
+          pending.actor,
+          domainTask,
+          pending.message,
+        )
+        const request: HarnessRequest = {
+          task: domainTask,
+          role_state: view.state,
+          execution_context: executionContext,
+          maximum_transitions: [
+            'GENERATE_ROLE_PROFILE',
+            'GENERATE_ASSESSMENT',
+            'GENERATE_JD',
+            'GENERATE_HR_BRIEF',
+            'EXTRACT_CANDIDATES',
+            'CALIBRATION_ADVICE',
+          ].includes(domainTask) ? 0 : 10,
+          structured_output_repair_attempts: 1,
+          conversation_context: domainTask === 'CLARIFY_MESSAGE'
+            ? conversationContext
+            : {
+                current_user_role: pending.actor.role,
+                open_clarification: null,
+                recent_messages: [],
+              },
+          ...(pending.message !== undefined ? { message: pending.message } : {}),
+          ...(pending.candidates !== undefined ? { candidates: pending.candidates } : {}),
+          ...(calibrationContext ? { calibration_context: calibrationContext } : {}),
+          ...(recruitingContext.projections.length > 0
+            ? { recruiting_context: recruitingContext }
+            : {}),
+          ...(pending.versionComparison !== undefined
+            ? { version_comparison: pending.versionComparison }
+            : {}),
+        }
+        if (domainTask === 'EXTRACT_CANDIDATES' && pending.candidates) {
+          const profileContent = view.state.latest_artifacts.ROLE_PROFILE?.content
+          const requirementCount = profileContent
+            && typeof profileContent === 'object'
+            && 'requirements' in profileContent
+            && Array.isArray(profileContent.requirements)
+            ? profileContent.requirements.length
+            : 1
+          const batches = partitionCandidateImports(pending.candidates, requirementCount)
+          const batchResults: Array<Extract<HarnessResult, { kind: 'CANDIDATE_EVIDENCE' }>> =
+            new Array(batches.length)
+          let nextBatchIndex = 0
+          const worker = async (): Promise<void> => {
+            while (nextBatchIndex < batches.length) {
+              const batchIndex = nextBatchIndex
+              nextBatchIndex += 1
+              const batch = batches[batchIndex]!
+              const batchResult = await this.harness.run({
+                ...request,
+                candidates: batch,
+              }, {
+                ...hooks,
+                onStatus: async (status) => hooks.onStatus(
+                  batches.length === 1
+                    ? status
+                    : `候选人批次 ${batchIndex + 1}/${batches.length}：${status}`,
+                ),
+                onDelta: async () => undefined,
+              })
+              if (batchResult.kind !== 'CANDIDATE_EVIDENCE') {
+                throw new Error('EXTRACT_CANDIDATES returned an unexpected result kind')
+              }
+              batchResults[batchIndex] = batchResult
+            }
+          }
+          await Promise.all(
+            Array.from(
+              { length: Math.min(CANDIDATE_MODEL_BATCH_CONCURRENCY, batches.length) },
+              () => worker(),
+            ),
+          )
+          const extractedCandidates = batchResults.flatMap((item) => item.candidates)
+          const failedCandidates = batchResults.flatMap((item) => item.failed_candidates)
+          const summary = failedCandidates.length === 0
+            ? `已完成 ${extractedCandidates.length} 份候选人材料的证据提取；结果仅供 HR 复核，不代表录用或淘汰结论。`
+            : `已完成 ${extractedCandidates.length} 份候选人材料的证据提取，另有 ${failedCandidates.length} 份未能提取；结果仅供 HR 复核，不代表录用或淘汰结论。`
+          await hooks.onDelta(summary)
+          result = {
+            kind: 'CANDIDATE_EVIDENCE',
+            persistence: 'CALLER',
+            candidates: extractedCandidates,
+            failed_candidates: failedCandidates,
+            summary,
+          }
+        } else {
+          result = await this.harness.run(request, hooks)
+        }
+      }
+      if (!result) throw new Error('Agent routing produced no executable result')
       const outputMessage = await this.persistHarnessResult(run, pending, result, emit)
       run = {
         ...run,
@@ -410,6 +727,8 @@ export class AgentRunner {
       }
       const message = await this.createAgentSummary(run, actor, result.answer, {
         kind: 'CONVERSATION',
+        ...(result.route_action ? { route_action: result.route_action } : {}),
+        ...(result.route_task ? { route_task: result.route_task } : {}),
       })
       await emit('assistant.completed', {
         message_id: message.id,
@@ -577,6 +896,9 @@ export class AgentRunner {
         run.role_session_id,
         actor,
         result.candidates,
+        pending.candidates ?? [],
+        result.failed_candidates,
+        result.summary,
       )
       await emit('artifact.updated', {
         artifact_type: 'CANDIDATE_EVIDENCE',
@@ -586,15 +908,45 @@ export class AgentRunner {
       const message = await this.createAgentSummary(run, actor, result.summary, {
         kind: 'CANDIDATE_EVIDENCE',
         candidate_count: result.candidates.length,
+        failed_candidate_count: result.failed_candidates.length,
       })
       await emit('assistant.completed', { message_id: message.id, sequence: message.sequence })
       return message
     }
-    const message = await this.createAgentSummary(run, actor, result.summary, {
-      kind: 'CALIBRATION_ADVICE',
-    })
-    await emit('assistant.completed', { message_id: message.id, sequence: message.sequence })
-    return message
+    if (result.kind === 'VERSION_COMPARISON') {
+      const message = await this.createAgentSummary(run, actor, result.summary, {
+        kind: 'VERSION_COMPARISON',
+        artifact_type: result.artifact_type,
+        from_version: result.from_version,
+        to_version: result.to_version,
+      })
+      await emit('assistant.completed', { message_id: message.id, sequence: message.sequence })
+      return message
+    }
+    if (result.kind === 'CALIBRATION_ADVICE') {
+      const outcome = await this.roleService.saveCalibrationAdvice(
+        run.role_session_id,
+        actor,
+        result.advice,
+      )
+      await emit('artifact.updated', {
+        artifact_type: 'CALIBRATION_ADVICE',
+        disposition: result.advice.disposition,
+        calibration_status: outcome.evaluation.status,
+        signal_id: outcome.signal?.id ?? null,
+      })
+      const message = await this.createAgentSummary(run, actor, result.summary, {
+        kind: 'CALIBRATION_ADVICE',
+        disposition: result.advice.disposition,
+        action: result.advice.recommendation.action,
+        signal_id: outcome.signal?.id ?? null,
+        manager_task_created: false,
+        formal_profile_changed: false,
+      })
+      await emit('assistant.completed', { message_id: message.id, sequence: message.sequence })
+      return message
+    }
+    throw new DomainError('HARNESS_RESULT_KIND_UNSUPPORTED', 'Harness returned an unsupported result kind', 500)
   }
 
   private async createAgentSummary(
@@ -637,6 +989,7 @@ export class AgentRunner {
       id: input.id ?? randomUUID(),
       tenant_id: input.actor.tenant_id,
       role_session_id: input.roleSessionId,
+      conversation_user_id: input.actor.user_id,
       run_id: input.runId,
       clarification_round_id: input.clarificationRoundId,
       sender_type: input.senderType,

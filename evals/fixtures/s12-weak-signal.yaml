@@ -1,0 +1,41 @@
+fixture_id: s12-weak-signal-v1
+role_session_id: rs-eval-s12
+policy:
+  version: policy-v1
+  min_candidates: 10
+  min_channels: 2
+  min_repeated_bottlenecks: 2
+candidates:
+  - candidate_ref: CAND-S12-001
+    channel: 内推
+    evidence:
+      industry_experience: NOT_MENTIONED
+      platform_experience: SUPPORTED
+    bottleneck: null
+  - candidate_ref: CAND-S12-002
+    channel: 内推
+    evidence:
+      industry_experience: SUPPORTED
+      platform_experience: NOT_MENTIONED
+    bottleneck: null
+  - candidate_ref: CAND-S12-003
+    channel: 内推
+    evidence:
+      industry_experience: NOT_MENTIONED
+      platform_experience: NOT_MENTIONED
+    bottleneck: null
+feedback:
+  - candidate_ref: CAND-S12-002
+    raw: 感觉不太对
+    expected_status: NEEDS_EVIDENCE
+expected_evaluation:
+  status: OBSERVING
+  eligible: false
+  candidate_count: 3
+  channel_count: 1
+  repeated_bottleneck_count: 0
+  missing_conditions:
+    - 还需7名有效候选人
+    - 还需1个独立渠道
+    - 尚未出现2次有证据的同类卡点
+  manager_task_created: false

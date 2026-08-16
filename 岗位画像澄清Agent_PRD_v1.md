@@ -1,10 +1,10 @@
-# 岗位画像澄清 Agent PRD v1.4
+# 岗位画像澄清 Agent PRD v1.5
 
 > 文档类型：研发、测试、设计与评审使用的交付型 PRD  
 > 产品形态：基于 DeepSeek Harness 的岗位画像澄清 Agent  
 > 首个岗位范围：产品经理  
 > 技术路线：DeepSeek Harness＋岗位画像 Plugin/Bundle＋独立业务数据层  
-> 文档日期：2026-08-15  
+> 文档日期：2026-08-16
 > 确定性标记：已确认 / 推断 / 待验证
 
 ## 1. 基本信息
@@ -13,14 +13,14 @@
 | --- | --- |
 | 产品名称 | 画像澄清 Agent（Role Clarifier） |
 | 所属模块 | 招聘需求澄清与岗位定义 |
-| PRD 版本 | v1.4 |
+| PRD 版本 | v1.5 |
 | 产品负责人 | [待补充：需确认产品负责人] |
 | 研发负责人 | [待补充：需确认研发负责人] |
 | 设计负责人 | [待补充：需确认设计负责人] |
 | 测试负责人 | [待补充：需确认测试负责人] |
 | 计划 | 两天内完成可交互原型；可接真实系统的 MVP 排期另行评估 |
 | 首发终端 | 桌面 Web，推荐视口宽度不低于 1280px |
-| 当前状态 | 可运行MVP已完成：React工作台、业务API、PostgreSQL、测试登录、SSE，以及固定通过 Sidecar 运行的 DeepSeek Harness Bundle |
+| 当前状态 | 可运行 MVP 已完成：React 工作台、业务 API、PostgreSQL/内存 Store、测试登录、SSE，以及固定通过 Sidecar 运行的 DeepSeek Harness Bundle；不存在可切换的 Mock Agent 模式 |
 
 ## 2. 更新记录
 
@@ -33,6 +33,7 @@
 | v1.2 | 2026-08-15 | 产品/设计 | 重构对外JD为候选人阅读结构；合并重复的招聘背景与岗位使命，将内部成功标准转换为可公开的预期影响，明确必填/可选字段和发布校验 |
 | v1.3 | 2026-08-15 | 产品/设计 | 将对外JD收敛为“职位标题与基本信息→关于岗位→你会做什么→我们希望你具备”四段式；成功标准和协作边界作为内部生成依据，不再单独成章 |
 | v1.4 | 2026-08-15 | 产品/研发 | 固化DeepSeek Harness MVP实现：Flash/Pro路由、领域工具白名单、异步Run＋SSE、后端Session权限、候选人PII门禁及“10名候选人＋2个渠道＋2次同类卡点”的校准边界 |
+| v1.5 | 2026-08-16 | 产品/研发 | 按当前实现补齐无工具模型 Router、`RESPOND/ASK/HANDOFF` 路由协议、领域任务级工具白名单、七个工具的实际用途、Caller 持久化和 Sidecar-only 运行方式；简单问候改为模型自然回复 |
 
 ## 3. 背景、问题与目标
 
@@ -136,7 +137,7 @@
 ### 5.1 P0：两天可交互原型
 
 - 用人经理创建并重新打开一条产品经理岗位会话。
-- Mock 同步 HC、组织背景、旧 JD、历史案例和招聘约束。
+- 使用受控测试夹具同步 HC、组织背景、旧 JD、历史案例和招聘约束；测试夹具不代表存在 Mock Agent 运行模式。
 - 通过对话确认招聘原因和首个成功标准。
 - 展示用人经理三个可见模块：画像依据、评估方案、对外 JD。
 - 展示 HR 额外可见的内部招聘画像。
@@ -148,7 +149,7 @@
 
 - 接入 DeepSeek Harness Agent Loop、岗位画像 Plugin/Bundle 和独立业务数据层。
 - 持久化岗位会话、事实、证据、画像、评分卡、JD、审批和版本。
-- 接入至少一个 Mock/测试组织资料接口和一个结构化候选人批次接口。
+- 接入至少一个受控测试组织资料接口和一个结构化候选人批次接口。
 - 跑通招聘原因确认→成功标准→岗位画像→评估方案→对外 JD→HR 发布准备。
 - 跑通候选人证据→Agent识别信号→HR验证招聘信号→Agent创建经理校准任务→经理决策→新版本或继续观察。
 - 跑通已确认业务事实变化→Agent直接提醒经理校准，同时通知HR的快速路由。
@@ -600,79 +601,136 @@ JD生成约束：
 
 ## 9. Agent、LLM、Prompt 与工具要求
 
-### 9.1 Agent State
+### 9.1 运行时边界
 
-| 分类 | 字段 | 类型 | 必填 | 默认值 | 说明 |
-| --- | --- | --- | --- | --- | --- |
-| 标识 | trace_id | string | 是 | 自动生成 | 单次Agent运行链路ID |
-| 标识 | role_session_id | string | 是 | - | 业务岗位会话ID，所有工具必传 |
-| 标识 | harness_session_id | string | 是 | 创建后写入 | 运行时Session引用，不是业务事实源 |
-| 身份 | actor_user_id | string | 是 | - | 当前真实用户 |
-| 身份 | actor_role | enum | 是 | - | hiring_manager/hr/interviewer/admin |
-| 阶段 | stage | enum | 是 | CREATED | RoleSession当前阶段 |
-| 当前任务 | current_task | object | 是 | 自动生成 | task_type、title、blocking、owner |
-| 事实 | confirmed_fact_ids | string[] | 是 | [] | 已确认事实引用 |
-| 事实 | pending_fact_ids | string[] | 是 | [] | 待确认事实引用 |
-| 事实 | conflict_ids | string[] | 是 | [] | 未解决冲突 |
-| 产物 | active_profile_version | string/null | 否 | null | 当前岗位画像版本 |
-| 产物 | active_jd_version | string/null | 否 | null | 当前JD版本 |
-| 校准 | active_calibration_signal_ids | string[] | 是 | [] | 待HR审核或观察中的校准信号 |
-| 校准 | active_calibration_task_id | string/null | 否 | null | 当前需用人经理决策的校准任务 |
-| 对话 | compact_summary | string | 是 | 空 | 跨轮压缩摘要，不代替结构化事实 |
-| 对话 | next_question_candidates | object[] | 是 | [] | 待排序问题 |
-| 控制 | max_questions_per_turn | integer | 是 | 3 | 每轮最多1个主问题＋2个补充判断 |
-| 控制 | max_transitions_per_turn | integer | 是 | 10 | 防止循环 |
-| 控制 | retry_count | integer | 是 | 0 | 单节点重试计数 |
-| 风险 | risk_level | enum | 是 | low | low/medium/high |
-| 风险 | compliance_flags | string[] | 是 | [] | 敏感偏好、注入、隐私风险 |
-| 恢复 | last_persisted_event_id | string | 是 | - | 恢复和幂等检查 |
+- 产品请求只能通过 DeepSeek Harness Sidecar 执行；配置中不存在 `HARNESS_MODE`，不得提供可切换的 Mock Agent 分支。
+- 测试可以使用本地模型桩验证 JSON-RPC 协议、Prompt 注入和工具隔离，但测试桩不能成为产品降级回复路径。
+- 自由文本先进入 Flash Router。Router 只做模型理解和自然语言回复，不调用任何工具。
+- Router 返回 `HANDOFF` 后，服务端先检查角色、业务阶段和数据条件，再启动对应领域任务。
+- 产物生成 API 和候选人导入 API 已经明确表达任务，可以跳过自由文本 Router，直接执行权限与阶段门禁。
+- Flash 用于 Router、岗位澄清和候选人证据提取；Pro 用于四类正式产物、校准建议和版本比较。
 
-State写入规则：结构化业务事实只能通过业务工具写入；LLM回复文本、Harness Memory或对话摘要不得直接成为`CONFIRMED`事实。
+### 9.2 自由文本路由与领域任务
 
-### 9.2 LLM 节点
+```mermaid
+flowchart TD
+    A["用户自由文本"] --> B["Flash Router<br/>工具数 = 0"]
+    B -->|"RESPOND"| C["模型自然回答<br/>不写业务数据"]
+    B -->|"ASK"| D["只问一个决定下一步的问题<br/>不写业务数据"]
+    B -->|"HANDOFF"| E["服务端权限 / 阶段 / 数据门禁"]
+    E --> F["任务级 Tool Schema 白名单"]
+    F --> G["Flash / Pro 领域任务"]
+    G --> H["Schema 与业务规则校验"]
+    H --> I["保存结果并返回 SSE"]
+```
 
-| 节点 | 用途 | 输入 | 结构化输出 | 失败处理 | 对应 Eval |
-| --- | --- | --- | --- | --- | --- |
-| L-01 上下文事实提取 | 从组织资料、JD、案例提取原子事实 | 允许字段＋文档片段＋来源元数据 | facts[]、conflict_candidates[] | 解析失败重试1次；失败标记来源不可用 | S-03、S-10 |
-| L-02 澄清计划 | 选择当前最高价值问题 | State＋缺失/冲突＋阶段门禁 | question、options、why_blocking、target_fields | 输出无target_fields则回退规则题 | S-01、S-02 |
-| L-03 画像推导 | 从成功标准反推工作和人才要求 | 已确认事实＋结果＋约束＋案例 | profile_patch、evidence_links、assumptions | 无证据Must-have被规则拒绝 | S-01至S-03 |
-| L-04 评估方案生成 | 生成评分卡 | 画像要求＋证据标准 | dimensions[]、weights、anchors | 权重/锚点校验失败后定向修复1次 | S-01 |
-| L-05 JD生成 | 将内部画像投影为候选人四段式阅读结构 | 公开字段白名单＋已确认画像＋SuccessOutcome＋RoleBoundary＋HR渠道字段 | job_header、about_role、responsibilities[]、candidate_requirements[]＋Markdown | 先执行四段结构、数量、重复、可公开性和内部信息泄露检查；失败不覆盖旧版 | S-06、S-08 |
-| L-06 简历证据提取 | 对要求提取候选人证据 | 脱敏简历＋要求 | evidence_status、quote_span、needs_interview | 无原文定位则不得输出explicit | S-04 |
-| L-07 反馈结构化 | 把主观反馈转成可观察证据 | raw_feedback＋评分卡 | status、target_dimension、followup_question | 敏感属性直接转HR复核 | S-05 |
-| L-08 校准信号与建议 | 按策略汇总业务事实、候选人、漏斗和反馈信号 | 当前版本＋已确认事实＋批次证据＋渠道范围＋calibration_policy | signal_type、trigger_rule、requires_hr_review、proposal、before/after、impact、confidence_note | 样本/渠道不足进入OBSERVING；不得越过HR审核或经理决策 | S-04、S-05、S-11、S-12 |
+Router 只允许以下三种结构化动作：
 
-### 9.3 Prompt 汇总
+| 动作 | 适用情况 | 结果要求 |
+| --- | --- | --- |
+| `RESPOND` | 问候、致谢、能力询问、普通问题、当前岗位状态查询、越界或无权限请求、自由文本候选人分析请求 | 模型根据当前消息和已过滤的 `role_state_summary` 自然回复；工具数必须为 0，不得声称已修改数据 |
+| `ASK` | 无法判断查询/修改/生成、缺少产物类型或版本号、同时包含多个独立动作 | 只提出一个可以确定下一步任务的问题；工具数必须为 0 |
+| `HANDOFF` | 用户明确提出一个可执行领域任务 | 只输出任务标识；执行权限与业务门禁由服务端判断 |
 
-| Prompt | 调用节点 | 模型 | 输出格式 | 关键约束 |
+本设计不把“意图不明确”和“超出范围”另算成业务意图：前者映射为 `ASK`，后者映射为 `RESPOND`。简单问候也不是本地固定回复，而是 Router 的一次真实模型调用。
+
+领域任务如下：
+
+| 领域任务 | 入口 | 模型 | 主要结果 |
+| --- | --- | --- | --- |
+| `CLARIFY_MESSAGE` | Router `HANDOFF` | Flash | 保存岗位身份/事实草稿并提出一个具体问题 |
+| `GENERATE_ROLE_PROFILE` | Router `HANDOFF` 或产物 API | Pro | 生成岗位画像草稿 |
+| `GENERATE_ASSESSMENT` | Router `HANDOFF` 或产物 API | Pro | 生成评估方案草稿 |
+| `GENERATE_JD` | Router `HANDOFF` 或产物 API | Pro | 生成四段式公开 JD 草稿 |
+| `GENERATE_HR_BRIEF` | Router `HANDOFF` 或产物 API | Pro | 生成仅 HR/管理员可见的招聘画像草稿 |
+| `CALIBRATION_ADVICE` | Router `HANDOFF` | Pro | 基于服务端脱敏聚合与 10/2/2 结果生成观察或待 HR 审核建议 |
+| `VERSION_COMPARISON` | Router `HANDOFF` | Pro | 解释同类产物两个指定版本的差异 |
+| `EXTRACT_CANDIDATES` | 仅候选人导入 API | Flash | 提取脱敏候选人证据；自由文本 Router 不得启动 |
+
+自由文本 `RESPOND/ASK` 只调用一次 Router 模型；`HANDOFF` 通常调用一次 Router 加一次领域模型。明确的产物生成和候选人导入 API 只调用对应领域模型。
+
+### 9.3 Agent Run 与状态上下文
+
+| 分类 | 字段 | 来源 | 说明 |
+| --- | --- | --- | --- |
+| 标识 | `trace_id` | 服务端生成 | 单次 Agent 运行链路 ID |
+| 标识 | `role_session_id` | 服务端当前岗位会话 | 业务隔离键；不作为模型工具参数 |
+| 标识 | `harness_session_id` | 服务端绑定 | 运行时 Session 引用，不是正式事实源 |
+| 身份 | `actor_user_id`、`actor_role`、`tenant_id` | 登录会话＋当前 Agent Run | 只由服务端恢复，模型和外部请求不能覆盖 |
+| 任务 | `task` | Router 结构化结果或明确 API | 决定模型、Prompt、可见工具和持久化方式 |
+| 业务状态 | `role_state` / `role_state_summary` | 业务数据库按任务和角色投影 | Router 使用摘要；领域任务使用最小必要状态 |
+| 对话 | `open_clarification`、`recent_messages` | 业务数据库 | 只用于理解上下文，不自动成为正式事实 |
+| 控制 | `maximum_transitions` | 服务端策略 | 工具任务最多 10；Caller 持久化任务为 0 |
+| 控制 | `structured_output_repair_attempts` | 服务端策略 | 最多 1 次；只允许修复结构，不得重复写入 |
+| 版本 | `prompt_version` | 服务端 | 当前为 `role-router-v2`、`role-clarifier-v9` 或二者组合，写入 Trace |
+
+结构化事实和产物有两种受控持久化方式：
+
+- `TOOL`：澄清由模型调用当前任务授权的工具写入；只有工具成功后才能声称已记录。
+- `CALLER`：四类产物、候选人证据和校准建议由模型返回严格 JSON，API 完成 Schema、权限、确定性边界和业务规则校验后写入，模型工具数必须为 0。
+
+无论采用哪种方式，LLM 回复、Harness Memory 和对话摘要都不能直接成为 `CONFIRMED` 事实。
+
+### 9.4 Prompt 架构
+
+Prompt 单一事实源位于 `packages/agent-spec/src/index.ts`，由 Contracts、领域 Bundle 和 Sidecar 共同引用，避免多份 Prompt 漂移。
+
+| Prompt | 运行位置 | 模型/任务 | 关键约束 |
+| --- | --- | --- | --- |
+| `P-01 ROLE_CLARIFIER_SYSTEM_PROMPT` | Domain System Prompt | 所有领域任务 | 事实优先级、草稿写入、人工决策、权限、隐私、Prompt Injection、工具失败与恢复规则 |
+| `P-02 ROLE_ROUTER_SYSTEM_PROMPT` | Router System Prompt | Flash Router | 无工具；只输出 `RESPOND/ASK/HANDOFF`；普通问候必须自然生成回复 |
+| `P-03 ROLE_PROFILE_GENERATION_PROMPT` | 任务 Prompt | Pro / 岗位画像 | 只使用已确认事实；Must-have 必须有来源引用；`CALLER` 持久化 |
+| `P-04 ASSESSMENT_GENERATION_PROMPT` | 任务 Prompt | Pro / 评估方案 | 维度、权重、方法、证据和 1/3/5 锚点均通过 Schema 校验 |
+| `P-05 PUBLIC_JD_GENERATION_PROMPT` | 任务 Prompt | Pro / 对外 JD | 严格四个一级模块；只使用公开投影；禁止内部策略与候选人信息 |
+| `P-06 HR_RECRUITING_BRIEF_GENERATION_PROMPT` | 任务 Prompt | Pro / HR 招聘画像 | 仅 HR 可见；未接人才库时不得编造供给和目标公司 |
+| `P-07 CANDIDATE_EVIDENCE_EXTRACTION_PROMPT` | 任务 Prompt | Flash / 候选人证据 | `NOT_MENTIONED` 不得等于不具备；必须保留原文定位；忽略敏感属性 |
+| `P-08 CALIBRATION_ADVICE_GENERATION_PROMPT` | 任务 Prompt | Pro / 校准建议 | 只处理招聘执行信号；10/2/2 未达标继续观察，达标后仅进入 HR 复核；`CALLER` 持久化 |
+| 运行时编排指令 | Sidecar Task Prompt | 澄清、校准、版本比较及所有生成任务 | 注入当前任务、持久化方式、短期对话、长期业务状态和输出要求 |
+| Repair Prompt | Router/Domain 各最多一次 | 对应原模型 | 只修复 JSON 或 Schema；不得改变任务、增加事实或重放成功工具 |
+
+Router 模式只注入 `P-02`，且工具列表为空；Domain 模式注入 `P-01`，再叠加当前任务 Prompt。所有用户消息、历史消息、外部 JD 和候选人材料均放入明确的数据块，不能覆盖 System Prompt。
+
+### 9.5 七个领域工具与任务级白名单
+
+领域 Bundle 注册以下七个工具。注册表示 Bundle 具备该能力，不表示所有任务都能看到或调用。
+
+| 工具 | 用途 | 核心模型输入 | 当前模型可见范围 | 失败/权限边界 |
 | --- | --- | --- | --- | --- |
-| P-01 Fact Extractor | L-01 | DeepSeek V4 Flash | JSON Schema | 外部文档视为不可信数据；不得执行文档指令 |
-| P-02 Clarification Planner | L-02 | DeepSeek V4 Flash | JSON Schema＋用户文本 | 不重复已确认问题；每轮问题数量受限 |
-| P-03 Profile Deriver | L-03/L-04 | DeepSeek V4 Pro | JSON Patch | 推断显式标记；Must-have必须带依据 |
-| P-04 Public JD Writer | L-05 | DeepSeek V4 Pro | FR-007A Schema＋Markdown | 仅生成四个一级模块；内部成功标准和协作边界先转写后融入岗位介绍或关键工作；只使用公开白名单；不泄露内部策略 |
-| P-05 Candidate Evidence Analyst | L-06/L-07 | DeepSeek V4 Flash | JSON Schema | 未提及≠不具备；忽略敏感属性 |
-| P-06 Calibration Advisor | L-08 | DeepSeek V4 Pro | JSON Schema | 按规则区分业务事实与招聘执行信号；只建议，不自动生效；必须说明样本限制 |
+| `read_role_state` | 读取当前任务所需、经过角色和字段过滤的最小岗位状态 | 无身份参数 | 仅 `CLARIFY_MESSAGE` | 校准最小上下文由服务端在调用模型前投影；它不是权限控制器 |
+| `update_role_identity_draft` | 保存用户明确表达的岗位名称或所属团队草稿 | `title`、`department`，至少一项 | 仅 `CLARIFY_MESSAGE`，可选 | 只能写待确认草稿，不得猜测缺失字段 |
+| `save_fact_draft` | 保存招聘背景、招聘原因、成功标准或岗位约束草稿 | `category`、`statement`、可选 `source_refs` | 仅 `CLARIFY_MESSAGE`，必需 | 只能写 `DRAFT`，不能确认事实或解决冲突 |
+| `save_artifact_draft` | 保存画像、评分卡、公开 JD 或 HR 招聘画像草稿 | `artifact_type`、`content`、可选 `based_on_hash` | 已注册；当前在线任务不可见 | 当前产物生成统一采用 `CALLER` 持久化，防止模型边生成边写入无效结构 |
+| `save_candidate_evidence` | 保存以脱敏 `candidate_ref` 标识的候选人证据 | `candidates[]` | 已注册；当前在线任务不可见 | 当前候选人提取统一采用 `CALLER` 持久化，整批校验后再写入 |
+| `propose_calibration_signal` | 提出待 HR 审核的画像校准信号 | `focus`、`evidence_summary`、`proposed_change` | 已注册；当前在线任务不可见 | P-08 统一采用 `CALLER` 持久化，避免工具写入与最终 Schema 分离 |
+| `read_version_diff` | 读取同类正式产物两个版本的授权差异 | `artifact_type`、`from_version`、`to_version` | 仅 `VERSION_COMPARISON`，必需 | 只读；版本和类型必须与 Router 任务一致 |
 
-所有Prompt必须包含：角色和任务、允许使用的字段、事实优先级、Few-shot正反例、输出Schema、拒绝/兜底规则、敏感属性和Prompt Injection处理。Prompt版本写入Agent trace。
+任务级策略以 `packages/agent-spec/src/index.ts` 中的 `HARNESS_TASK_TOOL_POLICY` 为唯一事实源：
 
-### 9.4 工具和技能调用
+| 任务 | 允许工具 | 必需成功工具 | 持久化 |
+| --- | --- | --- | --- |
+| Router `RESPOND/ASK/HANDOFF` | 无 | 无 | `NONE` |
+| `CLARIFY_MESSAGE` | `read_role_state`、`update_role_identity_draft`、`save_fact_draft` | `read_role_state`、`save_fact_draft` | `TOOL` |
+| 四类 `GENERATE_*` | 无 | 无 | `CALLER` |
+| `EXTRACT_CANDIDATES` | 无 | 无 | `CALLER` |
+| `CALIBRATION_ADVICE` | 无 | 无 | `CALLER` |
+| `VERSION_COMPARISON` | `read_version_diff` | `read_version_diff` | `NONE` |
 
-| 工具 | 用途 | 触发条件 | 核心输入 | 输出 | 超时/重试/失败处理 |
-| --- | --- | --- | --- | --- | --- |
-| `read_role_state` | 读取经过权限过滤的业务状态 | 每轮开始/恢复 | 无身份参数 | RoleState | 3s；失败停止生成 |
-| `save_fact_draft` | 保存原子事实草稿 | 资料提取/用户回答 | category、statement、source_refs | fact_id | 只能写DRAFT；不能确认或解决冲突 |
-| `save_artifact_draft` | 保存画像/评分卡/JD/HR画像草稿 | 结构化输出校验通过 | artifact_type、content、based_on_hash | draft_version | 乐观锁；409要求刷新 |
-| `save_candidate_evidence` | 保存脱敏候选人证据 | Flash提取完成 | candidate_ref、channel、evidence、bottlenecks | evidence_id | 检出PII即拒绝；不接受姓名/联系方式 |
-| `propose_calibration_signal` | 提出待HR审核的校准信号 | 命中10/2/2边界 | focus、evidence_summary、proposed_change | signal_id | 不能审核、创建经理任务或生效 |
-| `read_version_diff` | 读取版本差异 | 查看版本/重新生成 | artifact_type、from_version、to_version | diff | 只返回有权限字段 |
+`read_role_state` 本身不负责“控制权限”。权限由服务端完成：
 
-工具通用规则：模型工具参数不接受`role_session_id`、`actor_role`、`actor_user_id`、`tenant_id`或`trace_id`；这些字段由服务端根据已签发的Agent Run上下文注入。冲突解决、正式确认、发布准备、HR审核和经理校准决策仅通过人工业务API执行，不暴露给模型。
+1. Bundle 创建 Agent 时使用 `tools.restrict()`，从模型请求中移除当前任务之外的 Tool Schema，减少误调用和 Token。
+2. Sidecar Executor 拒绝实际调用过的白名单外工具，并检查每个必需工具是否成功。
+3. 内部工具 API 根据 `x-harness-session-id` 找到当前岗位和活跃 Agent Run，再按 Run 的任务执行同一份白名单；越界调用返回 `403`。
+4. 业务服务继续校验租户、成员、角色、字段可见域、阶段、PII、Schema、内容哈希和乐观锁。
 
-### 9.5 Answer 与 Trace 评测边界
+模型工具参数不得接受 `role_session_id`、`actor_role`、`actor_user_id`、`tenant_id`、`agent_run_id` 或 `trace_id`。这些身份和链路字段由服务端注入。冲突解决、正式确认、发布准备、HR 审核和经理校准决策只通过人工业务 API 执行，不暴露给模型。
 
-- Eval Answer检查最终问题、画像、评估方案、JD和校准建议是否准确、完整、可执行、可追溯和合规。
-- Eval Trace检查工具选择、参数、权限、状态、分支、重试、版本、Prompt版本、token、延迟和失败恢复。
-- 任何P0权限越权、正式产物自动发布、敏感属性写入或无依据Must-have均判定整条Case失败。
+### 9.6 Answer 与 Trace 评测边界
+
+- Eval Answer 检查普通回复、澄清问题、画像、评估方案、JD、候选人证据和校准建议是否准确、自然、完整、可执行、可追溯且合规。
+- Eval Trace 检查 Router 动作、领域任务、模型选择、可见工具、实际工具调用、服务端门禁、状态、重试、版本、Prompt 版本、Token、延迟和失败恢复。
+- 问候和普通对话必须有真实 Router 模型请求，`tool_count=0`，且不得产生岗位事实或产物写入。
+- 任何白名单外工具调用都必须使 Run 失败；只依靠 Prompt 告知模型“不要调用”不算通过。
+- 任何 P0 权限越权、正式产物自动发布、敏感属性写入、无依据 Must-have 或 Caller 结果绕过 Schema 校验，均判定整条 Case 失败。
 
 ## 10. 数据模型与接口
 
@@ -918,6 +976,9 @@ State写入规则：结构化业务事实只能通过业务工具写入；LLM回
 | M-14 工具调用成功率 | 非权限/非业务拒绝工具调用的成功比例 | 可执行工具调用数 | 成功调用数 | [NEEDS CLARIFICATION: 完成接口Spike后设阈值] | Agent Trace | 每日/每周 |
 | M-15 澄清轮数与成本 | 从初始需求到JD经理确认的回合、token和模型费用 | 完成岗位数 | 平均/分位值 | 首期只采集基线，不设目标 | Agent日志 | 每周 |
 | M-16 校准路由正确率 | 测试中业务事实直达经理、招聘信号先经HR、排除信号不提醒的正确比例 | 校准路由测试数 | 正确路由数 | 100% | Answer＋Trace Eval | 每版本 |
+| M-17 Router动作正确率 | 自由文本被正确映射为 `RESPOND`、`ASK` 或正确 `HANDOFF` 任务的比例 | Router评测样本数 | 动作与任务均正确数 | P0样本100% | Router离线评测＋Trace | 每版本 |
+| M-18 无工具对话隔离率 | `RESPOND`、`ASK`、产物Caller任务和候选人Caller任务保持 `tool_count=0` 的比例 | 应为零工具的Run数 | 实际零工具Run数 | 100% | Agent Trace | 每版本/持续 |
+| M-19 越界工具阻断率 | 白名单外工具在模型可见层、Executor或内部API任一层被阻断的比例 | 越界工具攻击测试数 | 被阻断且无业务写入数 | 100% | 安全测试＋审计日志 | 每版本 |
 
 ### 13.2 验收标准
 
@@ -929,7 +990,7 @@ State写入规则：结构化业务事实只能通过业务工具写入；LLM回
 | SC-004 | Given旧JD与经理说法冲突，When同步完成，Then相关事实为CONFLICTED且系统不静默选择 | FR-002/FR-010/M-04 | P0 |
 | SC-005 | Given HC未审批或未知，When用户请求生成画像，Then系统阻断并提示先完成HC审批 | FR-003/M-07 | P0 |
 | SC-006 | Given HC已审批，When进入澄清，Then系统明确不重新评审是否招聘，并要求确认业务变化、组织缺口和招聘结论 | FR-003/M-01 | P0 |
-| SC-007 | Given已有确认事实，WhenAgent生成下一问题，Then不重复询问该事实且每轮不超过3个问题 | FR-004/M-01 | P1 |
+| SC-007 | Given已有确认事实，WhenAgent生成下一问题，Then不重复询问该事实且每轮最多提出1个问题 | FR-004/M-01 | P1 |
 | SC-008 | Given生成岗位画像，When存在Must-have，Then每一项均有成功标准、任务或硬约束引用 | FR-005/M-03 | P0 |
 | SC-009 | Given同行业经验没有必要性证据，When生成画像，Then将其标记为Preferred或待确认，不自动成为Must-have | FR-005/M-01 | P0 |
 | SC-010 | Given评估方案生成完成，When校验，Then权重合计100%，每个核心维度有方法、问题、证据和1/3/5锚点 | FR-006/M-07 | P0 |
@@ -959,12 +1020,20 @@ State写入规则：结构化业务事实只能通过业务工具写入；LLM回
 | SC-034 | Given内部SuccessOutcome含待确认数字、绩效基线或不可公开承诺，When生成JD，Then只将已确认可公开的结果转写进 `about_role` 或 `responsibilities`，不生成独立结果章节 | FR-007/M-09/M-10 | P0 |
 | SC-035 | Given岗位背景、使命、成功结果、工作和边界含语义重复，When生成JD，Then背景、使命、主要影响合并为“关于岗位”，结果和必要边界融入工作条目，不出现连续复制或额外章节 | FR-007/M-09 | P0 |
 | SC-036 | Given加分经历、招聘流程、福利或平等机会模板存在或缺失，When生成JD，Then不生成额外一级模块或“待补充”占位文案；必填的岗位名、团队、地点或雇佣类型缺失时则阻断发布 | FR-007/M-09/M-10 | P0 |
+| SC-037 | Given用户发送“你好”等简单问候，When自由文本Run完成，Then Flash Router调用模型生成自然回复，Trace中存在模型请求且 `tool_count=0`，不新增事实、产物、候选人证据或校准信号 | M-17/M-18 | P0 |
+| SC-038 | Given用户询问当前岗位进度，When Router根据已过滤的 `role_state_summary` 回答，Then不调用 `read_role_state` 或其他工具，且不返回当前角色无权查看的字段 | M-11/M-17/M-18 | P0 |
+| SC-039 | Given用户明确补充招聘原因，When Router交接 `CLARIFY_MESSAGE`，Then领域模型只看到 `read_role_state`、`update_role_identity_draft`、`save_fact_draft`，并至少成功调用读取状态和保存事实两个工具 | M-17/M-19 | P0 |
+| SC-040 | Given用户请求生成岗位画像或通过导入入口提交候选人，When领域模型返回结果，Then模型工具数为0，服务端完成Schema、权限与业务规则校验后才保存Caller结果 | M-05/M-18/M-19 | P0 |
+| SC-041 | Given模型尝试调用当前任务白名单外工具，WhenSidecar执行或内部工具API收到调用，ThenRun失败或请求返回403，且业务对象无变化 | M-05/M-19 | P0 |
+| SC-042 | Given用户在普通聊天中粘贴候选人资料并要求分析，When Router处理，Then返回 `RESPOND` 引导使用候选人导入入口，不交接 `EXTRACT_CANDIDATES`，不把材料写入业务层 | M-06/M-17/M-18 | P0 |
 
 ### 13.3 埋点事件
 
 | 事件名 | 触发时机 | 必填参数 | 可选参数 | 去重键 | 敏感信息 |
 | --- | --- | --- | --- | --- | --- |
 | `role_session_created` | 创建成功 | tenant_id、role_session_id、creator_role、trace_id | hr_invited | role_session_id | 不含需求正文 |
+| `agent_route_decided` | Router完成自由文本判断 | role_session_id、run_id、route_action、model、prompt_version、tool_count | route_task、repair_count | run_id | 不记录隐藏推理；用户原文只在受控Trace中保存 |
+| `tool_policy_rejected` | Executor或内部API拒绝越界工具 | role_session_id、run_id、task、tool_name、enforcement_layer | model、trace_id | run_id+tool_name+layer | 不记录工具敏感参数 |
 | `context_sync_completed` | 一轮同步结束 | role_session_id、source_statuses、duration_ms、trace_id | retry_count | trace_id+source | 不含文档正文 |
 | `clarification_question_shown` | 问题展示 | role_session_id、stage、target_field_ids、prompt_version | option_count | trace_id+turn_id | 不含用户回答 |
 | `clarification_question_answered` | 回答提交成功 | role_session_id、stage、actor_role、turn_id | answer_type | client_message_id | 不上传回答正文到分析平台 |
@@ -989,7 +1058,7 @@ State写入规则：结构化业务事实只能通过业务工具写入；LLM回
 
 | Case | 场景/前置条件 | 输入 | 期望Answer | 关键Trace | 覆盖Metric |
 | --- | --- | --- | --- | --- | --- |
-| S-01 模糊需求 | HC已审批，只有一句需求 | “需要一个懂B端的产品经理” | 先澄清招聘原因和成功标准，不直接生成通用JD | 正确读取State；问题不超过3个 | M-01、M-03、M-07 |
+| S-01 模糊需求 | HC已审批，只有一句需求 | “需要一个懂B端的产品经理” | 先澄清招聘原因和成功标准，不直接生成通用JD | 正确读取State；每轮最多1个问题 | M-01、M-03、M-07 |
 | S-02 代理条件 | 经理提出同行业硬门槛 | “必须有三年同行业经验” | 追问规避的风险，保留/行为化/替代供选择 | 不擅自删除；记录pending | M-01、M-03 |
 | S-03 资料冲突 | 旧JD偏交付，经理称转标准化 | “旧JD直接复用，但现在做标准化” | 展示冲突并要求有效事实确认 | 状态CONFLICTED；阻断确认 | M-04、M-07 |
 | S-04 简历校准 | 15份简历低命中，来自多个渠道 | “市场上找不到两个要求都满足的人” | 区分样本信号与市场结论，先向HR发起信号审核；HR验证后再向经理创建校准任务 | 未直接改V0；未越过HR审核；保留样本范围 | M-02、M-06、M-16 |
@@ -1023,9 +1092,11 @@ State写入规则：结构化业务事实只能通过业务工具写入；LLM回
 | Trace项 | 必须检查 |
 | --- | --- |
 | 上下文分层 | System Prompt、当前用户输入、短期会话记忆、长期岗位记忆与当前任务状态是否来源清晰、互不混淆 |
-| 工具选择 | 是否在正确阶段调用正确业务工具，是否避免无必要调用 |
-| 参数 | role_session_id、actor、version、idempotency_key、trace_id是否正确 |
-| 权限 | 工具是否使用后端身份；越权是否在返回数据前拒绝 |
+| 路由 | 自由文本是否输出合法 `RESPOND/ASK/HANDOFF`；交接任务是否与用户明确意图一致；简单问候是否确有模型调用 |
+| 工具可见性 | 模型请求中的 Tool Schema 是否严格等于当前任务白名单；零工具任务是否完全不包含 Tool Schema |
+| 工具执行 | 是否拒绝白名单外调用；必需工具是否成功；工具次数是否符合任务上限 |
+| 参数 | 模型只提交业务参数；`role_session_id`、actor、tenant和trace是否由服务端Run上下文正确注入；版本参数是否与任务一致 |
+| 权限 | 工具和Caller持久化是否都使用后端身份；越权是否在返回数据或写入前拒绝 |
 | 状态 | Fact、RoleSession、Approval和JD状态是否按规则变化 |
 | 分支 | HC、冲突、校准信号类型、HR审核、样本不足、合规和发布门禁是否走正确路径 |
 | 失败恢复 | 单源失败、模型解析失败、运行时恢复是否保持正式产物不变 |
@@ -1036,8 +1107,8 @@ State写入规则：结构化业务事实只能通过业务工具写入；LLM回
 
 以下条件必须全部满足才允许MVP进入演示/试点：
 
-- S-01至S-12的P0断言100%通过。
-- M-03、M-04、M-07、M-08、M-09、M-16均达到100%。
+- S-01至S-12及SC-037至SC-042的P0断言100%通过。
+- M-03、M-04、M-07、M-08、M-09、M-16、M-17、M-18、M-19均达到100%。
 - M-05、M-06、M-10、M-11均为0。
 - 用人经理和HR分别完成至少5个岗位样本盲评，M-01和M-02均大于等于4.0/5。
 - 安全测试证明经理无法通过前端、API参数或直接URL读取HR内部数据。
@@ -1055,12 +1126,12 @@ State写入规则：结构化业务事实只能通过业务工具写入；LLM回
 | A-03 | 一岗位一会话能够降低恢复成本且不会限制异步协作 | 5次中断恢复和两角色协作测试 | 推断 |
 | A-04 | 画像→评估→JD链能减少JD和实际面试标准偏差 | 与现有JD盲评 | 待验证 |
 | A-05 | 首批候选人反馈能暴露隐藏要求和画像过窄问题 | 5个真实岗位校准 | 待验证 |
-| A-06 | DeepSeek Harness可支持两天原型后的MVP扩展 | Workspace/Session/Plugin/恢复Spike | 部分验证：Bundle、工具Schema和适配边界已完成；npm未发布0.1.0-rc.5组合包，真实运行Smoke Test待上游发布物 |
+| A-06 | DeepSeek Harness可支持两天原型后的MVP扩展 | Workspace/Session/Plugin/恢复Spike | 已完成本地验证：固定官方源码提交可构建，Bundle、Router/Domain System Prompt、JSON-RPC、任务级工具可见性和本地模型桩Smoke Test已跑通；真实模型端到端仍依赖有效DeepSeek Key和目标环境网络 |
 
 ### 15.2 依赖
 
 - 企业身份、会话成员和角色授权服务。
-- HC/招聘申请、组织、旧JD、历史案例的可用字段或Mock。
+- HC/招聘申请、组织、旧JD、历史案例的可用字段或受控测试夹具；测试夹具不构成Mock Agent运行模式。
 - DeepSeek模型服务和Harness运行时。
 - 独立业务数据库及对象存储/文档引用能力。
 - 候选人脱敏和结构化导入方案。
@@ -1076,7 +1147,7 @@ State写入规则：结构化业务事实只能通过业务工具写入；LLM回
 | 候选人样本代表性不足 | 错误放宽或加严 | 保存渠道和样本范围；输出限制语；人工确认 |
 | Agent校准提醒过多 | 用人经理忽略待办或对系统失去信任 | 业务事实与招聘信号分路由；招聘信号先经HR审核；弱信号进入观察；同一信号幂等 |
 | 角色权限实现不完整 | 内部策略或候选人隐私泄露 | 后端对象/字段鉴权；安全测试；审计日志 |
-| Prompt Injection | 工具越权或事实污染 | 外部数据隔离；允许字段Schema；工具权限不受文档控制 |
+| Prompt Injection | 工具越权或事实污染 | 外部数据隔离；允许字段Schema；`tools.restrict()`隐藏无关工具；Executor和内部API重复校验任务白名单；业务服务最终鉴权 |
 | Harness Developer Preview变化 | 插件或Session恢复失效 | 独立业务层；版本锁定；集成测试；可重新绑定运行时 |
 | 多人并发修改 | 覆盖确认和版本混乱 | 乐观锁、内容哈希、确认失效和差异提示 |
 | JD过度内部化或内容重复 | 候选人难以快速理解机会、影响和要求，或泄露内部策略 | 按FR-007A生成公开投影；合并背景与使命；分离影响与工作；公开字段白名单；发布前重复和泄露扫描 |
@@ -1100,6 +1171,6 @@ State写入规则：结构化业务事实只能通过业务工具写入；LLM回
 
 1. 先实现独立业务对象、状态机、权限和版本门禁，再接入模型生成；不得先用对话日志代替业务事实。
 2. 先跑通S-01、S-03、S-06、S-07、S-08和S-09六条P0骨架，再扩展S-04、S-05、S-11和S-12的校准路由。
-3. Plugin/Bundle只暴露读取状态、保存事实草稿、保存产物草稿、保存候选人证据、提出校准信号和读取版本差异六个模型工具；所有人工决策走业务API。
+3. Plugin/Bundle注册 `read_role_state`、`update_role_identity_draft`、`save_fact_draft`、`save_artifact_draft`、`save_candidate_evidence`、`propose_calibration_signal`、`read_version_diff` 七个领域工具；运行时必须按9.5任务策略最小暴露，其中产物生成、候选人提取与校准建议采用Caller持久化、模型工具数为0。所有人工决策走业务API。
 4. 前端继续复用当前Harness风格工作台；测试角色通过后端登录切换，权限不得由前端状态或URL参数决定。
 5. 每个PR合并前运行规则测试、权限测试、Answer Eval和Trace Eval；发布门禁失败不得人工跳过。
