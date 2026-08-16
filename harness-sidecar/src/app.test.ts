@@ -5,7 +5,6 @@ import { loadSidecarConfig } from './config.js'
 import {
   HarnessExecutor,
   maxTokensForTask,
-  quickConversationReply,
   recoverResultFromTool,
 } from './executor.js'
 import { buildContextSnapshot, buildTaskPrompt } from './prompts.js'
@@ -100,10 +99,12 @@ describe('Harness sidecar', () => {
     expect(result).toMatchObject({ kind: 'CONVERSATION', persistence: 'NONE' })
   })
 
-  it('routes capability questions to a direct answer without consuming clarification', () => {
-    const reply = quickConversationReply({ ...request, message: '你在吗？你可以干啥？' })
-    expect(reply).toContain('我在')
-    expect(reply).toContain('普通提问我会直接回答')
+  it('sends greetings and capability questions through the model prompt', () => {
+    const prompt = buildTaskPrompt({ ...request, message: '你好，你可以做什么？' })
+    expect(prompt).toContain('你好，你可以做什么？')
+    expect(prompt).toContain('不要套用固定模板')
+    expect(prompt).toContain('不要调用 read_role_state 或其他领域工具')
+    expect(prompt).toContain('"kind":"CONVERSATION"')
   })
 
   it('caps Flash token budgets without shrinking Pro artifact generation', () => {
@@ -112,23 +113,9 @@ describe('Harness sidecar', () => {
     expect(maxTokensForTask('GENERATE_JD', 16_384)).toBe(16_384)
   })
 
-  it('falls back to a conversation result when no fact tool was called', () => {
-    const result = recoverResultFromTool({ ...request, message: '你能做什么？' }, [])
-    expect(result).toMatchObject({ kind: 'CONVERSATION', persistence: 'NONE' })
-  })
-
-  it('uses the no-tool intent router for direct capability questions', async () => {
-    const execution = await new HarnessExecutor(config).execute(
-      { ...request, message: '你在吗？你可以干啥？' },
-      new AbortController().signal,
-    )
-    expect(execution.result.kind).toBe('CONVERSATION')
-    expect(execution.trace).toMatchObject({
-      model: 'intent-router-v1',
-      provider: 'local-intent-router',
-      tool_count: 0,
-    })
-    expect(execution.events.some((event) => event.type === 'context.snapshot')).toBe(true)
+  it('does not fabricate a canned conversation when model output is invalid', () => {
+    expect(() => recoverResultFromTool({ ...request, message: '你能做什么？' }, []))
+      .toThrow('Cannot recover a model-generated conversation')
   })
 
   it('recovers a relevant clarification answer from exact saved tool arguments', () => {

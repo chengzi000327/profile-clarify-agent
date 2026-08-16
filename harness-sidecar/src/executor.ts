@@ -29,7 +29,7 @@ export interface SidecarExecution {
   events: SidecarEvent[]
   trace: {
     model: string
-    provider: 'deepseek-official' | 'local-intent-router'
+    provider: 'deepseek-official'
     harness_source_version: '0.1.0-rc.5'
     harness_commit: string
     tool_count: number
@@ -42,22 +42,6 @@ export interface SidecarExecution {
 }
 
 const HARNESS_COMMIT = '47f943859bef60e4160492346772ded9b24f765a'
-
-export const quickConversationReply = (request: HarnessRequest): string | null => {
-  if (request.task !== 'CLARIFY_MESSAGE') return null
-  const message = request.message?.trim() ?? ''
-  if (!message) return null
-  if (/你在吗|在不在|你(可以|能|会).*(干啥|做什么|做些?什么)|你能干啥|有什么功能|怎么使用你|怎么用你|帮助/.test(message)) {
-    return '我在。你可以把我当作这个岗位的招聘共创助手：我能回答岗位和招聘流程问题，梳理招聘原因与成功标准，生成岗位画像、评估方案和四段式 JD，也能基于脱敏候选人证据提出校准建议。普通提问我会直接回答；只有你补充岗位事实或实质回答当前澄清题时，我才会保存草稿并推进主动澄清轮次。'
-  }
-  if (/^(你好|您好|嗨|hi|hello)[!！。,.，\s]*$/i.test(message)) {
-    return '你好，我在。你可以直接问我岗位或招聘相关问题，也可以补充招聘原因、成功标准或岗位约束；我会先判断你的意图，再决定是直接回答还是进入岗位澄清。'
-  }
-  if (/^(谢谢|感谢|收到|明白了|好的)[!！。,.，\s]*$/.test(message)) {
-    return '不客气。你可以继续提问；如果要推进岗位澄清，也可以直接补充招聘原因、成功标准或当前问题的答案。'
-  }
-  return null
-}
 
 export const maxTokensForTask = (task: HarnessTask, configuredMaximum: number): number => {
   if (task === 'CLARIFY_MESSAGE') return Math.min(configuredMaximum, 4_096)
@@ -94,12 +78,7 @@ export const recoverResultFromTool = (
   const toolName = requiredSaveTool(request.task)
   const call = lastSuccessfulCall(calls, toolName)
   if (request.task === 'CLARIFY_MESSAGE' && (!call || !isRecord(call.arguments))) {
-    return {
-      kind: 'CONVERSATION',
-      persistence: 'NONE',
-      answer: quickConversationReply(request)
-        ?? '我理解了你的消息，但这轮没有形成可可靠保存的岗位事实。你可以继续直接提问，或补充招聘原因、成功标准和岗位约束，我会明确说明是否进入岗位澄清。',
-    }
+    throw new Error('Cannot recover a model-generated conversation without a valid model response')
   }
   if (!call || !isRecord(call.arguments)) {
     throw new Error(`Cannot recover structured result from ${toolName}`)
@@ -165,44 +144,6 @@ export class HarnessExecutor {
   async execute(request: HarnessRequest, signal: AbortSignal): Promise<SidecarExecution> {
     const startedAt = Date.now()
     const contextSnapshot = buildContextSnapshot(request)
-    const quickReply = quickConversationReply(request)
-    if (quickReply) {
-      const localRouterContext = {
-        ...contextSnapshot,
-        system_prompt: {
-          ...contextSnapshot.system_prompt,
-          harness_managed_base: {
-            included: false,
-            captured_as_text: false,
-            description: '本轮由本地意图路由直接回答，未调用 DeepSeek Harness 或模型。',
-          },
-        },
-        task_state: {
-          ...contextSnapshot.task_state,
-          execution_path: 'LOCAL_INTENT_ROUTER',
-        },
-      } satisfies typeof contextSnapshot
-      return {
-        result: { kind: 'CONVERSATION', persistence: 'NONE', answer: quickReply },
-        events: [
-          { type: 'status', value: '普通问答意图已识别，不调用岗位写入工具' },
-          { type: 'context.snapshot', value: '本轮上下文分层快照', context: localRouterContext },
-          { type: 'delta', value: quickReply },
-        ],
-        trace: {
-          model: 'intent-router-v1',
-          provider: 'local-intent-router',
-          harness_source_version: '0.1.0-rc.5',
-          harness_commit: HARNESS_COMMIT,
-          tool_count: 0,
-          input_tokens: 0,
-          output_tokens: 0,
-          duration_ms: Date.now() - startedAt,
-          repaired: false,
-          recovered_from_tool: false,
-        },
-      }
-    }
     const readiness = this.readiness()
     if (!readiness.runtime) {
       throw new Error('Harness runtime is not prepared; run corepack pnpm harness:prepare')
@@ -278,8 +219,8 @@ export class HarnessExecutor {
         try {
           result = parseHarnessResult(repair.finalResponse)
         } catch {
-          recoveredFromTool = true
           result = recoverResultFromTool(request, combineTurns(turns).successfulToolCalls)
+          recoveredFromTool = true
         }
       }
       const combined = combineTurns(turns)
