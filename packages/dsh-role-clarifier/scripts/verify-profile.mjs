@@ -16,9 +16,22 @@ const runtimeConfig = await readFile(
   'utf8',
 )
 
-const reasoningEffort = runtimeConfig.match(/reasoningEffort:\s*([^\s#]+)/)?.[1]
-if (!reasoningEffort || !['off', 'high', 'max'].includes(reasoningEffort)) {
-  throw new Error(`Harness rc.5 reasoningEffort must be off, high, or max; got ${reasoningEffort ?? 'missing'}`)
+const reasoningLine = runtimeConfig.match(/^\s*reasoningEffort:\s*(.+)$/m)?.[1]?.trim()
+const staticReasoning = reasoningLine?.match(/^(off|high|max)(?:\s+#.*)?$/)?.[1]
+const dynamicReasoning = reasoningLine
+  === "!!js process.env.ROLE_AGENT_REASONING_EFFORT ?? 'high'"
+if (!staticReasoning && !dynamicReasoning) {
+  throw new Error(
+    `Harness rc.5 reasoningEffort must be off, high, max, or the approved task-scoped environment expression; got ${reasoningLine ?? 'missing'}`,
+  )
+}
+const thinkingLine = runtimeConfig.match(/^\s*thinking:\s*(.+)$/m)?.[1]?.trim()
+const staticThinking = thinkingLine?.match(/^(enabled|disabled)(?:\s+#.*)?$/)?.[1]
+const dynamicThinking = thinkingLine === "!!js process.env.ROLE_AGENT_THINKING ?? 'enabled'"
+if (!staticThinking && !dynamicThinking) {
+  throw new Error(
+    `Harness rc.5 thinking must be enabled, disabled, or the approved task-scoped environment expression; got ${thinkingLine ?? 'missing'}`,
+  )
 }
 const patch = await readFile(resolve(root, 'cordis.patch.yml'), 'utf8')
 const source = await readFile(resolve(root, 'src/index.ts'), 'utf8')

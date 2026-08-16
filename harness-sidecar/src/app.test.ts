@@ -16,6 +16,7 @@ import {
   HarnessExecutor,
   assertTaskToolPolicy,
   maxTokensForTask,
+  reasoningForTask,
   recoverResultFromTool,
 } from './executor.js'
 import { buildContextSnapshot, buildTaskPrompt } from './prompts.js'
@@ -942,9 +943,15 @@ describe('Harness sidecar', () => {
   })
 
   it('caps Flash token budgets without shrinking Pro artifact generation', () => {
-    expect(maxTokensForTask('CLARIFY_MESSAGE', 16_384)).toBe(4_096)
+    expect(maxTokensForTask('CLARIFY_MESSAGE', 16_384)).toBe(8_192)
     expect(maxTokensForTask('EXTRACT_CANDIDATES', 16_384)).toBe(8_192)
     expect(maxTokensForTask('GENERATE_JD', 16_384)).toBe(16_384)
+  })
+
+  it('disables expensive reasoning for routing and clarification only', () => {
+    expect(reasoningForTask('ROUTER')).toEqual({ thinking: 'disabled', effort: 'off' })
+    expect(reasoningForTask('CLARIFY_MESSAGE')).toEqual({ thinking: 'disabled', effort: 'off' })
+    expect(reasoningForTask('GENERATE_JD')).toEqual({ thinking: 'enabled', effort: 'high' })
   })
 
   it('does not fabricate a canned conversation when model output is invalid', () => {

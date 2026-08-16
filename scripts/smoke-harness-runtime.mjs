@@ -107,6 +107,8 @@ const runtime = new JsonRpcHarnessRuntime({
       'save_fact_draft',
     ]),
     ROLE_AGENT_MODE: 'domain',
+    ROLE_AGENT_THINKING: 'disabled',
+    ROLE_AGENT_REASONING_EFFORT: 'off',
     DSH_SESSION_ROOT: sessionRoot,
   },
   provider: 'deepseek-official',
@@ -132,6 +134,8 @@ const routerRuntime = new JsonRpcHarnessRuntime({
     ROLE_AGENT_TOOL_TOKEN: 'runtime-smoke-internal-tool-token',
     ROLE_AGENT_ALLOWED_TOOLS: '[]',
     ROLE_AGENT_MODE: 'router',
+    ROLE_AGENT_THINKING: 'disabled',
+    ROLE_AGENT_REASONING_EFFORT: 'off',
     DSH_SESSION_ROOT: sessionRoot,
   },
   provider: 'deepseek-official',
@@ -157,6 +161,8 @@ const roleProfileRuntime = new JsonRpcHarnessRuntime({
     ROLE_AGENT_TOOL_TOKEN: 'runtime-smoke-internal-tool-token',
     ROLE_AGENT_ALLOWED_TOOLS: '[]',
     ROLE_AGENT_MODE: 'domain',
+    ROLE_AGENT_THINKING: 'enabled',
+    ROLE_AGENT_REASONING_EFFORT: 'high',
     DSH_SESSION_ROOT: sessionRoot,
   },
   provider: 'deepseek-official',
@@ -183,6 +189,9 @@ try {
     throw new Error(`Unexpected successful tools: ${JSON.stringify(turn.successfulToolNames)}`)
   }
   const modelRequest = requests[0]
+  if (modelRequest?.thinking?.type !== 'disabled' || modelRequest?.reasoning_effort !== undefined) {
+    throw new Error(`Clarification runtime must disable thinking: ${JSON.stringify(modelRequest)}`)
+  }
   const systemPrompt = Array.isArray(modelRequest?.messages)
     ? modelRequest.messages
         .filter(message => message?.role === 'system')
@@ -223,6 +232,9 @@ try {
     throw new Error(`Unexpected router turn result: ${JSON.stringify(routerTurn)}`)
   }
   const routerRequest = requests.at(-1)
+  if (routerRequest?.thinking?.type !== 'disabled' || routerRequest?.reasoning_effort !== undefined) {
+    throw new Error(`Router runtime must disable thinking: ${JSON.stringify(routerRequest)}`)
+  }
   const routerToolNames = Array.isArray(routerRequest?.tools)
     ? routerRequest.tools.map(tool => tool?.function?.name).filter(Boolean)
     : []
@@ -252,6 +264,12 @@ try {
     throw new Error(`Unexpected role-profile turn result: ${JSON.stringify(roleProfileTurn)}`)
   }
   const roleProfileRequest = requests.at(-1)
+  if (
+    roleProfileRequest?.thinking?.type !== 'enabled'
+    || roleProfileRequest?.reasoning_effort !== 'high'
+  ) {
+    throw new Error(`Role-profile runtime must retain high reasoning: ${JSON.stringify(roleProfileRequest)}`)
+  }
   const roleProfileToolNames = Array.isArray(roleProfileRequest?.tools)
     ? roleProfileRequest.tools.map(tool => tool?.function?.name).filter(Boolean)
     : []

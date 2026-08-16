@@ -61,10 +61,17 @@ export interface SidecarRouteExecution {
 const HARNESS_COMMIT = '47f943859bef60e4160492346772ded9b24f765a'
 
 export const maxTokensForTask = (task: HarnessTask, configuredMaximum: number): number => {
-  if (task === 'CLARIFY_MESSAGE') return Math.min(configuredMaximum, 4_096)
+  if (task === 'CLARIFY_MESSAGE') return Math.min(configuredMaximum, 8_192)
   if (task === 'EXTRACT_CANDIDATES') return Math.min(configuredMaximum, 8_192)
   return configuredMaximum
 }
+
+export const reasoningForTask = (
+  task: HarnessTask | 'ROUTER',
+): { thinking: 'enabled' | 'disabled'; effort: 'off' | 'high' } =>
+  task === 'ROUTER' || task === 'CLARIFY_MESSAGE'
+    ? { thinking: 'disabled', effort: 'off' }
+    : { thinking: 'enabled', effort: 'high' }
 
 export const assertTaskToolPolicy = (
   task: HarnessTask,
@@ -202,6 +209,7 @@ export class HarnessExecutor {
       throw new Error('DEEPSEEK_API_KEY is required for real Harness mode')
     }
     const model = this.config.DEEPSEEK_FLASH_MODEL
+    const reasoning = reasoningForTask('ROUTER')
     const sessionRoot = await mkdtemp(join(tmpdir(), 'role-router-dsh-'))
     const runtime = new JsonRpcHarnessRuntime({
       runtimeBin: this.config.DSH_RUNTIME_BIN,
@@ -215,6 +223,8 @@ export class HarnessExecutor {
         ROLE_AGENT_TOOL_TOKEN: this.config.ROLE_AGENT_TOOL_TOKEN,
         ROLE_AGENT_ALLOWED_TOOLS: '[]',
         ROLE_AGENT_MODE: 'router',
+        ROLE_AGENT_THINKING: reasoning.thinking,
+        ROLE_AGENT_REASONING_EFFORT: reasoning.effort,
         DSH_SESSION_ROOT: sessionRoot,
       },
       model,
@@ -304,6 +314,7 @@ export class HarnessExecutor {
     const model = request.task === 'CLARIFY_MESSAGE' || request.task === 'EXTRACT_CANDIDATES'
       ? this.config.DEEPSEEK_FLASH_MODEL
       : this.config.DEEPSEEK_PRO_MODEL
+    const reasoning = reasoningForTask(request.task)
     const sessionRoot = await mkdtemp(join(tmpdir(), 'role-clarifier-dsh-'))
     const runtime = new JsonRpcHarnessRuntime({
       runtimeBin: this.config.DSH_RUNTIME_BIN,
@@ -317,6 +328,8 @@ export class HarnessExecutor {
         ROLE_AGENT_TOOL_TOKEN: this.config.ROLE_AGENT_TOOL_TOKEN,
         ROLE_AGENT_ALLOWED_TOOLS: JSON.stringify(HARNESS_TASK_TOOL_POLICY[request.task].allowed),
         ROLE_AGENT_MODE: 'domain',
+        ROLE_AGENT_THINKING: reasoning.thinking,
+        ROLE_AGENT_REASONING_EFFORT: reasoning.effort,
         DSH_SESSION_ROOT: sessionRoot,
       },
       model,
@@ -344,35 +357,44 @@ export class HarnessExecutor {
       )
       turns.push(initial)
       modelEvents.push({ type: 'model.response', value: initial.finalResponse, attempt: 'initial' })
-      if (initial.finishReason !== 'completed') {
-        throw new Error(`Harness turn ended with ${initial.finishReason ?? 'unknown reason'}`)
-      }
       let result: HarnessResult
-      try {
-        result = parseHarnessResult(initial.finalResponse)
-      } catch (error) {
-        repaired = true
-        const repairPrompt = buildRepairPrompt(
-          request,
-          error instanceof Error ? error.message : String(error),
-        )
-        modelEvents.push({ type: 'model.request', value: repairPrompt, attempt: 'repair' })
-        const repair = await runtime.runTurn(
-          sessionId,
-          repairPrompt,
-          runSignal,
-          Math.max(0, request.maximum_transitions - initial.toolNames.length),
-        )
-        turns.push(repair)
-        modelEvents.push({ type: 'model.response', value: repair.finalResponse, attempt: 'repair' })
-        if (repair.finishReason !== 'completed') {
-          throw new Error(`Harness repair turn ended with ${repair.finishReason ?? 'unknown reason'}`)
-        }
+      if (initial.finishReason === 'max-tokens') {
+        result = recoverResultFromTool(request, combineTurns(turns).successfulToolCalls)
+        recoveredFromTool = true
+      } else if (initial.finishReason !== 'completed') {
+        throw new Error(`Harness turn ended with ${initial.finishReason ?? 'unknown reason'}`)
+      } else {
         try {
-          result = parseHarnessResult(repair.finalResponse)
-        } catch {
-          result = recoverResultFromTool(request, combineTurns(turns).successfulToolCalls)
-          recoveredFromTool = true
+          result = parseHarnessResult(initial.finalResponse)
+        } catch (error) {
+          repaired = true
+          const repairPrompt = buildRepairPrompt(
+            request,
+            error instanceof Error ? error.message : String(error),
+          )
+          modelEvents.push({ type: 'model.request', value: repairPrompt, attempt: 'repair' })
+          const repair = await runtime.runTurn(
+            sessionId,
+            repairPrompt,
+            runSignal,
+            Math.max(0, request.maximum_transitions - initial.toolNames.length),
+          )
+          turns.push(repair)
+          modelEvents.push({ type: 'model.response', value: repair.finalResponse, attempt: 'repair' })
+          if (repair.finishReason === 'max-tokens') {
+            result = recoverResultFromTool(request, combineTurns(turns).successfulToolCalls)
+            recoveredFromTool = true
+          } else {
+            if (repair.finishReason !== 'completed') {
+              throw new Error(`Harness repair turn ended with ${repair.finishReason ?? 'unknown reason'}`)
+            }
+            try {
+              result = parseHarnessResult(repair.finalResponse)
+            } catch {
+              result = recoverResultFromTool(request, combineTurns(turns).successfulToolCalls)
+              recoveredFromTool = true
+            }
+          }
         }
       }
       const combined = combineTurns(turns)
@@ -404,7 +426,12 @@ export class HarnessExecutor {
       assertTaskResult(request.task, result)
       assertTaskToolPolicy(request.task, combined.tools, combined.successfulTools)
       const events: SidecarEvent[] = [
-        { type: 'status', value: `${model} 已完成真实 Harness 推理` },
+        {
+          type: 'status',
+          value: recoveredFromTool
+            ? `${model} 已根据成功的领域工具结果安全恢复本轮回复`
+            : `${model} 已完成真实 Harness 推理`,
+        },
         { type: 'context.snapshot', value: '本轮上下文分层快照', context: contextSnapshot },
         ...modelEvents.filter((event) => event.type === 'model.request' && event.attempt === 'initial'),
         ...combined.toolEvents.map((event): SidecarEvent => event.type === 'tool.started'
