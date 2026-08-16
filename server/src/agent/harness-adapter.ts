@@ -26,6 +26,15 @@ export interface HarnessRequest {
   task: HarnessTask
   role_state: RoleState
   message?: string
+  conversation_context?: {
+    current_user_role: 'MANAGER' | 'HR' | 'ADMIN'
+    open_clarification: { ordinal: number; question: string } | null
+    recent_messages: Array<{
+      sender_type: 'HUMAN' | 'AGENT'
+      sender_role: 'MANAGER' | 'HR' | 'ADMIN' | null
+      content: string
+    }>
+  }
   candidates?: CandidateImportItem[]
   execution_context: ToolExecutionContext
   maximum_transitions: 10
@@ -33,6 +42,11 @@ export interface HarnessRequest {
 }
 
 export type HarnessResult =
+  | {
+      kind: 'CONVERSATION'
+      persistence: 'NONE'
+      answer: string
+    }
   | {
       kind: 'CLARIFICATION'
       persistence?: 'CALLER' | 'TOOL'
@@ -68,9 +82,11 @@ export interface HarnessTrace {
 export interface HarnessHooks {
   signal: AbortSignal
   onStatus(status: string): Promise<void>
+  onModelRequest(prompt: string): Promise<void>
+  onModelResponse(response: string): Promise<void>
   onDelta(delta: string): Promise<void>
-  onToolStarted(name: string): Promise<void>
-  onToolCompleted(name: string, summary: string): Promise<void>
+  onToolStarted(name: string, argumentsValue?: unknown): Promise<void>
+  onToolCompleted(name: string, summary: string, resultValue?: unknown): Promise<void>
   onTrace(trace: HarnessTrace): Promise<void>
 }
 
@@ -102,6 +118,16 @@ const artifactTypeByTask: Partial<Record<HarnessTask, ArtifactType>> = {
 
 const textOf = (value: unknown): string =>
   typeof value === 'string' ? value : JSON.stringify(value)
+
+const deterministicConversationReply = (message: string): string | null => {
+  if (/你在吗|在不在|你(可以|能|会).*(干啥|做什么|做些?什么)|你能干啥|有什么功能|怎么使用你|怎么用你|帮助/.test(message)) {
+    return '我在。你可以直接问我岗位或招聘流程问题，也可以让我梳理招聘原因、成功标准、岗位画像、评估方案和四段式 JD。普通问题我会直接回答；只有你补充岗位事实或回答当前澄清题时，我才会保存草稿并推进主动澄清轮次。'
+  }
+  if (/^(你好|您好|嗨|hi|hello)[!！。,.，\s]*$/i.test(message)) {
+    return '你好，我在。你可以直接提问，也可以补充招聘原因、成功标准或岗位约束。'
+  }
+  return null
+}
 
 const extractCandidate = (item: CandidateImportItem): CandidateEvidence => {
   const text = textOf(item.content)
@@ -141,17 +167,40 @@ const extractCandidate = (item: CandidateImportItem): CandidateEvidence => {
 
 export class DeterministicHarnessAdapter implements HarnessAdapter {
   async run(request: HarnessRequest, hooks: HarnessHooks): Promise<HarnessResult> {
+    const inputPrompt = JSON.stringify({
+      task: request.task,
+      role_state: request.role_state,
+      message: request.message,
+      conversation_context: request.conversation_context,
+    })
+    await hooks.onModelRequest(inputPrompt)
+    if (request.task === 'CLARIFY_MESSAGE') {
+      const message = request.message?.trim() ?? ''
+      const conversationReply = deterministicConversationReply(message)
+      if (conversationReply) {
+        const result: HarnessResult = {
+          kind: 'CONVERSATION',
+          persistence: 'NONE',
+          answer: conversationReply,
+        }
+        await hooks.onStatus('普通问答意图已识别，不调用岗位写入工具')
+        await hooks.onModelResponse(JSON.stringify(result))
+        await hooks.onDelta(conversationReply)
+        return result
+      }
+    }
     await hooks.onStatus(
       request.task === 'CLARIFY_MESSAGE' || request.task === 'EXTRACT_CANDIDATES'
         ? 'Flash 正在提取事实与证据'
         : 'Pro 正在生成正式产物草稿',
     )
     await abortablePause(hooks.signal)
-    await hooks.onToolStarted('read_role_state')
+    await hooks.onToolStarted('read_role_state', {})
     await abortablePause(hooks.signal)
     await hooks.onToolCompleted(
       'read_role_state',
       `已读取岗位状态 rev.${request.role_state.revision}`,
+      request.role_state,
     )
 
     if (request.task === 'CLARIFY_MESSAGE') {
@@ -168,9 +217,15 @@ export class DeterministicHarnessAdapter implements HarnessAdapter {
         category === 'HIRING_REASON'
           ? '如果这个岗位半年后招聘成功，最重要的一个可观察业务结果是什么？'
           : '这个结果由谁验收、用什么指标判断达成？'
-      await hooks.onToolStarted('save_fact_draft')
+      const factDraft = { category, statement: message }
+      await hooks.onToolStarted('save_fact_draft', factDraft)
       await abortablePause(hooks.signal)
-      await hooks.onToolCompleted('save_fact_draft', '事实草稿已通过领域校验')
+      await hooks.onToolCompleted(
+        'save_fact_draft',
+        '事实草稿已通过领域校验',
+        { saved: true, fact_draft: factDraft },
+      )
+      await hooks.onModelResponse(JSON.stringify({ kind: 'CLARIFICATION', answer, question, fact_draft: factDraft }))
       await hooks.onDelta(answer)
       return {
         kind: 'CLARIFICATION',
@@ -185,19 +240,30 @@ export class DeterministicHarnessAdapter implements HarnessAdapter {
 
     if (request.task === 'EXTRACT_CANDIDATES') {
       const evidence = (request.candidates ?? []).map(extractCandidate)
-      await hooks.onToolStarted('save_candidate_evidence')
+      await hooks.onToolStarted('save_candidate_evidence', { candidates: evidence })
       await abortablePause(hooks.signal)
       await hooks.onToolCompleted(
         'save_candidate_evidence',
         `已结构化 ${evidence.length} 份脱敏候选人证据`,
+        { saved: true, candidate_count: evidence.length },
       )
       const summary = `已完成 ${evidence.length} 份候选人证据分析，并按统一标准标注卡点。`
+      await hooks.onModelResponse(JSON.stringify({
+        kind: 'CANDIDATE_EVIDENCE',
+        candidates: evidence,
+        summary,
+      }))
       await hooks.onDelta(summary)
       return { kind: 'CANDIDATE_EVIDENCE', candidates: evidence, summary }
     }
 
     if (request.task === 'CALIBRATION_ADVICE') {
       const summary = '建议用候选人证据复核画像中的能力锚点，不直接改变正式画像。'
+      await hooks.onModelResponse(JSON.stringify({
+        kind: 'CALIBRATION_ADVICE',
+        summary,
+        proposed_change: { action: 'REVIEW_CAPABILITY_ANCHORS' },
+      }))
       await hooks.onDelta(summary)
       return {
         kind: 'CALIBRATION_ADVICE',
@@ -209,10 +275,20 @@ export class DeterministicHarnessAdapter implements HarnessAdapter {
     const type = artifactTypeByTask[request.task]
     if (!type) throw new Error(`Unsupported Harness task: ${request.task}`)
     const content = this.makeArtifact(type, request.role_state)
-    await hooks.onToolStarted('save_artifact_draft')
+    await hooks.onToolStarted('save_artifact_draft', { artifact_type: type, content })
     await abortablePause(hooks.signal)
-    await hooks.onToolCompleted('save_artifact_draft', `${type} 草稿已通过 Schema 校验`)
+    await hooks.onToolCompleted(
+      'save_artifact_draft',
+      `${type} 草稿已通过 Schema 校验`,
+      { saved: true, artifact_type: type },
+    )
     const summary = '草稿已生成。它只基于已同步事实，仍需对应角色确认后才能成为正式版本。'
+    await hooks.onModelResponse(JSON.stringify({
+      kind: 'ARTIFACT',
+      artifact_type: type,
+      content,
+      summary,
+    }))
     await hooks.onDelta(summary)
     return { kind: 'ARTIFACT', artifact_type: type, content, summary }
   }
@@ -326,17 +402,21 @@ export class SidecarHarnessAdapter implements HarnessAdapter {
       result: HarnessResult
       events?: Array<
         | { type: 'status'; value: string }
+        | { type: 'model.request'; value: string; attempt?: 'initial' | 'repair' }
+        | { type: 'model.response'; value: string; attempt?: 'initial' | 'repair' }
         | { type: 'delta'; value: string }
-        | { type: 'tool.started'; value: string }
-        | { type: 'tool.completed'; value: string; summary: string }
+        | { type: 'tool.started'; value: string; arguments?: unknown }
+        | { type: 'tool.completed'; value: string; summary: string; result?: unknown }
       >
       trace: HarnessTrace
     }
     for (const event of result.events ?? []) {
       if (event.type === 'status') await hooks.onStatus(event.value)
+      else if (event.type === 'model.request') await hooks.onModelRequest(event.value)
+      else if (event.type === 'model.response') await hooks.onModelResponse(event.value)
       else if (event.type === 'delta') await hooks.onDelta(event.value)
-      else if (event.type === 'tool.started') await hooks.onToolStarted(event.value)
-      else await hooks.onToolCompleted(event.value, event.summary)
+      else if (event.type === 'tool.started') await hooks.onToolStarted(event.value, event.arguments)
+      else await hooks.onToolCompleted(event.value, event.summary, event.result)
     }
     await hooks.onTrace(result.trace)
     return result.result

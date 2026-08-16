@@ -2,7 +2,7 @@ import type { RoleState } from '@role-clarifier/contracts'
 import { describe, expect, it } from 'vitest'
 import { buildSidecarApp, type ExecutorLike } from './app.js'
 import { loadSidecarConfig } from './config.js'
-import { recoverResultFromTool } from './executor.js'
+import { HarnessExecutor, quickConversationReply, recoverResultFromTool } from './executor.js'
 import { buildTaskPrompt } from './prompts.js'
 import { parseHarnessResult, type HarnessRequest } from './schemas.js'
 
@@ -28,6 +28,13 @@ const request: HarnessRequest = {
   task: 'CLARIFY_MESSAGE',
   role_state: state,
   message: '半年内完成三个客户场景的标准化。',
+  conversation_context: {
+    current_user_role: 'MANAGER',
+    open_clarification: { ordinal: 1, question: '半年后的验收结果是什么？' },
+    recent_messages: [
+      { sender_type: 'AGENT', sender_role: null, content: '请说明半年后的验收结果。' },
+    ],
+  },
   execution_context: {
     tenant_id: 'tenant-demo',
     actor_user_id: 'manager-demo',
@@ -53,6 +60,8 @@ describe('Harness sidecar', () => {
     expect(prompt).not.toContain('tenant-demo')
     expect(prompt).not.toContain('tenant_id')
     expect(prompt).toContain('半年内完成三个客户场景的标准化。')
+    expect(prompt).toContain('半年后的验收结果是什么？')
+    expect(prompt).toContain('CONVERSATION')
   })
 
   it('repairs fenced model JSON into the typed result', () => {
@@ -60,6 +69,51 @@ describe('Harness sidecar', () => {
       {"kind":"CLARIFICATION","persistence":"TOOL","answer":"已记录","question":"如何验收？","fact_draft":{"category":"SUCCESS_CRITERION","statement":"完成标准化"}}
     \`\`\``)
     expect(result.kind).toBe('CLARIFICATION')
+  })
+
+  it('accepts a direct conversation result without a write tool', () => {
+    const result = parseHarnessResult(
+      '{"kind":"CONVERSATION","persistence":"NONE","answer":"我在，可以帮你澄清岗位。"}',
+    )
+    expect(result).toMatchObject({ kind: 'CONVERSATION', persistence: 'NONE' })
+  })
+
+  it('routes capability questions to a direct answer without consuming clarification', () => {
+    const reply = quickConversationReply({ ...request, message: '你在吗？你可以干啥？' })
+    expect(reply).toContain('我在')
+    expect(reply).toContain('普通提问我会直接回答')
+  })
+
+  it('falls back to a conversation result when no fact tool was called', () => {
+    const result = recoverResultFromTool({ ...request, message: '你能做什么？' }, [])
+    expect(result).toMatchObject({ kind: 'CONVERSATION', persistence: 'NONE' })
+  })
+
+  it('uses the no-tool intent router for direct capability questions', async () => {
+    const execution = await new HarnessExecutor(config).execute(
+      { ...request, message: '你在吗？你可以干啥？' },
+      new AbortController().signal,
+    )
+    expect(execution.result.kind).toBe('CONVERSATION')
+    expect(execution.trace).toMatchObject({
+      model: 'intent-router-v1',
+      provider: 'local-intent-router',
+      tool_count: 0,
+    })
+  })
+
+  it('recovers a relevant clarification answer from exact saved tool arguments', () => {
+    const result = recoverResultFromTool(request, [{
+      name: 'save_fact_draft',
+      arguments: {
+        category: 'SUCCESS_CRITERION',
+        statement: '半年内完成三个客户场景的标准化',
+      },
+    }])
+    expect(result.kind).toBe('CLARIFICATION')
+    if (result.kind !== 'CLARIFICATION') throw new Error('Expected clarification')
+    expect(result.answer).toContain('半年内完成三个客户场景的标准化')
+    expect(result.question).not.toContain('这条事实是否准确')
   })
 
   it('normalizes a missing display-only summary after tools already persisted the artifact', () => {

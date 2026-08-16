@@ -82,7 +82,7 @@ describe('Role Clarifier API', () => {
     ).toBe(true)
   })
 
-  it('消息接口立即落库并返回 202，企业管理员可读取不含用户原文的 Trace', async () => {
+  it('消息接口立即落库并返回 202，企业管理员可读取完整执行 Trace', async () => {
     const cookie = await login(app, 'manager-demo')
     const response = await app.inject({
       method: 'POST',
@@ -114,12 +114,22 @@ describe('Role Clarifier API', () => {
     }
     expect(trace.run.status).toBe('COMPLETED')
     expect(trace.events.map((event: { type: string }) => event.type)).toContain('question.ready')
-    expect(trace.privacy).toEqual({
-      raw_user_message_logged: false,
-      candidate_content_logged: false,
+    expect(trace.visibility).toEqual({
+      mode: 'FULL_ADMIN',
+      raw_user_message_logged: true,
+      model_prompt_logged: true,
+      model_response_logged: true,
+      tool_arguments_logged: true,
+      tool_results_logged: true,
+      pii_screened_candidate_content_logged: true,
+      secrets_exposed: false,
       hidden_reasoning_exposed: false,
     })
-    expect(JSON.stringify(trace)).not.toContain('半年内要建立')
+    expect(JSON.stringify(trace)).toContain('半年内要建立')
+    expect(trace.events.map((event: { type: string }) => event.type)).toContain('model.request')
+    expect(trace.events.map((event: { type: string }) => event.type)).toContain('model.response')
+    expect(trace.events.find((event: { type: string }) => event.type === 'tool.started').payload)
+      .toHaveProperty('arguments')
 
     const messages = await app.inject({
       method: 'GET',
@@ -132,6 +142,112 @@ describe('Role Clarifier API', () => {
       'AGENT',
     ])
     expect(messages.json().policy.opened_rounds).toBe(1)
+  })
+
+  it('普通问答会直接回应，不保存岗位事实也不消耗主动澄清轮次', async () => {
+    const cookie = await login(app, 'manager-demo')
+    const before = (
+      await app.inject({
+        method: 'GET',
+        url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}`,
+        headers: { cookie },
+      })
+    ).json()
+    const response = await app.inject({
+      method: 'POST',
+      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/messages`,
+      headers: { cookie },
+      payload: { content: '你在吗？你可以干啥？' },
+    })
+    expect(response.statusCode).toBe(202)
+    const runId = response.json().run_id
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      const status = await app.inject({
+        method: 'GET',
+        url: `/api/v1/agent-runs/${runId}`,
+        headers: { cookie },
+      })
+      if (status.json().run.status === 'COMPLETED') break
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    const conversation = (
+      await app.inject({
+        method: 'GET',
+        url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/messages`,
+        headers: { cookie },
+      })
+    ).json()
+    const after = (
+      await app.inject({
+        method: 'GET',
+        url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}`,
+        headers: { cookie },
+      })
+    ).json()
+
+    expect(conversation.items.at(-1).content).toContain('我在')
+    expect(conversation.items.at(-1).structured_content.kind).toBe('CONVERSATION')
+    expect(conversation.policy.opened_rounds).toBe(0)
+    expect(after.state.facts).toHaveLength(before.state.facts.length)
+  })
+
+  it('存在待回答澄清题时，普通问答不会误完成当前轮或开启下一轮', async () => {
+    const cookie = await login(app, 'manager-demo')
+    const factResponse = await app.inject({
+      method: 'POST',
+      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/messages`,
+      headers: { cookie },
+      payload: { content: '这个岗位半年内要完成一个真实客户验证' },
+    })
+    const factRunId = factResponse.json().run_id
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      const status = await app.inject({
+        method: 'GET',
+        url: `/api/v1/agent-runs/${factRunId}`,
+        headers: { cookie },
+      })
+      if (status.json().run.status === 'COMPLETED') break
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    const beforeQuestion = (
+      await app.inject({
+        method: 'GET',
+        url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/messages`,
+        headers: { cookie },
+      })
+    ).json()
+    expect(beforeQuestion.policy.opened_rounds).toBe(1)
+    expect(beforeQuestion.policy.completed_rounds).toBe(0)
+
+    const chatResponse = await app.inject({
+      method: 'POST',
+      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/messages`,
+      headers: { cookie },
+      payload: { content: '你在吗？你可以干啥？' },
+    })
+    const chatRunId = chatResponse.json().run_id
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      const status = await app.inject({
+        method: 'GET',
+        url: `/api/v1/agent-runs/${chatRunId}`,
+        headers: { cookie },
+      })
+      if (status.json().run.status === 'COMPLETED') break
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    const afterQuestion = (
+      await app.inject({
+        method: 'GET',
+        url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/messages`,
+        headers: { cookie },
+      })
+    ).json()
+
+    expect(afterQuestion.policy.opened_rounds).toBe(1)
+    expect(afterQuestion.policy.completed_rounds).toBe(0)
+    expect(afterQuestion.policy.open_round_id).toBe(beforeQuestion.policy.open_round_id)
+    expect(afterQuestion.items.at(-2).clarification_round_id).toBeNull()
+    expect(afterQuestion.items.at(-1).structured_content.kind).toBe('CONVERSATION')
   })
 
   it('经理、HR与企业管理员都能用真实身份和 Agent 对话', async () => {

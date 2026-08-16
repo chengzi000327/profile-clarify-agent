@@ -178,6 +178,8 @@ export const AgentEventTypeSchema = z.enum([
   'run.started',
   'agent.status',
   'message.accepted',
+  'model.request',
+  'model.response',
   'assistant.delta',
   'assistant.completed',
   'tool.started',

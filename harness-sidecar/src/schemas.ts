@@ -27,6 +27,18 @@ export const HarnessRequestSchema = z.object({
   task: HarnessTaskSchema,
   role_state: RoleStateSchema,
   message: z.string().optional(),
+  conversation_context: z.object({
+    current_user_role: z.enum(['MANAGER', 'HR', 'ADMIN']),
+    open_clarification: z.object({
+      ordinal: z.number().int().positive(),
+      question: z.string().min(1),
+    }).nullable(),
+    recent_messages: z.array(z.object({
+      sender_type: z.enum(['HUMAN', 'AGENT']),
+      sender_role: z.enum(['MANAGER', 'HR', 'ADMIN']).nullable(),
+      content: z.string(),
+    })).max(12),
+  }).optional(),
   candidates: z.array(CandidateImportItemSchema).optional(),
   execution_context: ToolExecutionContextSchema,
   maximum_transitions: z.literal(10),
@@ -42,6 +54,11 @@ const ResultSummarySchema = z.preprocess(
 )
 
 export const HarnessResultSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('CONVERSATION'),
+    persistence: z.literal('NONE'),
+    answer: z.string().min(1),
+  }),
   z.object({
     kind: z.literal('CLARIFICATION'),
     persistence: ToolPersistenceSchema,
@@ -96,4 +113,6 @@ export const requiredSaveTool = (task: HarnessTask): string => {
 }
 
 export const visibleResultText = (result: HarnessResult): string =>
-  result.kind === 'CLARIFICATION' ? result.answer : result.summary
+  result.kind === 'CLARIFICATION' || result.kind === 'CONVERSATION'
+    ? result.answer
+    : result.summary

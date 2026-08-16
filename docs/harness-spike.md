@@ -47,4 +47,4 @@
 2. Flash 澄清能调用读取状态和保存事实草稿。
 3. Pro JD 只能产出四段结构并通过业务 Schema。
 4. Sidecar 中断后重启，使用业务 RoleState 重建摘要并绑定 role-{role_session_id} Session。
-5. Trace 包含模型、Prompt、工具次数、Token、延迟，不含用户原文和候选人内容。
+5. 企业管理员完整 Trace 包含用户原文、模型 Prompt/最终输出、工具入参/返回、Token 与延迟；不采集密钥、会话凭证或内部令牌。

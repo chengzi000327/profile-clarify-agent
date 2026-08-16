@@ -24,8 +24,10 @@ const statusLabel = {
 const eventLabel = {
   'run.started': '运行开始',
   'agent.status': 'Agent 状态',
-  'message.accepted': '消息已接收',
-  'assistant.delta': '模型输出（已脱敏）',
+  'message.accepted': '用户消息原文',
+  'model.request': '发送给模型的完整 Prompt',
+  'model.response': '模型原始最终输出',
+  'assistant.delta': '用户可见 Agent 回复',
   'assistant.completed': 'Agent 回复已落库',
   'tool.started': '工具开始',
   'tool.completed': '工具完成',
@@ -134,7 +136,7 @@ export default function AdminTraceConsole() {
         <div>
           <span className="trace-kicker"><ShieldCheck size={14} />企业管理员最高权限</span>
           <h1>Agent Trace 控制台</h1>
-          <p>查看企业内全部岗位的脱敏执行轨迹、模型路由、工具调用与运行指标。</p>
+          <p>查看企业内全部岗位的完整执行轨迹、模型路由、工具入参与返回、模型输入输出和运行指标。</p>
         </div>
         <div className="trace-policy-card">
           <span><Settings2 size={14} />企业澄清策略</span>
@@ -168,7 +170,7 @@ export default function AdminTraceConsole() {
         </aside>
 
         <main className="trace-detail">
-          {!trace && <div className="trace-empty large">选择一次运行查看脱敏执行轨迹</div>}
+          {!trace && <div className="trace-empty large">选择一次运行查看完整执行轨迹</div>}
           {trace && (
             <>
               <div className="trace-detail-heading">
@@ -181,7 +183,7 @@ export default function AdminTraceConsole() {
                 <div><span>Token</span><strong>{trace.run.input_tokens + trace.run.output_tokens}</strong><small>{trace.run.input_tokens} 输入 / {trace.run.output_tokens} 输出</small></div>
                 <div><span>工具调用</span><strong>{trace.run.tool_count}</strong><small><Wrench size={11} />最多10个内部步骤</small></div>
               </div>
-              <div className="trace-privacy-note"><ShieldCheck size={14} /><span>用户原文、候选人内容和隐藏思维链不进入Trace；当前展示的是可审计执行事件。</span></div>
+              <div className="trace-privacy-note"><ShieldCheck size={14} /><span>完整 Trace 已开启：展示用户原文、实际 Prompt、模型最终输出、工具参数与工具返回。API Key、Cookie、内部令牌及模型未提供的隐藏思维链不采集。</span></div>
               <div className="trace-timeline">
                 {trace.events.map((event) => (
                   <div className={`trace-event ${event.type.includes('failed') ? 'failed' : ''}`} key={event.id}>

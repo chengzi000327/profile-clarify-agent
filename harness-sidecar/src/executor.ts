@@ -14,9 +14,12 @@ import {
 } from './schemas.js'
 
 export interface SidecarEvent {
-  type: 'status' | 'delta' | 'tool.started' | 'tool.completed'
+  type: 'status' | 'model.request' | 'model.response' | 'delta' | 'tool.started' | 'tool.completed'
   value: string
   summary?: string
+  arguments?: unknown
+  result?: unknown
+  attempt?: 'initial' | 'repair'
 }
 
 export interface SidecarExecution {
@@ -24,7 +27,7 @@ export interface SidecarExecution {
   events: SidecarEvent[]
   trace: {
     model: string
-    provider: 'deepseek-official'
+    provider: 'deepseek-official' | 'local-intent-router'
     harness_source_version: '0.1.0-rc.5'
     harness_commit: string
     tool_count: number
@@ -37,6 +40,22 @@ export interface SidecarExecution {
 }
 
 const HARNESS_COMMIT = '47f943859bef60e4160492346772ded9b24f765a'
+
+export const quickConversationReply = (request: HarnessRequest): string | null => {
+  if (request.task !== 'CLARIFY_MESSAGE') return null
+  const message = request.message?.trim() ?? ''
+  if (!message) return null
+  if (/你在吗|在不在|你(可以|能|会).*(干啥|做什么|做些?什么)|你能干啥|有什么功能|怎么使用你|怎么用你|帮助/.test(message)) {
+    return '我在。你可以把我当作这个岗位的招聘共创助手：我能回答岗位和招聘流程问题，梳理招聘原因与成功标准，生成岗位画像、评估方案和四段式 JD，也能基于脱敏候选人证据提出校准建议。普通提问我会直接回答；只有你补充岗位事实或实质回答当前澄清题时，我才会保存草稿并推进主动澄清轮次。'
+  }
+  if (/^(你好|您好|嗨|hi|hello)[!！。,.，\s]*$/i.test(message)) {
+    return '你好，我在。你可以直接问我岗位或招聘相关问题，也可以补充招聘原因、成功标准或岗位约束；我会先判断你的意图，再决定是直接回答还是进入岗位澄清。'
+  }
+  if (/^(谢谢|感谢|收到|明白了|好的)[!！。,.，\s]*$/.test(message)) {
+    return '不客气。你可以继续提问；如果要推进岗位澄清，也可以直接补充招聘原因、成功标准或当前问题的答案。'
+  }
+  return null
+}
 
 const combineTurns = (turns: RuntimeTurn[]) => ({
   tools: turns.flatMap((turn) => turn.toolNames),
@@ -66,6 +85,14 @@ export const recoverResultFromTool = (
 ): HarnessResult => {
   const toolName = requiredSaveTool(request.task)
   const call = lastSuccessfulCall(calls, toolName)
+  if (request.task === 'CLARIFY_MESSAGE' && (!call || !isRecord(call.arguments))) {
+    return {
+      kind: 'CONVERSATION',
+      persistence: 'NONE',
+      answer: quickConversationReply(request)
+        ?? '我理解了你的消息，但这轮没有形成可可靠保存的岗位事实。你可以继续直接提问，或补充招聘原因、成功标准和岗位约束，我会明确说明是否进入岗位澄清。',
+    }
+  }
   if (!call || !isRecord(call.arguments)) {
     throw new Error(`Cannot recover structured result from ${toolName}`)
   }
@@ -74,8 +101,10 @@ export const recoverResultFromTool = (
     return parseHarnessResult(JSON.stringify({
       kind: 'CLARIFICATION',
       persistence: 'TOOL',
-      answer: '事实草稿已通过领域工具保存，等待你的确认。',
-      question: '这条事实是否准确？确认后我会继续生成岗位画像和评估方案。',
+      answer: `我已记录这项${args.category === 'HIRING_REASON' ? '招聘原因' : '成功标准'}：${String(args.statement)}`,
+      question: args.category === 'HIRING_REASON'
+        ? '如果半年后证明这次招聘成功，最重要的一个可观察业务结果是什么？'
+        : '这项结果由谁验收，最关键的量化或可观察指标是什么？',
       fact_draft: { category: args.category, statement: args.statement },
     }))
   }
@@ -112,6 +141,29 @@ export class HarnessExecutor {
   }
 
   async execute(request: HarnessRequest, signal: AbortSignal): Promise<SidecarExecution> {
+    const startedAt = Date.now()
+    const quickReply = quickConversationReply(request)
+    if (quickReply) {
+      return {
+        result: { kind: 'CONVERSATION', persistence: 'NONE', answer: quickReply },
+        events: [
+          { type: 'status', value: '普通问答意图已识别，不调用岗位写入工具' },
+          { type: 'delta', value: quickReply },
+        ],
+        trace: {
+          model: 'intent-router-v1',
+          provider: 'local-intent-router',
+          harness_source_version: '0.1.0-rc.5',
+          harness_commit: HARNESS_COMMIT,
+          tool_count: 0,
+          input_tokens: 0,
+          output_tokens: 0,
+          duration_ms: Date.now() - startedAt,
+          repaired: false,
+          recovered_from_tool: false,
+        },
+      }
+    }
     const readiness = this.readiness()
     if (!readiness.runtime) {
       throw new Error('Harness runtime is not prepared; run corepack pnpm harness:prepare')
@@ -119,7 +171,6 @@ export class HarnessExecutor {
     if (!readiness.credential) {
       throw new Error('DEEPSEEK_API_KEY is required for real Harness mode')
     }
-    const startedAt = Date.now()
     const model = request.task === 'CLARIFY_MESSAGE' || request.task === 'EXTRACT_CANDIDATES'
       ? this.config.DEEPSEEK_FLASH_MODEL
       : this.config.DEEPSEEK_PRO_MODEL
@@ -143,6 +194,7 @@ export class HarnessExecutor {
     })
     const sessionId = `role-${request.execution_context.role_session_id}`
     const turns: RuntimeTurn[] = []
+    const modelEvents: SidecarEvent[] = []
     let repaired = false
     let recoveredFromTool = false
     const runSignal = AbortSignal.any([
@@ -150,13 +202,16 @@ export class HarnessExecutor {
       AbortSignal.timeout(this.config.DSH_RUN_TIMEOUT_MS),
     ])
     try {
+      const initialPrompt = buildTaskPrompt(request)
+      modelEvents.push({ type: 'model.request', value: initialPrompt, attempt: 'initial' })
       const initial = await runtime.runTurn(
         sessionId,
-        buildTaskPrompt(request),
+        initialPrompt,
         runSignal,
         request.maximum_transitions,
       )
       turns.push(initial)
+      modelEvents.push({ type: 'model.response', value: initial.finalResponse, attempt: 'initial' })
       if (initial.finishReason !== 'completed') {
         throw new Error(`Harness turn ended with ${initial.finishReason ?? 'unknown reason'}`)
       }
@@ -165,13 +220,19 @@ export class HarnessExecutor {
         result = parseHarnessResult(initial.finalResponse)
       } catch (error) {
         repaired = true
+        const repairPrompt = buildRepairPrompt(
+          request,
+          error instanceof Error ? error.message : String(error),
+        )
+        modelEvents.push({ type: 'model.request', value: repairPrompt, attempt: 'repair' })
         const repair = await runtime.runTurn(
           sessionId,
-          buildRepairPrompt(error instanceof Error ? error.message : String(error)),
+          repairPrompt,
           runSignal,
           Math.max(0, request.maximum_transitions - initial.toolNames.length),
         )
         turns.push(repair)
+        modelEvents.push({ type: 'model.response', value: repair.finalResponse, attempt: 'repair' })
         if (repair.finishReason !== 'completed') {
           throw new Error(`Harness repair turn ended with ${repair.finishReason ?? 'unknown reason'}`)
         }
@@ -186,7 +247,9 @@ export class HarnessExecutor {
       if (combined.tools.length > request.maximum_transitions) {
         throw new Error(`Harness exceeded ${request.maximum_transitions} tool transitions`)
       }
-      const required = ['read_role_state', requiredSaveTool(request.task)]
+      const required = result.kind === 'CONVERSATION'
+        ? []
+        : ['read_role_state', requiredSaveTool(request.task)]
       for (const name of required) {
         if (!combined.successfulTools.includes(name)) {
           throw new Error(`Harness did not complete required tool: ${name}`)
@@ -194,9 +257,17 @@ export class HarnessExecutor {
       }
       const events: SidecarEvent[] = [
         { type: 'status', value: `${model} 已完成真实 Harness 推理` },
+        ...modelEvents.filter((event) => event.type === 'model.request' && event.attempt === 'initial'),
         ...combined.toolEvents.map((event): SidecarEvent => event.type === 'tool.started'
-          ? { type: event.type, value: event.value }
-          : { type: event.type, value: event.value, summary: event.summary }),
+          ? { type: event.type, value: event.value, arguments: event.arguments }
+          : {
+              type: event.type,
+              value: event.value,
+              summary: event.summary,
+              result: event.result,
+            }),
+        ...modelEvents.filter((event) => event.type === 'model.response' && event.attempt === 'initial'),
+        ...modelEvents.filter((event) => event.attempt === 'repair'),
         { type: 'delta', value: visibleResultText(result) },
       ]
       return {

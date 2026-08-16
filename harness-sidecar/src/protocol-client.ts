@@ -33,8 +33,8 @@ export interface RuntimeTurn {
   successfulToolNames: string[]
   successfulToolCalls: Array<{ name: string; arguments: unknown }>
   toolEvents: Array<
-    | { type: 'tool.started'; value: string }
-    | { type: 'tool.completed'; value: string; summary: string }
+    | { type: 'tool.started'; value: string; arguments: unknown }
+    | { type: 'tool.completed'; value: string; summary: string; result: unknown }
   >
   inputTokens: number
   outputTokens: number
@@ -86,6 +86,12 @@ const usageOf = (event: Record<string, unknown>): { input: number; output: numbe
 
 const toolResultSummary = (event: Record<string, unknown>): string =>
   toolResultSucceeded(event) ? '领域工具执行成功' : '领域工具执行失败'
+
+const toolResultPayload = (event: Record<string, unknown>): unknown => {
+  const message = eventData(event).message
+  const content = isRecord(message) ? message.content : undefined
+  return Array.isArray(content) ? content : content ?? null
+}
 
 const toolResultSucceeded = (event: Record<string, unknown>): boolean => {
   const message = eventData(event).message
@@ -248,7 +254,7 @@ export class JsonRpcHarnessRuntime {
         }
         calls.set(callId, { name: data.name, arguments: parsedArguments })
         toolNames.push(data.name)
-        toolEvents.push({ type: 'tool.started', value: data.name })
+        toolEvents.push({ type: 'tool.started', value: data.name, arguments: parsedArguments })
       }
       if (event.type === 'tool/result') {
         const message = data.message
@@ -260,7 +266,12 @@ export class JsonRpcHarnessRuntime {
           successfulToolNames.push(name)
           successfulToolCalls.push(call)
         }
-        toolEvents.push({ type: 'tool.completed', value: name, summary: toolResultSummary(event) })
+        toolEvents.push({
+          type: 'tool.completed',
+          value: name,
+          summary: toolResultSummary(event),
+          result: toolResultPayload(event),
+        })
       }
       if (event.type === 'turn/end') {
         const reason = data.reason

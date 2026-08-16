@@ -10,9 +10,13 @@ const artifactByTask: Partial<Record<HarnessTask, string>> = {
 const taskInstructions = (request: HarnessRequest): string => {
   if (request.task === 'CLARIFY_MESSAGE') {
     return [
-      '先调用 read_role_state，再从用户消息提取一条最关键的招聘原因或成功标准。',
-      '调用 save_fact_draft 保存草稿，禁止把它标记为已确认。',
-      '最后返回 CLARIFICATION JSON，包含简洁 answer、一个具体 question，以及与工具参数一致的 fact_draft。',
+      '先判断用户当前意图，只能在 CONVERSATION 与 CLARIFICATION 中二选一。',
+      '如果用户在打招呼、确认你是否在线、询问你能做什么、询问使用方法/进度/已有信息，或提出没有新增岗位事实的普通问题：直接回答用户真正问的问题；不得调用任何写入工具；返回 {"kind":"CONVERSATION","persistence":"NONE","answer":"..."}。',
+      '只有当用户明确补充/修改了招聘原因、成功标准、岗位约束，或实质回答了 open_clarification 时，才进入 CLARIFICATION。',
+      '进入 CLARIFICATION 后先调用 read_role_state，再调用 save_fact_draft 保存一条忠实、完整、可独立理解的事实草稿，禁止把它标记为已确认。',
+      'CLARIFICATION 的 answer 必须具体复述本轮真正记录的内容，question 只能追问一个仍缺失的业务要素；禁止使用“这条事实是否准确”“等待你的确认”等万能套话。',
+      '用户提出了直接问题时必须先直接回答，不能答非所问；普通问答不消耗主动澄清轮次，也不要虚构已经保存事实。',
+      '最终只返回 CONVERSATION JSON，或返回包含 answer、一个具体 question、以及与工具参数一致 fact_draft 的 CLARIFICATION JSON。',
     ].join('\n')
   }
   if (request.task === 'EXTRACT_CANDIDATES') {
@@ -47,6 +51,9 @@ export const buildTaskPrompt = (request: HarnessRequest): string => {
     task: request.task,
     role_state: roleState,
     ...(request.message === undefined ? {} : { user_message: request.message }),
+    ...(request.conversation_context === undefined
+      ? {}
+      : { conversation_context: request.conversation_context }),
     ...(request.candidates === undefined ? {} : { candidate_data: request.candidates }),
   }
   return [
@@ -60,9 +67,11 @@ export const buildTaskPrompt = (request: HarnessRequest): string => {
   ].join('\n')
 }
 
-export const buildRepairPrompt = (error: string): string => [
+export const buildRepairPrompt = (request: HarnessRequest, error: string): string => [
   '上一个最终输出未通过结构化结果校验。不要再次调用任何写入工具。',
-  '只根据刚才已经成功保存的内容修复最终 JSON，并保持 "persistence":"TOOL"。',
+  request.task === 'CLARIFY_MESSAGE'
+    ? '如果刚才没有成功调用 save_fact_draft，返回 CONVERSATION JSON 并使用 "persistence":"NONE"；如果已经成功保存事实，返回 CLARIFICATION JSON 并使用 "persistence":"TOOL"。'
+    : '只根据刚才已经成功保存的内容修复最终 JSON，并保持 "persistence":"TOOL"。',
   `校验错误：${error.slice(0, 800)}`,
   '只输出 JSON，不使用 Markdown。',
 ].join('\n')

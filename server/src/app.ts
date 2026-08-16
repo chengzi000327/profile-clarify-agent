@@ -179,7 +179,7 @@ export const buildApp = async (
     }
   }
 
-  const sanitizedTrace = async (runId: string, actor: ActorContext) => {
+  const fullTrace = async (runId: string, actor: ActorContext) => {
     requireAdmin(actor)
     const record = await store.getRun(runId)
     if (!record) throw new DomainError('AGENT_RUN_NOT_FOUND', 'Agent Run 不存在', 404)
@@ -199,20 +199,16 @@ export const buildApp = async (
     })
     return {
       run: record.run,
-      events: events.map((event) =>
-        event.type === 'assistant.delta'
-          ? {
-              ...event,
-              payload: {
-                redacted: true,
-                character_count: String(event.payload.delta ?? '').length,
-              },
-            }
-          : event,
-      ),
-      privacy: {
-        raw_user_message_logged: false,
-        candidate_content_logged: false,
+      events,
+      visibility: {
+        mode: 'FULL_ADMIN',
+        raw_user_message_logged: true,
+        model_prompt_logged: true,
+        model_response_logged: true,
+        tool_arguments_logged: true,
+        tool_results_logged: true,
+        pii_screened_candidate_content_logged: true,
+        secrets_exposed: false,
         hidden_reasoning_exposed: false,
       },
     }
@@ -642,7 +638,7 @@ export const buildApp = async (
 
   app.get('/api/v1/agent-runs/:run_id/trace', async (request) => {
     const { run_id } = RunParamsSchema.parse(request.params)
-    return sanitizedTrace(run_id, request.actor)
+    return fullTrace(run_id, request.actor)
   })
 
   app.get('/api/v1/agent-runs/:run_id/events', async (request, reply) => {
@@ -712,7 +708,7 @@ export const buildApp = async (
 
   app.get('/api/v1/admin/agent-runs/:run_id/trace', async (request) => {
     const { run_id } = RunParamsSchema.parse(request.params)
-    return sanitizedTrace(run_id, request.actor)
+    return fullTrace(run_id, request.actor)
   })
 
   app.get('/api/v1/admin/trace-audits', async (request) => {
@@ -761,7 +757,7 @@ export const buildApp = async (
         post: { summary: '取消 Agent Run' },
       },
       '/api/v1/agent-runs/{run_id}/trace': {
-        get: { summary: '企业管理员读取脱敏 Trace' },
+        get: { summary: '企业管理员读取完整执行 Trace' },
       },
       '/api/v1/admin/agent-runs': {
         get: { summary: '企业管理员读取租户内 Agent Run' },

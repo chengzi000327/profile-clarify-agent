@@ -6,14 +6,14 @@
 - users、role_sessions、成员、会话消息、澄清策略/轮次、产物、候选人、校准信号、经理任务、Agent Run/Event 和决策日志。
 - 内存/PostgreSQL 双 Store；Docker 测试环境使用 PostgreSQL。
 - 后端签名 Session 和经理/HR/企业管理员测试账号；管理员拥有租户内最高权限。
-- 消息 202 + run_id、固定事件 SSE、取消、脱敏 Trace。
+- 消息 202 + run_id、固定事件 SSE、取消、企业管理员完整执行 Trace。
 - 单岗位 Run 串行、全局默认并发 4、最多 10 次工具转换、结构化输出修复预算 1。
 - Flash/Pro 任务路由和确定性 CI 模型。
 - 四段式 JD Schema、版本、哈希确认、乐观锁和下游失效。
 - HR 内部字段服务端过滤；经理不可通过参数或 URL 读取。
 - JSON/文本候选人导入、PII 预检、10/2/2 校准、HR 审核、经理任务与决策。
 - React 登录、持久化多角色对话、澄清轮次扩展、Agent SSE、动态公开 JD 和权限文案。
-- 企业管理员脱敏 Trace 控制台：全岗位筛选、模型/Token/延迟/工具事件、访问审计和租户澄清策略。
+- 企业管理员完整 Trace 控制台：全岗位筛选、用户原文、模型 Prompt/最终输出、工具入参/返回、Token/延迟、访问审计和租户澄清策略。
 - 单元/接口安全测试、Docker Compose、环境样例和 Harness Profile 门禁。
 - 官方 Harness `0.1.0-rc.5` 精确源码提交锁、本地构建器和 JSON-RPC Sidecar。
 - 真实 `deepseek-v4-flash` / `deepseek-v4-pro` 路由、工具回调、一次结构修复和真实 Token/延迟 Trace 回传。

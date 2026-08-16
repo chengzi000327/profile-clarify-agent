@@ -155,7 +155,7 @@ export class AgentRunner {
       model_tier: modelTier,
       task,
       harness_session_id: null,
-      prompt_version: 'role-clarifier-v1',
+      prompt_version: 'role-clarifier-v2',
       model_name:
         modelTier === 'FLASH'
           ? this.config.DEEPSEEK_FLASH_MODEL
@@ -251,6 +251,8 @@ export class AgentRunner {
         message_id: pending.inputMessage.id,
         sequence: pending.inputMessage.sequence,
         sender_role: pending.inputMessage.sender_role,
+        sender_name: pending.inputMessage.sender_name,
+        content: pending.inputMessage.content,
       })
     }
 
@@ -264,29 +266,59 @@ export class AgentRunner {
         agent_run_id: run.id,
         trace_id: randomUUID(),
       }
+      const conversationMessages = pending.task === 'CLARIFY_MESSAGE'
+        ? await this.store.listConversationMessages(run.role_session_id)
+        : []
       const request: HarnessRequest = {
         task: pending.task,
         role_state: view.state,
         execution_context: executionContext,
         maximum_transitions: 10,
         structured_output_repair_attempts: 1,
+        ...(pending.task === 'CLARIFY_MESSAGE'
+          ? {
+              conversation_context: {
+                current_user_role: pending.actor.role,
+                open_clarification: pending.answeredRound
+                  ? {
+                      ordinal: pending.answeredRound.ordinal,
+                      question: pending.answeredRound.question,
+                    }
+                  : null,
+                recent_messages: conversationMessages
+                  .filter((message) =>
+                    message.id !== pending.inputMessage?.id
+                    && message.status === 'COMPLETED'
+                    && (message.sender_type === 'HUMAN' || message.sender_type === 'AGENT'),
+                  )
+                  .slice(-8)
+                  .map((message) => ({
+                    sender_type: message.sender_type as 'HUMAN' | 'AGENT',
+                    sender_role: message.sender_role,
+                    content: message.content,
+                  })),
+              },
+            }
+          : {}),
         ...(pending.message !== undefined ? { message: pending.message } : {}),
         ...(pending.candidates !== undefined ? { candidates: pending.candidates } : {}),
       }
       const result = await this.harness.run(request, {
         signal: controller.signal,
         onStatus: async (status) => emit('agent.status', { status }),
+        onModelRequest: async (prompt) => emit('model.request', { prompt }),
+        onModelResponse: async (response) => emit('model.response', { response }),
         onDelta: async (delta) => {
           outputCharacters += delta.length
           await emit('assistant.delta', { delta })
         },
-        onToolStarted: async (name) => {
+        onToolStarted: async (name, argumentsValue) => {
           toolCount += 1
           if (toolCount > 10) throw new Error('Maximum tool transitions exceeded')
-          await emit('tool.started', { name })
+          await emit('tool.started', { name, arguments: argumentsValue ?? null })
         },
-        onToolCompleted: async (name, summary) =>
-          emit('tool.completed', { name, summary }),
+        onToolCompleted: async (name, summary, resultValue) =>
+          emit('tool.completed', { name, summary, result: resultValue ?? null }),
         onTrace: async (trace) => {
           harnessTrace = trace
         },
@@ -363,6 +395,23 @@ export class AgentRunner {
     emit: (type: AgentEventType, payload: Record<string, unknown>) => Promise<void>,
   ): Promise<ConversationMessage | null> {
     const actor = pending.actor
+    if (result.kind === 'CONVERSATION') {
+      if (pending.inputMessage?.clarification_round_id) {
+        pending.inputMessage = {
+          ...pending.inputMessage,
+          clarification_round_id: null,
+        }
+        await this.store.updateConversationMessage(pending.inputMessage)
+      }
+      const message = await this.createAgentSummary(run, actor, result.answer, {
+        kind: 'CONVERSATION',
+      })
+      await emit('assistant.completed', {
+        message_id: message.id,
+        sequence: message.sequence,
+      })
+      return message
+    }
     if (result.kind === 'CLARIFICATION') {
       if (result.persistence !== 'TOOL') {
         await this.roleService.saveFactDraft(

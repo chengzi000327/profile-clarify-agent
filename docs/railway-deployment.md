@@ -64,4 +64,4 @@ Browser -> web (public HTTPS)
 4. 经理账号可登录、读取岗位、提交消息并收到完整 SSE。
 5. HR 账号看得到内部招聘画像，经理账号不可见。
 6. 真实 DeepSeek Flash 澄清和 Pro 产物各跑一次。
-7. Trace 不包含用户原文、候选人内容或密钥。
+7. 企业管理员 Trace 展示完整用户原文、模型输入输出和工具数据；确认其中不出现 API Key、Cookie 或内部令牌。
