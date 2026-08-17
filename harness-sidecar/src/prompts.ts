@@ -29,6 +29,7 @@ const projectInitialRoleState = (request: HarnessRequest): Record<string, unknow
       department: state.department,
       stage: state.stage,
       hc_status: state.hc_status,
+      hc_context: state.hc_context,
     },
     artifact_refs: artifactRefs,
   }
@@ -89,12 +90,19 @@ const taskInstructions = (request: HarnessRequest): string => {
     ].join('\n')
   }
   const artifactType = artifactByTask[request.task]
+  const contentContract = artifactType === 'ROLE_PROFILE'
+    ? 'ROLE_PROFILE content 必须包含 hiring_reason、mission、success_outcomes[{horizon,result,evidence}]、responsibilities[]、capabilities[{name,level,evidence}]、boundaries[]。'
+    : artifactType === 'ASSESSMENT_SCORECARD'
+      ? 'ASSESSMENT_SCORECARD content 必须包含 dimensions[{name,weight,method,owner,question,evidence,anchors}] 和 decision_rule；anchors 至少包含 1、3、5 分判断锚点。'
+      : artifactType === 'HR_RECRUITING_BRIEF'
+        ? 'HR_RECRUITING_BRIEF content 必须包含 candidate_definition、sourcing{target_types,titles,keywords,query,non_target}、resume_screening{decision,core_signals,rules}、phone_screen[{question,listen_for,risk}]；不得包含候选人个人信息。'
+        : 'PUBLIC_JD content 必须严格只有 title_and_basics、about_the_role、what_you_will_do、what_we_look_for 四个顶层字段。'
   return [
     `先调用 read_role_state，生成 ${artifactType} 草稿。`,
+    'HC 审批上下文 hc_context 是权威业务输入，可以直接使用；不得把它误写成模型推测。',
     '随后调用 save_artifact_draft，artifact_type 与任务保持一致。',
-    artifactType === 'PUBLIC_JD'
-      ? 'PUBLIC_JD content 必须严格只有 title_and_basics、about_the_role、what_you_will_do、what_we_look_for 四个顶层字段。'
-      : '只使用已确认事实；不确定信息必须写成待确认，不能伪造成事实。',
+    contentContract,
+    '除 HC 审批上下文外，只使用已确认事实；不确定信息必须写成待确认，不能伪造成事实。',
     '最后返回 ARTIFACT JSON，content 必须与工具中保存的内容一致。',
   ].join('\n')
 }

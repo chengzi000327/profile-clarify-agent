@@ -51,10 +51,10 @@ export const api = {
   getMessages(id, afterSequence = 0) {
     return request(`/api/v1/role-sessions/${id}/messages?after_sequence=${afterSequence}`);
   },
-  startIntake(content) {
+  startIntake(content, testRole) {
     return request('/api/v1/intake/messages', {
       method: 'POST',
-      body: JSON.stringify({ content }),
+      body: JSON.stringify({ content, ...(testRole ? { test_role: testRole } : {}) }),
     });
   },
   syncContext(id, expectedRevision) {
@@ -63,10 +63,14 @@ export const api = {
       body: JSON.stringify({ expected_revision: expectedRevision }),
     });
   },
-  sendMessage(id, content, expectedRevision) {
+  sendMessage(id, content, expectedRevision, testRole) {
     return request(`/api/v1/role-sessions/${id}/messages`, {
       method: 'POST',
-      body: JSON.stringify({ content, expected_revision: expectedRevision }),
+      body: JSON.stringify({
+        content,
+        expected_revision: expectedRevision,
+        ...(testRole ? { test_role: testRole } : {}),
+      }),
     });
   },
   extendClarification(id, reason) {
@@ -93,17 +97,19 @@ export const api = {
       body: JSON.stringify({ initial_budget: initialBudget, extension_size: extensionSize }),
     });
   },
-  generateArtifact(id, type) {
+  generateArtifact(id, type, testRole) {
     return request(`/api/v1/role-sessions/${id}/artifacts/${type}/generate`, {
       method: 'POST',
+      body: JSON.stringify(testRole ? { test_role: testRole } : {}),
     });
   },
-  confirmArtifact(id, artifactId, contentHash, expectedRevision) {
+  confirmArtifact(id, artifactId, contentHash, expectedRevision, testRole) {
     return request(`/api/v1/role-sessions/${id}/artifacts/${artifactId}:confirm`, {
       method: 'POST',
       body: JSON.stringify({
         content_hash: contentHash,
         expected_revision: expectedRevision,
+        ...(testRole ? { test_role: testRole } : {}),
       }),
     });
   },

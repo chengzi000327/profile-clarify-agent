@@ -68,7 +68,10 @@ export class MemoryStore implements ApplicationStore {
       .filter(
         ({ state, member_ids }) =>
           state.tenant_id === actor.tenant_id &&
-          (actor.role === 'ADMIN' || member_ids.includes(actor.user_id)),
+          (
+            actor.role === 'ADMIN' ||
+            member_ids.includes(actor.user_id)
+          ),
       )
       .map(({ state }) => clone(state))
       .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
@@ -83,7 +86,10 @@ export class MemoryStore implements ApplicationStore {
     if (
       !aggregate ||
       aggregate.state.tenant_id !== actor.tenant_id ||
-      (actor.role !== 'ADMIN' && !aggregate.member_ids.includes(actor.user_id))
+      (
+        actor.role !== 'ADMIN' &&
+        !aggregate.member_ids.includes(actor.user_id)
+      )
     ) {
       return null
     }
@@ -97,7 +103,12 @@ export class MemoryStore implements ApplicationStore {
   }
 
   async createRoleAggregate(aggregate: RoleAggregate): Promise<void> {
-    this.roles.set(aggregate.state.id, clone(aggregate))
+    const assignedHr = aggregate.state.hc_context?.assigned_hr_user_id
+    const memberIds = [...new Set([
+      ...aggregate.member_ids,
+      ...(assignedHr ? [assignedHr] : []),
+    ])]
+    this.roles.set(aggregate.state.id, clone({ ...aggregate, member_ids: memberIds }))
     this.policies.set(aggregate.state.id, this.makeDefaultPolicy(aggregate.state.id))
   }
 
@@ -105,6 +116,8 @@ export class MemoryStore implements ApplicationStore {
     const aggregate = this.roles.get(state.id)
     if (!aggregate || aggregate.state.revision !== expectedRevision) return false
     aggregate.state = clone(state)
+    const assignedHr = state.hc_context?.assigned_hr_user_id
+    if (assignedHr && !aggregate.member_ids.includes(assignedHr)) aggregate.member_ids.push(assignedHr)
     return true
   }
 

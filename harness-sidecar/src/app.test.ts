@@ -18,6 +18,7 @@ const state: RoleState = {
   stage: 'SUCCESS_CLARIFYING',
   revision: 1,
   hc_status: 'APPROVED',
+  hc_context: null,
   facts: [],
   conflicts: [],
   latest_artifacts: {},

@@ -41,6 +41,8 @@ const eventLabel = {
   'run.failed': '运行失败',
 };
 
+const roleLabel = { ADMIN: '企业管理员', MANAGER: '用人经理', HR: 'HR' };
+
 function formatTime(value) {
   if (!value) return '—';
   return new Date(value).toLocaleString('zh-CN', {
@@ -213,7 +215,7 @@ export default function AdminTraceConsole() {
           {filteredRuns.map((item) => (
             <button className={selectedId === item.run.id ? 'active' : ''} key={item.run.id} onClick={() => setSelectedId(item.run.id)}>
               <div><strong>{item.role_title}</strong><em className={item.run.status.toLowerCase()}>{statusLabel[item.run.status]}</em></div>
-              <p>{item.actor_display_name} · {item.run.model_tier} · {item.run.task}</p>
+              <p>{item.actor_display_name} · {item.actor_role === 'ADMIN' ? `测试为 ${roleLabel[item.run.effective_actor_role]}` : roleLabel[item.actor_role]} · {item.run.task}</p>
               <span>{formatTime(item.run.started_at)}<code>{item.run.id.slice(0, 8)}</code></span>
             </button>
           ))}
@@ -224,7 +226,7 @@ export default function AdminTraceConsole() {
           {trace && (
             <>
               <div className="trace-detail-heading">
-                <div><span>RUN {trace.run.id}</span><h2>{trace.run.task}</h2></div>
+                <div><span>RUN {trace.run.id}</span><h2>{trace.run.task}</h2><small>真实身份 {roleLabel[trace.actual_actor_role] ?? '未知'} · 有效测试身份 {roleLabel[trace.run.effective_actor_role]}</small></div>
                 <em className={trace.run.status.toLowerCase()}>{statusLabel[trace.run.status]}</em>
               </div>
               <div className="trace-metrics">

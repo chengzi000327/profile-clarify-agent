@@ -19,7 +19,7 @@ const artifactDependencies: Record<HarnessTask, ArtifactType[]> = {
   GENERATE_ROLE_PROFILE: [],
   GENERATE_ASSESSMENT: ['ROLE_PROFILE'],
   GENERATE_JD: ['ROLE_PROFILE', 'ASSESSMENT_SCORECARD'],
-  GENERATE_HR_BRIEF: ['ROLE_PROFILE', 'ASSESSMENT_SCORECARD', 'PUBLIC_JD'],
+  GENERATE_HR_BRIEF: ['ROLE_PROFILE', 'ASSESSMENT_SCORECARD'],
   EXTRACT_CANDIDATES: ['ASSESSMENT_SCORECARD'],
   CALIBRATION_ADVICE: ['ROLE_PROFILE', 'ASSESSMENT_SCORECARD'],
 }
@@ -86,6 +86,7 @@ export interface RoleStateProjection {
     department: string
     stage: RoleState['stage']
     hc_status: RoleState['hc_status']
+    hc_context: RoleState['hc_context']
   }
   facts: ProjectedFact[]
   conflicts: ProjectedConflict[]
@@ -213,6 +214,7 @@ export const projectRoleStateForTask = (
       department: state.department,
       stage: state.stage,
       hc_status: state.hc_status,
+      hc_context: state.hc_context,
     },
     facts: selectFacts(state, task),
     conflicts: ['CLARIFY_MESSAGE', 'GENERATE_ROLE_PROFILE'].includes(task)

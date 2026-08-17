@@ -1820,6 +1820,347 @@ textarea:focus-visible {
   }
 }
 
+/* Role-aware workbench state */
+.new-project-button:disabled {
+  border-color: #dfe3e8;
+  color: #818a97;
+  background: #f3f4f6;
+  cursor: default;
+}
+
+.admin-test-role-switch {
+  margin: -8px 12px 14px;
+  padding: 9px;
+  border: 1px solid #d9def0;
+  border-radius: 9px;
+  background: #f8f9fd;
+}
+
+.admin-test-role-switch > span {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 7px;
+  color: #5a6473;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.admin-test-role-switch > div {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 3px;
+  padding: 3px;
+  border-radius: 7px;
+  background: #e9ecf2;
+}
+
+.admin-test-role-switch button {
+  min-height: 27px;
+  border: 0;
+  border-radius: 5px;
+  color: #66707d;
+  background: transparent;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.admin-test-role-switch button.active {
+  color: #155eef;
+  background: #fff;
+  box-shadow: 0 1px 3px rgb(31 35 41 / 10%);
+  font-weight: 600;
+}
+
+.admin-test-role-switch > small {
+  display: block;
+  margin-top: 6px;
+  color: #9098a3;
+  font-size: 8px;
+  line-height: 13px;
+}
+
+.artifact-empty-state {
+  display: flex;
+  min-height: 420px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  padding: 50px;
+  text-align: center;
+}
+
+.artifact-empty-state > span {
+  display: grid;
+  width: 52px;
+  height: 52px;
+  place-items: center;
+  margin-bottom: 17px;
+  border: 1px solid #d6e0fb;
+  border-radius: 14px;
+  color: #155eef;
+  background: #f3f6ff;
+}
+
+.artifact-empty-state > strong {
+  color: #262b32;
+  font-size: 18px;
+}
+
+.artifact-empty-state > p {
+  max-width: 540px;
+  margin: 10px 0 20px;
+  color: #737c89;
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.artifact-empty-state > small {
+  max-width: 520px;
+  padding: 8px 12px;
+  border-radius: 7px;
+  color: #69727f;
+  background: #f3f4f6;
+  font-size: 10px;
+}
+
+.hr-empty-workspace .session-intro {
+  margin-top: 90px;
+}
+
+.generated-artifact-document {
+  min-height: 520px;
+  color: #252a31;
+  background: #fff;
+}
+
+.generated-artifact-hero {
+  padding: 28px 34px;
+  border-bottom: 1px solid var(--line);
+  background: #f8faff;
+}
+
+.generated-artifact-hero > span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #155eef;
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.generated-artifact-hero h2 {
+  max-width: 950px;
+  margin: 10px 0 0;
+  font-size: 22px;
+  line-height: 34px;
+}
+
+.generated-artifact-hero p {
+  margin: 9px 0 0;
+  color: #657080;
+  font-size: 11px;
+  line-height: 19px;
+}
+
+.generated-section {
+  padding: 24px 34px;
+  border-bottom: 1px solid var(--line);
+}
+
+.generated-section > header,
+.split-generated-section header,
+.assessment-dimension-card > header {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.generated-section > header > span,
+.split-generated-section header > span,
+.assessment-dimension-card > header > span {
+  display: grid;
+  width: 27px;
+  height: 27px;
+  flex: 0 0 27px;
+  place-items: center;
+  border-radius: 8px;
+  color: #155eef;
+  background: #eef3ff;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.generated-section h3,
+.assessment-dimension-card h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.generated-section header p,
+.assessment-dimension-card header p {
+  margin: 4px 0 0;
+  color: #7a8491;
+  font-size: 9px;
+}
+
+.generated-reason-grid,
+.generated-outcome-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.generated-reason-grid > div,
+.generated-outcome-grid > div {
+  padding: 14px;
+  border: 1px solid #e0e4ea;
+  border-radius: 9px;
+  background: #fbfcfe;
+}
+
+.generated-reason-grid small,
+.generated-outcome-grid small {
+  display: block;
+  margin-bottom: 6px;
+  color: #7b8491;
+  font-size: 9px;
+}
+
+.generated-reason-grid strong,
+.generated-outcome-grid strong {
+  font-size: 11px;
+  line-height: 19px;
+}
+
+.generated-outcome-grid p {
+  margin: 7px 0 0;
+  color: #697381;
+  font-size: 9px;
+  line-height: 16px;
+}
+
+.split-generated-section {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 30px;
+}
+
+.split-generated-section ol {
+  margin: 16px 0 0 27px;
+  padding: 0;
+}
+
+.split-generated-section li {
+  margin-bottom: 9px;
+  padding-left: 5px;
+  color: #4d5663;
+  font-size: 10px;
+  line-height: 17px;
+}
+
+.generated-capability-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.generated-capability-list > div {
+  padding: 11px 12px;
+  border-left: 2px solid #88a8f8;
+  background: #f8faff;
+}
+
+.generated-capability-list strong {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 10px;
+}
+
+.generated-capability-list em {
+  color: #155eef;
+  font-size: 8px;
+  font-style: normal;
+}
+
+.generated-capability-list p {
+  margin: 5px 0 0;
+  color: #697381;
+  font-size: 9px;
+  line-height: 15px;
+}
+
+.boundary-generated-section ul {
+  display: grid;
+  gap: 8px;
+  margin: 16px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.boundary-generated-section li {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  color: #4e5967;
+  font-size: 10px;
+  line-height: 17px;
+}
+
+.boundary-generated-section li svg { flex: 0 0 auto; margin-top: 2px; color: #16815d; }
+
+.assessment-dimension-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.assessment-dimension-card {
+  padding: 16px;
+  border: 1px solid #dfe3e9;
+  border-radius: 10px;
+}
+
+.assessment-dimension-card > p {
+  margin: 11px 0 0;
+  color: #535d6a;
+  font-size: 9px;
+  line-height: 16px;
+}
+
+.assessment-anchor-list {
+  display: grid;
+  gap: 5px;
+  margin-top: 12px;
+}
+
+.assessment-anchor-list span {
+  padding: 7px 9px;
+  border-radius: 6px;
+  color: #66707c;
+  background: #f4f5f7;
+  font-size: 8px;
+  line-height: 14px;
+}
+
+.candidate-calibration-empty {
+  display: flex;
+  grid-column: 1 / -1;
+  min-height: 86px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: #7b8490;
+  font-size: 9px;
+}
+
+.generated-empty-copy {
+  color: #8a929d;
+  font-size: 10px;
+}
+
 .app-loading,
 .login-screen {
   display: grid;

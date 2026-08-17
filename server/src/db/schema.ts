@@ -164,6 +164,9 @@ export const agentRuns = pgTable(
       .notNull()
       .references(() => roleSessions.id, { onDelete: 'cascade' }),
     actorUserId: text('actor_user_id').notNull(),
+    effectiveActorRole: text('effective_actor_role', { enum: ['MANAGER', 'HR', 'ADMIN'] })
+      .notNull()
+      .default('MANAGER'),
     status: text('status').notNull(),
     modelTier: text('model_tier').notNull(),
     task: text('task').notNull(),

@@ -49,6 +49,7 @@ const roleBusinessState = (
   state: RoleState,
 ): RoleSessionRow['businessState'] => ({
   hc_status: state.hc_status,
+  hc_context: state.hc_context,
   facts: state.facts,
   conflicts: state.conflicts,
   latest_artifacts: state.latest_artifacts,
@@ -59,6 +60,7 @@ const roleBusinessState = (
 
 const roleStateFromRow = (row: RoleSessionRow): RoleState => ({
   ...row.businessState,
+  hc_context: row.businessState.hc_context ?? null,
   id: row.id,
   tenant_id: row.tenantId,
   title: row.title,
@@ -88,6 +90,7 @@ const agentRunFromRow = (row: AgentRunRow): AgentRun => ({
   id: row.id,
   role_session_id: row.roleSessionId,
   actor_user_id: row.actorUserId,
+  effective_actor_role: row.effectiveActorRole,
   status: row.status as AgentRun['status'],
   model_tier: row.modelTier as AgentRun['model_tier'],
   task: row.task,
@@ -293,7 +296,6 @@ export class PostgresStore implements ApplicationStore {
     if (!access) return null
 
     const roleRow = 'role' in access ? access.role : access
-
     const [memberRows, artifactRows, candidateRows, signalRows, taskRows] = await Promise.all([
       options?.members === false
         ? Promise.resolve([])
@@ -344,6 +346,11 @@ export class PostgresStore implements ApplicationStore {
 
   async createRoleAggregate(aggregate: RoleAggregate): Promise<void> {
     await this.db.transaction(async (tx) => {
+      const assignedHr = aggregate.state.hc_context?.assigned_hr_user_id
+      const memberIds = [...new Set([
+        ...aggregate.member_ids,
+        ...(assignedHr ? [assignedHr] : []),
+      ])]
       const policy = this.makeDefaultPolicy(aggregate.state.id)
       await tx.insert(schema.roleSessions).values({
         id: aggregate.state.id,
@@ -357,9 +364,9 @@ export class PostgresStore implements ApplicationStore {
         createdAt: new Date(aggregate.state.created_at),
         updatedAt: new Date(aggregate.state.updated_at),
       })
-      if (aggregate.member_ids.length > 0) {
+      if (memberIds.length > 0) {
         await tx.insert(schema.roleMembers).values(
-          aggregate.member_ids.map((userId) => ({
+          memberIds.map((userId) => ({
             roleSessionId: aggregate.state.id,
             userId,
           })),
@@ -404,7 +411,15 @@ export class PostgresStore implements ApplicationStore {
         ),
       )
       .returning({ id: schema.roleSessions.id })
-    return rows.length === 1
+    if (rows.length !== 1) return false
+    const assignedHr = state.hc_context?.assigned_hr_user_id
+    if (assignedHr) {
+      await this.db
+        .insert(schema.roleMembers)
+        .values({ roleSessionId: state.id, userId: assignedHr })
+        .onConflictDoNothing()
+    }
+    return true
   }
 
   async insertArtifact(artifact: ArtifactEnvelope): Promise<void> {
@@ -546,6 +561,7 @@ export class PostgresStore implements ApplicationStore {
       id: run.id,
       roleSessionId: run.role_session_id,
       actorUserId: run.actor_user_id,
+      effectiveActorRole: run.effective_actor_role,
       status: run.status,
       modelTier: run.model_tier,
       task: run.task,
@@ -600,6 +616,7 @@ export class PostgresStore implements ApplicationStore {
       .set({
         status: run.status,
         modelTier: run.model_tier,
+        effectiveActorRole: run.effective_actor_role,
         task: run.task,
         harnessSessionId: run.harness_session_id,
         promptVersion: run.prompt_version,

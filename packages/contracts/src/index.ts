@@ -10,6 +10,9 @@ export { ROLE_CLARIFIER_SYSTEM_PROMPT, type FactCategory }
 export const ActorRoleSchema = z.enum(['MANAGER', 'HR', 'ADMIN'])
 export type ActorRole = z.infer<typeof ActorRoleSchema>
 
+export const AdminTestRoleSchema = z.enum(['MANAGER', 'HR'])
+export type AdminTestRole = z.infer<typeof AdminTestRoleSchema>
+
 export const ActorContextSchema = z.object({
   tenant_id: z.string().min(1),
   user_id: z.string().min(1),
@@ -75,6 +78,34 @@ export const JobHeaderSchema = z.object({
   reporting_line: z.string().min(1),
 })
 export type JobHeader = z.infer<typeof JobHeaderSchema>
+
+export const JobBasicsSchema = z.object({
+  recruitment_type: z.enum(['NEW_HEADCOUNT', 'REPLACEMENT', 'ORGANIZATION_ADJUSTMENT']),
+  headcount: z.number().int().positive(),
+  level: z.string().min(1),
+  reporting_line: z.string().min(1),
+  locations: z.array(z.string().min(1)).min(1),
+  employment_type: z.string().min(1),
+  salary_range: z.string().min(1),
+  target_onboard: z.string().min(1),
+})
+export type JobBasics = z.infer<typeof JobBasicsSchema>
+
+export const HcContextSchema = z.object({
+  request_id: z.string().min(1),
+  status: z.literal('APPROVED'),
+  approved_at: z.string().datetime(),
+  business_change: z.string().min(1),
+  organization_gap: z.string().min(1),
+  approved_reason: z.string().min(1),
+  initial_responsibilities: z.array(z.string().min(1)).min(1),
+  recruiting_budget: z.string().min(1),
+  recruiting_constraints: z.array(z.string().min(1)).default([]),
+  hiring_manager_user_id: z.string().min(1),
+  assigned_hr_user_id: z.string().min(1).nullable(),
+  job_basics: JobBasicsSchema,
+})
+export type HcContext = z.infer<typeof HcContextSchema>
 
 export const PublicJDSchema = z
   .object({
@@ -166,6 +197,7 @@ export const AgentRunSchema = z.object({
   id: z.string(),
   role_session_id: z.string(),
   actor_user_id: z.string(),
+  effective_actor_role: ActorRoleSchema,
   status: AgentRunStatusSchema,
   model_tier: z.enum(['FLASH', 'PRO']),
   task: z.string(),
@@ -304,6 +336,7 @@ export const RoleStateSchema = z.object({
   stage: RoleSessionStageSchema,
   revision: z.number().int().nonnegative(),
   hc_status: z.enum(['PENDING', 'APPROVED', 'REJECTED']),
+  hc_context: HcContextSchema.nullable(),
   facts: z.array(FactSchema),
   conflicts: z.array(ConflictSchema),
   latest_artifacts: z.partialRecord(
@@ -353,6 +386,11 @@ export const LoginRequestSchema = z.object({
 export const MessageRequestSchema = z.object({
   content: z.string().trim().min(1).max(8_000),
   expected_revision: z.number().int().nonnegative().optional(),
+  test_role: AdminTestRoleSchema.optional(),
+})
+
+export const ArtifactGenerateRequestSchema = z.object({
+  test_role: AdminTestRoleSchema.optional(),
 })
 
 export const ClarificationExtendRequestSchema = z.object({

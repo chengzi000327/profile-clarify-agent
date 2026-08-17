@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type {
   ActorContext,
+  AdminTestRole,
   AgentEvent,
   AgentEventType,
   AgentRun,
@@ -25,6 +26,7 @@ import type {
 interface PendingRun {
   run: AgentRun
   actor: ActorContext
+  effectiveRole: ActorContext['role']
   task: HarnessTask
   message?: string
   candidates?: CandidateImportItem[]
@@ -59,6 +61,7 @@ export class AgentRunner {
     roleSessionId: string,
     actor: ActorContext,
     message: string,
+    testRole?: AdminTestRole,
   ): Promise<{ run: AgentRun; message: ConversationMessage }> {
     const policy = await this.store.getClarificationPolicy(roleSessionId)
     const answeredRound = await this.store.getOpenClarificationRound(roleSessionId)
@@ -72,7 +75,7 @@ export class AgentRunner {
     const run = await this.enqueue(roleSessionId, actor, 'CLARIFY_MESSAGE', {
       message,
       ...(answeredRound ? { answeredRound } : {}),
-    })
+    }, testRole)
     const messages = await this.store.listConversationMessages(roleSessionId)
     const stored = messages.find((item) => item.id === run.input_message_id)
     if (!stored) throw new Error('Conversation input message was not persisted')
@@ -83,11 +86,16 @@ export class AgentRunner {
     roleSessionId: string,
     actor: ActorContext,
     artifactType: ArtifactType,
+    testRole?: AdminTestRole,
   ): Promise<AgentRun> {
-    if (artifactType === 'HR_RECRUITING_BRIEF' && !['HR', 'ADMIN'].includes(actor.role)) {
-      throw new DomainError('FORBIDDEN', '仅 HR 可以生成内部招聘画像', 403)
-    }
-    return this.enqueue(roleSessionId, actor, artifactTaskMap[artifactType])
+    const effectiveRole = this.resolveEffectiveRole(actor, testRole)
+    await this.roleService.assertArtifactGenerationAllowed(
+      roleSessionId,
+      actor,
+      effectiveRole,
+      artifactType,
+    )
+    return this.enqueue(roleSessionId, actor, artifactTaskMap[artifactType], {}, testRole)
   }
 
   async submitCandidates(
@@ -136,8 +144,10 @@ export class AgentRunner {
       candidates?: CandidateImportItem[]
       answeredRound?: ClarificationRound
     } = {},
+    testRole?: AdminTestRole,
   ): Promise<AgentRun> {
     await this.roleService.get(roleSessionId, actor)
+    const effectiveRole = this.resolveEffectiveRole(actor, testRole)
     if (this.activeRoleRuns.has(roleSessionId)) {
       throw new DomainError(
         'ROLE_AGENT_RUN_ACTIVE',
@@ -151,6 +161,7 @@ export class AgentRunner {
       id: randomUUID(),
       role_session_id: roleSessionId,
       actor_user_id: actor.user_id,
+      effective_actor_role: effectiveRole,
       status: 'QUEUED',
       model_tier: modelTier,
       task,
@@ -172,10 +183,17 @@ export class AgentRunner {
     await this.store.createRun(run)
     let inputMessage: ConversationMessage | undefined
     if (input.message !== undefined && inputMessageId) {
+      const messageActor = effectiveRole === actor.role
+        ? actor
+        : {
+            ...actor,
+            role: effectiveRole,
+            display_name: `${actor.display_name}（管理员测试·${effectiveRole === 'HR' ? 'HR' : '用人经理'}）`,
+          }
       inputMessage = await this.createMessage({
         id: inputMessageId,
         roleSessionId,
-        actor,
+        actor: messageActor,
         runId: run.id,
         clarificationRoundId: input.answeredRound?.id ?? null,
         senderType: 'HUMAN',
@@ -188,6 +206,7 @@ export class AgentRunner {
     this.pending.push({
       run,
       actor,
+      effectiveRole,
       task,
       ...(input.message !== undefined ? { message: input.message } : {}),
       ...(input.candidates !== undefined ? { candidates: input.candidates } : {}),
@@ -243,8 +262,13 @@ export class AgentRunner {
     await this.store.updateRun(run)
     await emit('run.started', {
       run_id: run.id,
+      channel: 'WEB_WORKSPACE',
       model_tier: run.model_tier,
       task: run.task,
+      actor_user_id: pending.actor.user_id,
+      actual_actor_role: pending.actor.role,
+      test_actor_role: pending.actor.role === 'ADMIN' ? pending.effectiveRole : null,
+      effective_actor_role: pending.effectiveRole,
     })
     if (pending.inputMessage) {
       await emit('message.accepted', {
@@ -261,7 +285,7 @@ export class AgentRunner {
       const executionContext: ToolExecutionContext = {
         tenant_id: pending.actor.tenant_id,
         actor_user_id: pending.actor.user_id,
-        actor_role: pending.actor.role,
+        actor_role: pending.effectiveRole,
         role_session_id: run.role_session_id,
         agent_run_id: run.id,
         trace_id: randomUUID(),
@@ -278,7 +302,7 @@ export class AgentRunner {
         ...(pending.task === 'CLARIFY_MESSAGE'
           ? {
               conversation_context: {
-                current_user_role: pending.actor.role,
+                current_user_role: pending.effectiveRole,
                 open_clarification: pending.answeredRound
                   ? {
                       ordinal: pending.answeredRound.ordinal,
@@ -654,5 +678,16 @@ export class AgentRunner {
     }
     await this.store.appendConversationMessage(message)
     return message
+  }
+
+  private resolveEffectiveRole(
+    actor: ActorContext,
+    testRole?: AdminTestRole,
+  ): ActorContext['role'] {
+    if (!testRole) return actor.role
+    if (actor.role !== 'ADMIN') {
+      throw new DomainError('FORBIDDEN', '只有企业管理员可以选择 Agent 测试身份', 403)
+    }
+    return testRole
   }
 }

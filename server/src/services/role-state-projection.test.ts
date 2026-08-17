@@ -54,6 +54,7 @@ describe('read_role_state task projection', () => {
       id: randomUUID(),
       role_session_id: DEMO_ROLE_SESSION_ID,
       actor_user_id: actorUserId,
+      effective_actor_role: actorUserId === 'hr-demo' ? 'HR' : 'MANAGER',
       status: 'RUNNING',
       model_tier: task === 'CLARIFY_MESSAGE' || task === 'EXTRACT_CANDIDATES' ? 'FLASH' : 'PRO',
       task,
@@ -94,10 +95,17 @@ describe('read_role_state task projection', () => {
     expect(result.projection).toBe('CLARIFICATION')
     expect(result.role).toMatchObject({
       id: DEMO_ROLE_SESSION_ID,
-      title: '商业化产品负责人',
-      department: '产品与商业化',
+      title: '企业产品经理',
+      department: '企业服务产品部',
       stage: 'JD_DRAFT',
       hc_status: 'APPROVED',
+      hc_context: expect.objectContaining({
+        request_id: 'HC-2026-001',
+        job_basics: expect.objectContaining({
+          level: '3-2 至 4-1',
+          reporting_line: '产品负责人',
+        }),
+      }),
     })
     expect(result.state_revision).toBe(4)
     expect(result.state).toBeUndefined()

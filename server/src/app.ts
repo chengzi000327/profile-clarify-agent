@@ -6,6 +6,7 @@ import Fastify, { type FastifyInstance } from 'fastify'
 import { ZodError, z } from 'zod'
 import {
   ArtifactTypeSchema,
+  ArtifactGenerateRequestSchema,
   ActorContextSchema,
   AgentEventSchema,
   AgentRunSchema,
@@ -21,7 +22,9 @@ import {
   MessageRequestSchema,
   PublicJDSchema,
   RoleStateSchema,
+  AdminTestRoleSchema,
   type ActorContext,
+  type AdminTestRole,
   type AgentEvent,
   type ArtifactType,
   type CandidateEvidence,
@@ -229,6 +232,21 @@ export const buildApp = async (
     }
   }
 
+  const resolveTestActor = (
+    actor: ActorContext,
+    testRole?: AdminTestRole,
+  ): ActorContext => {
+    if (!testRole) return actor
+    if (actor.role !== 'ADMIN') {
+      throw new DomainError('FORBIDDEN', '只有企业管理员可以选择 Agent 测试身份', 403)
+    }
+    return {
+      ...actor,
+      role: testRole,
+      display_name: `${actor.display_name}（管理员测试·${testRole === 'HR' ? 'HR' : '用人经理'}）`,
+    }
+  }
+
   const fullTrace = async (runId: string, actor: ActorContext) => {
     requireAdmin(actor)
     const record = await store.getRun(runId)
@@ -238,6 +256,7 @@ export const buildApp = async (
       throw new DomainError('AGENT_RUN_NOT_FOUND', 'Agent Run 不存在', 404)
     }
     const events = await store.listRunEvents(runId)
+    const runActor = await store.getUser(record.run.actor_user_id)
     await store.appendTraceAccessAudit({
       id: randomUUID(),
       tenant_id: actor.tenant_id,
@@ -249,6 +268,7 @@ export const buildApp = async (
     })
     return {
       run: record.run,
+      actual_actor_role: runActor?.role ?? null,
       events,
       visibility: {
         mode: 'FULL_ADMIN',
@@ -361,7 +381,12 @@ export const buildApp = async (
     const { tool_name } = z.object({ tool_name: z.string() }).parse(request.params)
     const body = request.body ?? {}
     if (tool_name === 'read_role_state') {
-      return roleService.readStateForTask(roleSessionId, actor, activeRun.run.task)
+      return roleService.readStateForTask(
+        roleSessionId,
+        actor,
+        activeRun.run.task,
+        activeRun.run.effective_actor_role,
+      )
     }
     if (tool_name === 'save_fact_draft') {
       const input = z
@@ -538,8 +563,17 @@ export const buildApp = async (
 
   app.post('/api/v1/intake/messages', async (request, reply) => {
     const body = MessageRequestSchema.parse(request.body)
+    const effectiveActor = resolveTestActor(request.actor, body.test_role)
+    if (!['MANAGER', 'ADMIN'].includes(effectiveActor.role)) {
+      throw new DomainError('FORBIDDEN', '岗位会话需要由用人经理创建；HR请进入已获批岗位协作', 403)
+    }
     const role = await roleService.createIntake(request.actor)
-    const result = await runner.submitMessage(role.state.id, request.actor, body.content)
+    const result = await runner.submitMessage(
+      role.state.id,
+      request.actor,
+      body.content,
+      body.test_role,
+    )
     return reply.status(202).send({
       role,
       run_id: result.run.id,
@@ -595,7 +629,7 @@ export const buildApp = async (
   app.post('/api/v1/role-sessions/:id/messages', async (request, reply) => {
     const { id } = IdParamsSchema.parse(request.params)
     const body = MessageRequestSchema.parse(request.body)
-    const result = await runner.submitMessage(id, request.actor, body.content)
+    const result = await runner.submitMessage(id, request.actor, body.content, body.test_role)
     return reply.status(202).send({
       run_id: result.run.id,
       message: result.message,
@@ -631,7 +665,8 @@ export const buildApp = async (
 
   app.post('/api/v1/role-sessions/:id/artifacts/:type/generate', async (request, reply) => {
     const { id, type } = ArtifactParamsSchema.parse(request.params)
-    const run = await runner.submitArtifact(id, request.actor, type)
+    const body = ArtifactGenerateRequestSchema.parse(request.body ?? {})
+    const run = await runner.submitArtifact(id, request.actor, type, body.test_role)
     return reply.status(202).send({
       run_id: run.id,
       stream_url: `/api/v1/agent-runs/${run.id}/events`,
@@ -658,8 +693,10 @@ export const buildApp = async (
       .object({
         content_hash: z.string().min(16),
         expected_revision: z.number().int().nonnegative(),
+        test_role: AdminTestRoleSchema.optional(),
       })
       .parse(request.body)
+    const actionActor = resolveTestActor(request.actor, body.test_role)
     return {
       artifact: await roleService.confirmArtifact(
         id,
@@ -667,6 +704,7 @@ export const buildApp = async (
         request.actor,
         body.content_hash,
         body.expected_revision,
+        actionActor.role,
       ),
     }
   })

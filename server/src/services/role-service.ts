@@ -28,12 +28,27 @@ import type {
   RoleAggregate,
   RoleAggregateReadOptions,
 } from '../store/index.js'
+import { createMockHcContext } from '../store/seed.js'
 import {
   projectRoleStateForTask,
   type RoleStateProjection,
 } from './role-state-projection.js'
 
 const nowIso = (): string => new Date().toISOString()
+
+const artifactDependencies: Record<ArtifactType, ArtifactType[]> = {
+  ROLE_PROFILE: [],
+  ASSESSMENT_SCORECARD: ['ROLE_PROFILE'],
+  PUBLIC_JD: ['ROLE_PROFILE', 'ASSESSMENT_SCORECARD'],
+  HR_RECRUITING_BRIEF: ['ROLE_PROFILE', 'ASSESSMENT_SCORECARD'],
+}
+
+const artifactNames: Record<ArtifactType, string> = {
+  ROLE_PROFILE: '画像依据',
+  ASSESSMENT_SCORECARD: '评估方案',
+  PUBLIC_JD: '对外 JD',
+  HR_RECRUITING_BRIEF: '招聘画像',
+}
 
 export interface RoleView {
   state: RoleState
@@ -60,8 +75,9 @@ export class RoleService {
     roleSessionId: string,
     actor: ActorContext,
     task: string,
+    effectiveRole: ActorContext['role'] = actor.role,
   ): Promise<RoleStateProjection> {
-    const includeCandidates = task === 'CALIBRATION_ADVICE' && ['HR', 'ADMIN'].includes(actor.role)
+    const includeCandidates = task === 'CALIBRATION_ADVICE' && ['HR', 'ADMIN'].includes(effectiveRole)
     const aggregate = await this.requireAggregate(roleSessionId, actor, {
       members: false,
       artifacts: false,
@@ -70,7 +86,7 @@ export class RoleService {
       manager_tasks: false,
     })
     return projectRoleStateForTask(
-      this.filterState(aggregate.state, actor),
+      this.filterState(aggregate.state, { ...actor, role: effectiveRole }),
       task,
       includeCandidates ? aggregate.candidates : [],
     )
@@ -89,6 +105,7 @@ export class RoleService {
       stage: 'CREATED',
       revision: 0,
       hc_status: 'PENDING',
+      hc_context: null,
       facts: [],
       conflicts: [],
       latest_artifacts: {},
@@ -120,6 +137,10 @@ export class RoleService {
       stage: 'REASON_CLARIFYING',
       revision: 0,
       hc_status: 'APPROVED',
+      hc_context: createMockHcContext({
+        hiringManagerUserId: actor.user_id,
+        assignedHrUserId: actor.tenant_id === 'tenant-demo' ? 'hr-demo' : null,
+      }),
       facts: [],
       conflicts: [],
       latest_artifacts: {},
@@ -180,6 +201,11 @@ export class RoleService {
       ...aggregate.state,
       stage: 'REASON_CLARIFYING',
       hc_status: 'APPROVED',
+      hc_context: aggregate.state.hc_context ?? createMockHcContext({
+        hiringManagerUserId: actor.user_id,
+        assignedHrUserId: actor.tenant_id === 'tenant-demo' ? 'hr-demo' : null,
+        department: aggregate.state.department,
+      }),
       revision: aggregate.state.revision + 1,
       facts: [
         {
@@ -271,6 +297,34 @@ export class RoleService {
     return this.filterState(state, actor)
   }
 
+  async assertArtifactGenerationAllowed(
+    roleSessionId: string,
+    actor: ActorContext,
+    effectiveRole: ActorContext['role'],
+    artifactType: ArtifactType,
+  ): Promise<void> {
+    const aggregate = await this.requireAggregate(roleSessionId, actor)
+    if (aggregate.state.hc_status !== 'APPROVED') {
+      throw new DomainError('HC_NOT_APPROVED', 'HC 审批通过后才能生成正式岗位产物', 409)
+    }
+    if (artifactType === 'HR_RECRUITING_BRIEF' && !['HR', 'ADMIN'].includes(effectiveRole)) {
+      throw new DomainError('FORBIDDEN', '仅 HR 可以生成内部招聘画像', 403)
+    }
+    if (artifactType !== 'HR_RECRUITING_BRIEF' && !['MANAGER', 'ADMIN'].includes(effectiveRole)) {
+      throw new DomainError('FORBIDDEN', '该产物需要由用人经理生成', 403)
+    }
+    const missing = artifactDependencies[artifactType].filter(
+      (dependency) => aggregate.state.latest_artifacts[dependency]?.status !== 'CONFIRMED',
+    )
+    if (missing.length > 0) {
+      throw new DomainError(
+        'ARTIFACT_PREREQUISITES_MISSING',
+        `请先确认${missing.map((type) => artifactNames[type]).join('、')}，再生成${artifactNames[artifactType]}`,
+        409,
+      )
+    }
+  }
+
   async saveArtifactDraft<T>(
     roleSessionId: string,
     actor: ActorContext,
@@ -348,16 +402,17 @@ export class RoleService {
     actor: ActorContext,
     submittedHash: string,
     expectedRevision: number,
+    effectiveRole: ActorContext['role'] = actor.role,
   ): Promise<ArtifactEnvelope> {
     const aggregate = await this.requireAggregate(roleSessionId, actor)
     assertRevision(aggregate.state.revision, expectedRevision)
     const artifact = aggregate.artifacts.find((item) => item.id === artifactId)
     if (!artifact) throw new DomainError('ARTIFACT_NOT_FOUND', '产物不存在', 404)
     assertArtifactAccess(actor, artifact.type)
-    if (artifact.type === 'HR_RECRUITING_BRIEF' && !['HR', 'ADMIN'].includes(actor.role)) {
+    if (artifact.type === 'HR_RECRUITING_BRIEF' && !['HR', 'ADMIN'].includes(effectiveRole)) {
       throw new DomainError('FORBIDDEN', '仅 HR 可以确认内部招聘画像', 403)
     }
-    if (artifact.type !== 'HR_RECRUITING_BRIEF' && !['MANAGER', 'ADMIN'].includes(actor.role)) {
+    if (artifact.type !== 'HR_RECRUITING_BRIEF' && !['MANAGER', 'ADMIN'].includes(effectiveRole)) {
       throw new DomainError('FORBIDDEN', '该产物需要用人经理确认', 403)
     }
     const confirmed = confirmArtifact(artifact, actor, submittedHash)
@@ -388,6 +443,7 @@ export class RoleService {
     await this.audit(actor, roleSessionId, 'CONFIRM_ARTIFACT', artifact.type, artifact.id, {
       content_hash: submittedHash,
       version: artifact.version,
+      effective_actor_role: effectiveRole,
     })
     return confirmed
   }
@@ -715,8 +771,18 @@ export class RoleService {
     if (actor.role === 'HR' || actor.role === 'ADMIN') return structuredClone(state)
     const latest = { ...state.latest_artifacts }
     delete latest.HR_RECRUITING_BRIEF
+    const hcContext = state.hc_context
+      ? {
+          ...structuredClone(state.hc_context),
+          job_basics: {
+            ...structuredClone(state.hc_context.job_basics),
+            salary_range: '按权限可见',
+          },
+        }
+      : null
     return {
       ...structuredClone(state),
+      hc_context: hcContext,
       facts: state.facts.filter((fact) => fact.visible_to !== 'HR_ONLY'),
       latest_artifacts: latest,
     }

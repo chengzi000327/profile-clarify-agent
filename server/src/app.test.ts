@@ -475,6 +475,21 @@ describe('Role Clarifier API', () => {
     expect(payload.calibration_signals).toBeUndefined()
     expect(payload.artifacts.some((item: { type: string }) => item.type === 'HR_RECRUITING_BRIEF')).toBe(false)
     expect(payload.state.latest_artifacts.HR_RECRUITING_BRIEF).toBeUndefined()
+    expect(payload.state.hc_context).toMatchObject({
+      request_id: 'HC-2026-001',
+      status: 'APPROVED',
+      assigned_hr_user_id: 'hr-demo',
+      job_basics: {
+        recruitment_type: 'NEW_HEADCOUNT',
+        headcount: 1,
+        level: '3-2 至 4-1',
+        reporting_line: '产品负责人',
+        locations: ['北京', '上海'],
+        employment_type: '全职',
+        salary_range: '按权限可见',
+        target_onboard: '8 周内',
+      },
+    })
   })
 
   it('HR 可以读取内部招聘画像，但经理不能让 Agent 生成该产物', async () => {
@@ -498,6 +513,90 @@ describe('Role Clarifier API', () => {
         (item: { type: string }) => item.type === 'HR_RECRUITING_BRIEF',
       ),
     ).toBe(true)
+    expect(allowed.json().state.hc_context.job_basics.salary_range).toBe('35K-50K·15薪')
+  })
+
+  it('HC Mock 指定负责 HR 后自动把 HR 加入同一岗位会话', async () => {
+    const managerCookie = await login(app, 'manager-demo')
+    const intake = await app.inject({
+      method: 'POST',
+      url: '/api/v1/intake/messages',
+      headers: { cookie: managerCookie },
+      payload: { content: '我要新增一名企业产品经理，先澄清招聘原因。' },
+    })
+    expect(intake.statusCode, intake.body).toBe(202)
+    const roleId = intake.json().role.state.id
+
+    const hrCookie = await login(app, 'hr-demo')
+    const roles = await app.inject({
+      method: 'GET',
+      url: '/api/v1/role-sessions',
+      headers: { cookie: hrCookie },
+    })
+    expect(roles.statusCode).toBe(200)
+    expect(roles.json().items.map((item: { id: string }) => item.id)).toContain(roleId)
+    const role = await app.inject({
+      method: 'GET',
+      url: `/api/v1/role-sessions/${roleId}`,
+      headers: { cookie: hrCookie },
+    })
+    expect(role.statusCode).toBe(200)
+    expect(role.json().state.hc_context.assigned_hr_user_id).toBe('hr-demo')
+  })
+
+  it('普通用户不能伪造管理员测试身份', async () => {
+    const managerCookie = await login(app, 'manager-demo')
+    const message = await app.inject({
+      method: 'POST',
+      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/messages`,
+      headers: { cookie: managerCookie },
+      payload: { content: '以 HR 身份测试', test_role: 'HR' },
+    })
+    expect(message.statusCode).toBe(403)
+    expect(message.json().error.code).toBe('FORBIDDEN')
+
+    const artifact = await app.inject({
+      method: 'POST',
+      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/artifacts/HR_RECRUITING_BRIEF/generate`,
+      headers: { cookie: managerCookie },
+      payload: { test_role: 'HR' },
+    })
+    expect(artifact.statusCode).toBe(403)
+    expect(artifact.json().error.code).toBe('FORBIDDEN')
+  })
+
+  it('企业管理员可按 HR 身份测试，Trace 同时保留真实身份和测试身份', async () => {
+    const adminCookie = await login(app, 'admin-demo')
+    const response = await app.inject({
+      method: 'POST',
+      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/messages`,
+      headers: { cookie: adminCookie },
+      payload: { content: '请说明当前招聘画像的用途。', test_role: 'HR' },
+    })
+    expect(response.statusCode, response.body).toBe(202)
+    const runId = response.json().run_id
+    let trace
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      const traceResponse = await app.inject({
+        method: 'GET',
+        url: `/api/v1/admin/agent-runs/${runId}/trace`,
+        headers: { cookie: adminCookie },
+      })
+      trace = traceResponse.json()
+      if (trace.run.status === 'COMPLETED') break
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    expect(trace.actual_actor_role).toBe('ADMIN')
+    expect(trace.run.effective_actor_role).toBe('HR')
+    const started = trace.events.find((event: { type: string }) => event.type === 'run.started')
+    expect(started.payload).toMatchObject({
+      actor_user_id: 'admin-demo',
+      actual_actor_role: 'ADMIN',
+      test_actor_role: 'HR',
+      effective_actor_role: 'HR',
+    })
+    const context = trace.events.find((event: { type: string }) => event.type === 'context.snapshot')
+    expect(context.payload.task_state.current_user_role).toBe('HR')
   })
 
   it('消息接口立即落库并返回 202，企业管理员可读取完整执行 Trace', async () => {
@@ -913,6 +1012,7 @@ describe('Role Clarifier API', () => {
       id: '22222222-2222-4222-8222-222222222222',
       role_session_id: DEMO_ROLE_SESSION_ID,
       actor_user_id: 'hr-demo',
+      effective_actor_role: 'HR',
       status: 'RUNNING',
       model_tier: 'FLASH',
       task: 'CLARIFY_MESSAGE',
