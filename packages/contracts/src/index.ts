@@ -141,6 +141,20 @@ export type HcApproval = z.infer<typeof HcApprovalSchema>
 const ArtifactTextSchema = z.string().trim().min(1).max(4_000)
 const ArtifactEvidenceRefsSchema = z.array(z.string().trim().min(1).max(120)).max(20).default([])
 
+const LegacyRoleProfileRequirementSchema = z.object({
+  id: z.string().trim().min(1).max(40),
+  priority: z.enum(['Must-have', 'Preferred']),
+  name: z.string().trim().min(1).max(200),
+  level: z.string().trim().min(1).max(120),
+  rationale: ArtifactTextSchema,
+  maps_to: z.array(z.string().trim().min(1).max(40)).min(1).max(12),
+  strong_evidence: z.array(ArtifactTextSchema).min(1).max(8),
+  substitute_evidence: z.array(ArtifactTextSchema).max(8).default([]),
+  risk_signals: z.array(ArtifactTextSchema).max(8).default([]),
+  assessment_method: ArtifactTextSchema,
+  evidence_refs: ArtifactEvidenceRefsSchema,
+}).strict()
+
 export const LegacyRoleProfileContentSchema = z
   .object({
     hiring_reason: z
@@ -178,21 +192,7 @@ export const LegacyRoleProfileContentSchema = z
         evidence_refs: ArtifactEvidenceRefsSchema,
       })
       .strict()).min(1).max(8),
-    requirements: z.array(z
-      .object({
-        id: z.string().trim().min(1).max(40),
-        priority: z.enum(['Must-have', 'Preferred']),
-        name: z.string().trim().min(1).max(200),
-        level: z.string().trim().min(1).max(120),
-        rationale: ArtifactTextSchema,
-        maps_to: z.array(z.string().trim().min(1).max(40)).min(1).max(12),
-        strong_evidence: z.array(ArtifactTextSchema).min(1).max(8),
-        substitute_evidence: z.array(ArtifactTextSchema).max(8).default([]),
-        risk_signals: z.array(ArtifactTextSchema).max(8).default([]),
-        assessment_method: ArtifactTextSchema,
-        evidence_refs: ArtifactEvidenceRefsSchema,
-      })
-      .strict()).min(1).max(12),
+    requirements: z.array(LegacyRoleProfileRequirementSchema).min(1).max(12),
     boundaries: z
       .object({
         owns: z.array(ArtifactTextSchema).min(1).max(12),
@@ -326,7 +326,18 @@ export const TalentProfileSchema = z.object({
   target_talent_profile: TargetTalentProfileSchema,
   qualifications: QualificationsSchema,
   competency_model: CompetencyModelSchema,
-}).strict()
+}).strict().superRefine((profile, context) => {
+  const requirementCount = [
+    ...Object.values(profile.qualifications),
+    ...Object.values(profile.competency_model),
+  ].reduce((total, requirements) => total + requirements.length, 0)
+  if (requirementCount === 0) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: '任职资格和胜任力模型必须合计至少包含一项人才要求',
+    })
+  }
+})
 export type TalentProfile = z.infer<typeof TalentProfileSchema>
 
 export const TalentProfileDraftInputSchema = z.object({
@@ -358,6 +369,7 @@ export const RoleProfileJobDescriptionContentSchema = z.discriminatedUnion('stag
 export type RoleProfileJobDescriptionContent = z.infer<typeof RoleProfileJobDescriptionContentSchema>
 
 export const RoleProfileTalentDraftContentSchema = LegacyRoleProfileContentSchema.extend({
+  requirements: z.array(LegacyRoleProfileRequirementSchema).min(1).max(132),
   schema_version: z.literal('2'),
   stage: z.literal('TALENT_PROFILE_DRAFT'),
   job_description: JobDescriptionSchema,

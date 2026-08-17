@@ -3,6 +3,7 @@ import { ROLE_CLARIFIER_SYSTEM_PROMPT as SHARED_SYSTEM_PROMPT } from '@role-clar
 import {
   AssessmentScorecardSchema,
   FactCategorySchema,
+  LegacyRoleProfileContentSchema,
   PublicJDSchema,
   ROLE_CLARIFIER_PROMPT_VERSION,
   ROLE_CLARIFIER_SYSTEM_PROMPT,
@@ -230,6 +231,37 @@ describe('人才画像增量契约', () => {
     },
   }
 
+  const thirteenTraceableRequirements = Array.from({ length: 13 }, (_, index) => ({
+    ...traceableRequirement,
+    id: `REQ-${String(index + 1).padStart(2, '0')}`,
+  }))
+  const thirteenTalentProfileDraft = {
+    talent_profile: {
+      ...validTalentProfileDraft.talent_profile,
+      qualifications: {
+        ...validTalentProfileDraft.talent_profile.qualifications,
+        must_have: thirteenTraceableRequirements.slice(0, 12),
+      },
+      competency_model: {
+        ...validTalentProfileDraft.talent_profile.competency_model,
+        skills: [thirteenTraceableRequirements[12]],
+      },
+    },
+  }
+  const thirteenLegacyRequirements = thirteenTraceableRequirements.map((requirement) => ({
+    id: requirement.id,
+    priority: 'Must-have',
+    name: requirement.name,
+    level: requirement.definition,
+    rationale: `对应岗位依据：${requirement.maps_to.join('、')}`,
+    maps_to: requirement.maps_to,
+    strong_evidence: requirement.observable_evidence,
+    substitute_evidence: [],
+    risk_signals: [],
+    assessment_method: '围绕可观察证据进行结构化追问',
+    evidence_refs: requirement.evidence_refs,
+  }))
+
   const validTalentDraftContent = {
     schema_version: '2',
     stage: 'TALENT_PROFILE_DRAFT',
@@ -345,6 +377,26 @@ describe('人才画像增量契约', () => {
     }
   })
 
+  it('拒绝 11 个人才要求分组全部为空的模型输出', () => {
+    expect(TalentProfileDraftInputSchema.safeParse({
+      talent_profile: {
+        ...validTalentProfileDraft.talent_profile,
+        qualifications: {
+          hard_qualifications: [], necessary_experience: [], role_conditions: [],
+          must_have: [], preferred: [], alternatives: [],
+        },
+        competency_model: {
+          knowledge: [], skills: [], behavioral_competencies: [],
+          values_and_work_style: [], career_motivation: [],
+        },
+      },
+    }).success).toBe(false)
+  })
+
+  it('接受分布在不同分组的 13 项人才要求输入', () => {
+    expect(TalentProfileDraftInputSchema.safeParse(thirteenTalentProfileDraft).success).toBe(true)
+  })
+
   it('拒绝缺失可观察证据、岗位映射、证据引用或合法状态的人才条目', () => {
     for (const requirement of [
       { ...traceableRequirement, maps_to: [] },
@@ -376,6 +428,29 @@ describe('人才画像增量契约', () => {
     expect(RoleProfileTalentDraftContentSchema.safeParse(validTalentDraftContent).success).toBe(true)
   })
 
+  it('接受带 13 条 legacy requirements 投影的 V2 人才画像草稿', () => {
+    expect(RoleProfileTalentDraftContentSchema.safeParse({
+      ...validTalentDraftContent,
+      talent_profile: thirteenTalentProfileDraft.talent_profile,
+      requirements: thirteenLegacyRequirements,
+    }).success).toBe(true)
+  })
+
+  it('历史 standalone 岗位画像仍拒绝 13 条 requirements', () => {
+    const {
+      schema_version: _schemaVersion,
+      stage: _stage,
+      job_description: _jobDescription,
+      job_description_confirmation: _jobDescriptionConfirmation,
+      talent_profile: _talentProfile,
+      ...legacyContent
+    } = validTalentDraftContent
+    expect(LegacyRoleProfileContentSchema.safeParse({
+      ...legacyContent,
+      requirements: thirteenLegacyRequirements,
+    }).success).toBe(false)
+  })
+
   it('拒绝缺失 legacy 投影、额外字段或篡改锁定岗位说明的 V2 人才画像草稿', () => {
     const { requirements: _requirements, ...missingLegacyProjection } = validTalentDraftContent
     expect(RoleProfileTalentDraftContentSchema.safeParse(missingLegacyProjection).success).toBe(false)
@@ -399,6 +474,7 @@ describe('人才画像增量契约', () => {
     expect(talentPrompt).toContain('observable_evidence')
     expect(talentPrompt).toContain('evidence_refs')
     expect(talentPrompt).toContain('status')
+    expect(talentPrompt).toContain('11 个分组合计至少包含 1 项 TraceableRequirement')
     expect(talentPrompt.indexOf('target_talent_profile')).toBeLessThan(talentPrompt.indexOf('qualifications'))
     expect(talentPrompt.indexOf('qualifications')).toBeLessThan(talentPrompt.indexOf('competency_model'))
   })
