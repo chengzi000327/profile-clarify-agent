@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
 import { ROLE_CLARIFIER_SYSTEM_PROMPT as SHARED_SYSTEM_PROMPT } from '@role-clarifier/agent-spec'
-import { promptForTask } from '../../agent-spec/dist/index.js'
 import {
   AssessmentScorecardSchema,
   FactCategorySchema,
@@ -8,6 +7,7 @@ import {
   ROLE_CLARIFIER_PROMPT_VERSION,
   ROLE_CLARIFIER_SYSTEM_PROMPT,
   RoleProfileContentSchema,
+  promptForTask,
 } from './index.js'
 
 describe('共享 Agent 规范', () => {
