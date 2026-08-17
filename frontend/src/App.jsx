@@ -1649,7 +1649,7 @@ function GeneratedProfileBasis({ artifact, state, onOpenEvidence }) {
           <header><span>03</span><div><h3>关键责任领域</h3><p>持续承担的主要责任、核心产出及其关联成功结果。</p></div></header>
           <div className="generated-requirement-list">
             {jobDescription.accountabilities.map((item, index) => (
-              <details key={item.id} defaultOpen={index === 0}>
+              <details key={item.id} open={index === 0}>
                 <summary><span className="must">{item.id}</span><strong>{item.name}</strong><ChevronDown size={15} /></summary>
                 <div className="generated-requirement-detail">
                   <DefinitionItem label="持续承担的责任" value={item.responsibility} />
@@ -1681,7 +1681,7 @@ function GeneratedProfileBasis({ artifact, state, onOpenEvidence }) {
           <header><span>05</span><div><h3>关键工作场景与挑战</h3><p>描述岗位成功所面对的真实工作情境、挑战与协作关系。</p></div></header>
           <div className="generated-scenario-list">
             {jobDescription.workScenarios.map((scenario, index) => (
-              <details key={scenario.id} defaultOpen={index === 0}>
+              <details key={scenario.id} open={index === 0}>
                 <summary>
                   <span>{scenario.id}</span><strong>{scenario.title}</strong><small>{scenario.frequency}</small>
                   {scenario.successOutcomeRefs.length > 0 && <em>{scenario.successOutcomeRefs.join(' · ')}</em>}
