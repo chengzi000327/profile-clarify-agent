@@ -143,6 +143,32 @@ test('creates stable distinct requirement instance keys for duplicate ids in one
   assert.equal(first, roleProfileRequirementInstanceKey('must-have', duplicateRequirement, 0));
 });
 
+test('normalizes stable distinct instance keys for historical duplicate job-description ids', () => {
+  const result = normalizeRoleProfileContent({
+    schema_version: '2',
+    stage: 'JOB_DESCRIPTION_DRAFT',
+    job_description: {
+      ...validJobDescription,
+      key_accountabilities: [
+        validJobDescription.key_accountabilities[0],
+        validJobDescription.key_accountabilities[0],
+      ],
+      success_criteria: [
+        validJobDescription.success_criteria[0],
+        validJobDescription.success_criteria[0],
+      ],
+      work_scenarios: [
+        validJobDescription.work_scenarios[0],
+        validJobDescription.work_scenarios[0],
+      ],
+    },
+  });
+
+  assert.notEqual(result.jobDescription.accountabilities[0].instanceKey, result.jobDescription.accountabilities[1].instanceKey);
+  assert.notEqual(result.jobDescription.successCriteria[0].instanceKey, result.jobDescription.successCriteria[1].instanceKey);
+  assert.notEqual(result.jobDescription.workScenarios[0].instanceKey, result.jobDescription.workScenarios[1].instanceKey);
+});
+
 test('normalizes staged V2 job description without fabricating talent content', () => {
   const result = normalizeRoleProfileContent({
     schema_version: '2',

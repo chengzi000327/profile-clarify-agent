@@ -1679,10 +1679,10 @@ function GeneratedProfileBasis({ artifact, state, onOpenEvidence }) {
           <header><span>03</span><div><h3>关键责任领域</h3><p>持续承担的主要责任、核心产出及其关联成功结果。</p></div></header>
           <div className="generated-requirement-list">
             {jobDescription.accountabilities.map((item, index) => {
-              const detailKey = `accountability:${item.id}`;
+              const detailKey = item.instanceKey;
               return (
                 <details
-                  key={item.id}
+                  key={item.instanceKey}
                   open={isStagedDetailOpen(detailKey, index === 0)}
                   onToggle={rememberStagedDetailToggle(detailKey)}
                 >
@@ -1702,7 +1702,7 @@ function GeneratedProfileBasis({ artifact, state, onOpenEvidence }) {
           <header><span>04</span><div><h3>关键绩效结果与成功标准</h3><p>按 3 / 6 / 12 个月明确结果定义、衡量方式与确认状态。</p></div></header>
           <div className="generated-outcome-list">
             {jobDescription.successCriteria.map((outcome) => (
-              <div className="generated-outcome-row" key={outcome.id}>
+              <div className="generated-outcome-row" key={outcome.instanceKey}>
                 <div className="generated-outcome-time"><small>{outcome.id}</small><strong>{outcome.horizon}</strong></div>
                 <div className="generated-outcome-main">
                   <div><h4>{outcome.title}</h4><span>{outcome.status}</span></div>
@@ -1718,10 +1718,10 @@ function GeneratedProfileBasis({ artifact, state, onOpenEvidence }) {
           <header><span>05</span><div><h3>关键工作场景与挑战</h3><p>描述岗位成功所面对的真实工作情境、挑战与协作关系。</p></div></header>
           <div className="generated-scenario-list">
             {jobDescription.workScenarios.map((scenario, index) => {
-              const detailKey = `scenario:${scenario.id}`;
+              const detailKey = scenario.instanceKey;
               return (
                 <details
-                  key={scenario.id}
+                  key={scenario.instanceKey}
                   open={isStagedDetailOpen(detailKey, index === 0)}
                   onToggle={rememberStagedDetailToggle(detailKey)}
                 >

@@ -117,7 +117,11 @@ export const ROLE_PROFILE_TALENT_PROFILE_PROMPT = `当 task_context.role_profile
   }
 }
 每个 TraceableRequirement 必须包含 id、name、definition、maps_to、observable_evidence、evidence_refs、status；maps_to、observable_evidence、evidence_refs 均至少一项，status 只能为“已确认”“待确认”“推断”或“冲突”。
-任职资格和胜任力模型的 11 个分组合计至少包含 1 项 TraceableRequirement，11 个分组内及跨分组的 id 必须全局唯一。`
+target_talent_profile 的 transferable_backgrounds、fit_signals、non_target_and_misjudgments、attraction_factors、evidence_refs 各至少 1 项。
+qualifications 的 necessary_experience 和 must_have 各至少 1 项；其他任职资格分组可为空。
+competency_model 的 knowledge、skills、behavioral_competencies、values_and_work_style、career_motivation 五个分组各至少 1 项。
+所有 TraceableRequirement.maps_to 只能引用已锁定岗位说明中的 KRA、O、S ID，不得创造或引用其他 ID。
+11 个分组内及跨分组的 id 必须全局唯一。`
 
 export const ROLE_PROFILE_GENERATION_PROMPT = `<P-03 岗位画像生成>
 根据 task_context.role_profile_mode 路由到对应阶段：

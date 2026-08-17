@@ -154,7 +154,15 @@ const validTalentProfile = {
     }],
   },
   competency_model: {
-    knowledge: [],
+    knowledge: [{
+      id: 'C-KNOW-01',
+      name: '企业服务产品知识',
+      definition: '理解企业客户多角色决策与产品标准化的基本机制。',
+      maps_to: ['KRA-01'],
+      observable_evidence: ['能解释客户差异如何影响产品边界。'],
+      evidence_refs: ['HC-2026-EP-001'],
+      status: '推断',
+    }],
     skills: [{
       id: 'C-SKILL-01',
       name: '结构化需求判断',
@@ -164,9 +172,33 @@ const validTalentProfile = {
       evidence_refs: ['HC-2026-EP-001'],
       status: '推断',
     }],
-    behavioral_competencies: [],
-    values_and_work_style: [],
-    career_motivation: [],
+    behavioral_competencies: [{
+      id: 'C-BEHAVIOR-01',
+      name: '跨团队影响力',
+      definition: '在无直接汇报关系下推动关键角色形成共识。',
+      maps_to: ['S-01'],
+      observable_evidence: ['能还原冲突、影响动作与最终承诺。'],
+      evidence_refs: ['HC-2026-EP-001'],
+      status: '推断',
+    }],
+    values_and_work_style: [{
+      id: 'C-VALUES-01',
+      name: '长期价值与事实导向',
+      definition: '在短期交付压力下仍以证据维护长期产品边界。',
+      maps_to: ['O-03'],
+      observable_evidence: ['能说明一次拒绝低复用需求的依据与结果。'],
+      evidence_refs: ['HC-2026-EP-001'],
+      status: '推断',
+    }],
+    career_motivation: [{
+      id: 'C-MOTIVATION-01',
+      name: '平台产品建设动机',
+      definition: '愿意承担从不确定机会到规模复用的长期产品责任。',
+      maps_to: ['O-02', 'O-03'],
+      observable_evidence: ['能说明选择长期产品建设而非单项目成功的原因。'],
+      evidence_refs: ['HC-2026-EP-001'],
+      status: '推断',
+    }],
   },
 } as const
 
@@ -437,11 +469,28 @@ describe('Role Clarifier API', () => {
 
   it('预置 ROLE_PROFILE 是已确认的 V2 人才画像，并保留确定性兼容投影', () => {
     const aggregate = createDemoAggregate()
-    const seedRoleProfile = aggregate.artifacts.find((artifact) => artifact.type === 'ROLE_PROFILE')
+    const roleProfileArtifacts = aggregate.artifacts
+      .filter((artifact) => artifact.type === 'ROLE_PROFILE')
+      .sort((left, right) => left.version - right.version)
+    const [sourceDraft, lockedDescription, seedRoleProfile] = roleProfileArtifacts
+
+    expect(roleProfileArtifacts).toHaveLength(3)
+    expect(sourceDraft).toMatchObject({ version: 1, status: 'DRAFT', based_on_hash: null, content: { stage: 'JOB_DESCRIPTION_DRAFT' } })
+    expect(lockedDescription).toMatchObject({
+      version: 2,
+      status: 'DRAFT',
+      based_on_hash: sourceDraft?.content_hash,
+      content: {
+        stage: 'JOB_DESCRIPTION_CONFIRMED',
+        job_description_confirmation: { source_artifact_id: sourceDraft?.id },
+      },
+    })
 
     expect(seedRoleProfile).toMatchObject({
       type: 'ROLE_PROFILE',
+      version: 3,
       status: 'CONFIRMED',
+      based_on_hash: lockedDescription?.content_hash,
       content: {
         schema_version: '2',
         stage: 'TALENT_PROFILE_DRAFT',
@@ -463,11 +512,27 @@ describe('Role Clarifier API', () => {
 
     const content = talentParsed.data
     expect(content.job_description_confirmation).toMatchObject({
-      source_artifact_id: expect.any(String),
+      source_artifact_id: sourceDraft?.id,
       confirmed_by: 'manager-demo',
       confirmed_at: expect.any(String),
     })
     expect(content.job_description_confirmation.section_hash).toBe(contentHash(content.job_description))
+    expect(RoleProfileContentSchema.safeParse(sourceDraft!.content).success).toBe(true)
+    expect(RoleProfileContentSchema.safeParse(lockedDescription!.content).success).toBe(true)
+    expect((lockedDescription!.content as { job_description_confirmation: { section_hash: string } })
+      .job_description_confirmation.section_hash).toBe(contentHash(content.job_description))
+    expect(aggregate.state.latest_artifacts.ROLE_PROFILE).toMatchObject({
+      id: seedRoleProfile!.id,
+      version: 3,
+      content_hash: seedRoleProfile!.content_hash,
+    })
+    for (const group of Object.values(content.talent_profile.competency_model)) {
+      expect(group.length).toBeGreaterThanOrEqual(1)
+      for (const requirement of group) {
+        expect(requirement.observable_evidence.length).toBeGreaterThanOrEqual(1)
+        expect(requirement.evidence_refs.length).toBeGreaterThanOrEqual(1)
+      }
+    }
     expect({
       hiring_reason: content.hiring_reason,
       mission: content.mission,
@@ -493,10 +558,13 @@ describe('Role Clarifier API', () => {
   it('每次创建预置聚合时隔离 ROLE_PROFILE 内容变更', () => {
     const first = createDemoAggregate()
     const second = createDemoAggregate()
-    const firstContent = first.artifacts.find((artifact) => artifact.type === 'ROLE_PROFILE')!.content as {
+    const latestRoleProfile = (artifacts: typeof first.artifacts) => artifacts
+      .filter((artifact) => artifact.type === 'ROLE_PROFILE')
+      .sort((left, right) => right.version - left.version)[0]!
+    const firstContent = latestRoleProfile(first.artifacts).content as {
       job_description: { job_purpose: { statement: string } }
     }
-    const secondContent = second.artifacts.find((artifact) => artifact.type === 'ROLE_PROFILE')!.content as {
+    const secondContent = latestRoleProfile(second.artifacts).content as {
       job_description: { job_purpose: { statement: string } }
     }
     const originalPurpose = secondContent.job_description.job_purpose.statement
@@ -507,6 +575,22 @@ describe('Role Clarifier API', () => {
     } finally {
       firstContent.job_description.job_purpose.statement = originalPurpose
     }
+  })
+
+  it('预置岗位画像各历史版本之间保持深层隔离', () => {
+    const aggregate = createDemoAggregate()
+    const roleProfiles = aggregate.artifacts
+      .filter((artifact) => artifact.type === 'ROLE_PROFILE')
+      .sort((left, right) => left.version - right.version)
+    const lockedConfirmation = (roleProfiles[1]!.content as {
+      job_description_confirmation: { confirmed_by: string }
+    }).job_description_confirmation
+    const finalConfirmation = (roleProfiles[2]!.content as {
+      job_description_confirmation: { confirmed_by: string }
+    }).job_description_confirmation
+
+    finalConfirmation.confirmed_by = 'mutation-must-not-leak'
+    expect(lockedConfirmation.confirmed_by).toBe('manager-demo')
   })
 
   const lockJobDescription = async () => {
@@ -954,7 +1038,7 @@ describe('Role Clarifier API', () => {
       latest_artifacts: { ROLE_PROFILE: { id: locked.id, status: 'DRAFT' } },
     })
     expect(detail.json().artifacts.filter((artifact: { type: string }) => artifact.type === 'ROLE_PROFILE'))
-      .toHaveLength(3)
+      .toHaveLength(before.json().artifacts.filter((artifact: { type: string }) => artifact.type === 'ROLE_PROFILE').length + 2)
 
     const lockedAgain = await app.inject({
       method: 'POST',
@@ -1214,7 +1298,11 @@ describe('Role Clarifier API', () => {
       expect.objectContaining({ id: 'Q-MUST-01', priority: 'Must-have', substitute_evidence: [] }),
       expect.objectContaining({ id: 'Q-PREF-01', priority: 'Preferred', substitute_evidence: [] }),
       expect.objectContaining({ id: 'Q-ALT-01', priority: 'Must-have', substitute_evidence: ['能说明在冲突目标下的取舍和结果。'] }),
+      expect.objectContaining({ id: 'C-KNOW-01', priority: 'Must-have', substitute_evidence: [] }),
       expect.objectContaining({ id: 'C-SKILL-01', priority: 'Must-have', substitute_evidence: [] }),
+      expect.objectContaining({ id: 'C-BEHAVIOR-01', priority: 'Must-have', substitute_evidence: [] }),
+      expect.objectContaining({ id: 'C-VALUES-01', priority: 'Must-have', substitute_evidence: [] }),
+      expect.objectContaining({ id: 'C-MOTIVATION-01', priority: 'Must-have', substitute_evidence: [] }),
     ])
     expect(RoleProfileContentSchema.safeParse(talentContent).success).toBe(true)
     await expect(roleService.saveArtifactDraft(
@@ -1223,6 +1311,29 @@ describe('Role Clarifier API', () => {
       'ROLE_PROFILE',
       { talent_profile: validTalentProfile },
     )).rejects.toMatchObject({ code: 'TALENT_PROFILE_CONFIRMATION_REQUIRED' })
+  })
+
+  it('人才要求 maps_to 只能引用已锁定岗位说明且失败不写入版本或 revision', async () => {
+    const { locked, afterLock } = await lockJobDescription()
+    const invalidTalentProfile = structuredClone(validTalentProfile) as unknown as {
+      competency_model: { knowledge: Array<{ maps_to: string[] }> }
+    }
+    invalidTalentProfile.competency_model.knowledge[0]!.maps_to = ['KRA-NOT-LOCKED']
+
+    await expect(roleService.saveArtifactDraft(
+      DEMO_ROLE_SESSION_ID,
+      managerActor,
+      'ROLE_PROFILE',
+      { talent_profile: invalidTalentProfile },
+    )).rejects.toMatchObject({ code: 'ARTIFACT_CONTENT_INVALID', statusCode: 422 })
+
+    const unchanged = await roleService.get(DEMO_ROLE_SESSION_ID, managerActor)
+    expect(unchanged.state.revision).toBe(afterLock.state.revision)
+    expect(unchanged.state.latest_artifacts.ROLE_PROFILE).toMatchObject({
+      id: locked.id,
+      content_hash: locked.content_hash,
+    })
+    expect(unchanged.artifacts).toHaveLength(afterLock.artifacts.length)
   })
 
   it('人才画像草稿经现有通用确认后进入 PROFILE_CONFIRMED', async () => {
@@ -1254,7 +1365,8 @@ describe('Role Clarifier API', () => {
   it('岗位说明确认拒绝非最新版本、错误 hash、错误 revision 和 HR 操作', async () => {
     const managerCookie = await login(app, 'manager-demo')
     const seeded = (await roleService.get(DEMO_ROLE_SESSION_ID, managerActor))
-      .artifacts.find((artifact) => artifact.type === 'ROLE_PROFILE')!
+      .artifacts.filter((artifact) => artifact.type === 'ROLE_PROFILE')
+      .sort((left, right) => right.version - left.version)[0]!
     const draft = await roleService.saveArtifactDraft(
       DEMO_ROLE_SESSION_ID, managerActor, 'ROLE_PROFILE', { job_description: validJobDescription },
     )

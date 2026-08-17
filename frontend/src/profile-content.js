@@ -233,35 +233,47 @@ export function normalizeRoleProfileContent(content = {}, hc = null) {
       statement: toText(rawJobDescription.job_purpose?.statement),
       evidenceRefs: evidenceRefs(rawJobDescription.job_purpose?.evidence_refs),
     },
-    accountabilities: asArray(rawJobDescription.key_accountabilities).map((item, index) => ({
-      id: toText(item?.id) || `KRA-${String(index + 1).padStart(2, '0')}`,
-      name: toText(item?.name) || '待补充责任领域',
-      responsibility: toText(item?.responsibility) || '待补充持续承担的责任',
-      coreOutputs: textList(item?.core_outputs),
-      successOutcomeRefs: textList(item?.success_outcome_refs),
-      evidenceRefs: evidenceRefs(item?.evidence_refs),
-    })),
-    successCriteria: asArray(rawJobDescription.success_criteria).map((item, index) => ({
-      id: toText(item?.id) || `O-${String(index + 1).padStart(2, '0')}`,
-      horizon: toText(item?.horizon) || `阶段 ${index + 1}`,
-      title: toText(item?.title) || '待补充成功结果',
-      definition: toText(item?.definition) || '待补充结果定义',
-      measures: textList(item?.measures),
-      status: toText(item?.status) || '待确认',
-      evidenceRefs: evidenceRefs(item?.evidence_refs),
-    })),
-    workScenarios: asArray(rawJobDescription.work_scenarios).map((item, index) => ({
-      id: toText(item?.id) || `S-${String(index + 1).padStart(2, '0')}`,
-      title: toText(item?.title) || `关键工作场景 ${index + 1}`,
-      frequency: toText(item?.frequency) || '频率待确认',
-      trigger: toText(item?.trigger) || '触发情境待补充',
-      actions: toText(item?.actions) || joinText(item?.actions) || '关键动作待补充',
-      output: toText(item?.output) || joinText(item?.outputs) || '主要产出待补充',
-      challenge: toText(item?.challenge) || '核心挑战待补充',
-      stakeholders: textList(item?.stakeholders),
-      successOutcomeRefs: textList(item?.success_outcome_refs),
-      evidenceRefs: evidenceRefs(item?.evidence_refs),
-    })),
+    accountabilities: asArray(rawJobDescription.key_accountabilities).map((item, index) => {
+      const id = toText(item?.id) || `KRA-${String(index + 1).padStart(2, '0')}`;
+      return {
+        id,
+        instanceKey: `accountability:${id}:${index}`,
+        name: toText(item?.name) || '待补充责任领域',
+        responsibility: toText(item?.responsibility) || '待补充持续承担的责任',
+        coreOutputs: textList(item?.core_outputs),
+        successOutcomeRefs: textList(item?.success_outcome_refs),
+        evidenceRefs: evidenceRefs(item?.evidence_refs),
+      };
+    }),
+    successCriteria: asArray(rawJobDescription.success_criteria).map((item, index) => {
+      const id = toText(item?.id) || `O-${String(index + 1).padStart(2, '0')}`;
+      return {
+        id,
+        instanceKey: `success-criterion:${id}:${index}`,
+        horizon: toText(item?.horizon) || `阶段 ${index + 1}`,
+        title: toText(item?.title) || '待补充成功结果',
+        definition: toText(item?.definition) || '待补充结果定义',
+        measures: textList(item?.measures),
+        status: toText(item?.status) || '待确认',
+        evidenceRefs: evidenceRefs(item?.evidence_refs),
+      };
+    }),
+    workScenarios: asArray(rawJobDescription.work_scenarios).map((item, index) => {
+      const id = toText(item?.id) || `S-${String(index + 1).padStart(2, '0')}`;
+      return {
+        id,
+        instanceKey: `scenario:${id}:${index}`,
+        title: toText(item?.title) || `关键工作场景 ${index + 1}`,
+        frequency: toText(item?.frequency) || '频率待确认',
+        trigger: toText(item?.trigger) || '触发情境待补充',
+        actions: toText(item?.actions) || joinText(item?.actions) || '关键动作待补充',
+        output: toText(item?.output) || joinText(item?.outputs) || '主要产出待补充',
+        challenge: toText(item?.challenge) || '核心挑战待补充',
+        stakeholders: textList(item?.stakeholders),
+        successOutcomeRefs: textList(item?.success_outcome_refs),
+        evidenceRefs: evidenceRefs(item?.evidence_refs),
+      };
+    }),
     boundaries: {
       owns: textList(rawJobDescription.boundaries?.owns),
       doesNotOwn: textList(rawJobDescription.boundaries?.does_not_own),

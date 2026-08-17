@@ -145,6 +145,27 @@ export const mergeLockedRoleProfileContent = (
   if (contentHash(locked.job_description) !== locked.job_description_confirmation.section_hash) {
     throw new DomainError('JOB_DESCRIPTION_LOCK_INVALID', '岗位说明锁定校验失败', 409)
   }
+  const validMappingIds = new Set([
+    ...locked.job_description.key_accountabilities.map(({ id }) => id),
+    ...locked.job_description.success_criteria.map(({ id }) => id),
+    ...locked.job_description.work_scenarios.map(({ id }) => id),
+  ])
+  const talentRequirements = [
+    ...Object.values(input.talent_profile.qualifications),
+    ...Object.values(input.talent_profile.competency_model),
+  ].flat()
+  const invalidMappings = talentRequirements.flatMap((requirement) =>
+    requirement.maps_to
+      .filter((reference) => !validMappingIds.has(reference))
+      .map((reference) => `${requirement.id}.maps_to:${reference}`),
+  )
+  if (invalidMappings.length > 0) {
+    throw new DomainError(
+      'ARTIFACT_CONTENT_INVALID',
+      `岗位画像结构不符合前端展示契约：人才要求只能引用已锁定岗位说明中的 KRA、成功结果或工作场景 ID（${invalidMappings.slice(0, 5).join('、')}）`,
+      422,
+    )
+  }
   const base = {
     schema_version: '2' as const,
     stage: 'TALENT_PROFILE_DRAFT' as const,

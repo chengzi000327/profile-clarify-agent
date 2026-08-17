@@ -272,7 +272,48 @@ export const JobDescriptionSchema = z.object({
     available_resources: z.array(ArtifactTextSchema).min(1).max(12),
     evidence_refs: ArtifactEvidenceRefsSchema,
   }).strict(),
-}).strict()
+}).strict().superRefine((description, context) => {
+  const identifiedSections = [
+    ['key_accountabilities', description.key_accountabilities],
+    ['success_criteria', description.success_criteria],
+    ['work_scenarios', description.work_scenarios],
+  ] as const
+  const seenIds = new Set<string>()
+  for (const [section, items] of identifiedSections) {
+    items.forEach((item, index) => {
+      const path = [section, index, 'id'] as const
+      if (seenIds.has(item.id)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [...path],
+          message: `岗位说明中的 KRA、成功结果与工作场景 id 必须全局唯一：${item.id}`,
+        })
+      } else {
+        seenIds.add(item.id)
+      }
+    })
+  }
+
+  const successCriterionIds = new Set(description.success_criteria.map(({ id }) => id))
+  const validateSuccessReferences = (
+    section: 'key_accountabilities' | 'work_scenarios',
+    items: typeof description.key_accountabilities | typeof description.work_scenarios,
+  ) => {
+    items.forEach((item, itemIndex) => {
+      item.success_outcome_refs.forEach((reference, referenceIndex) => {
+        if (!successCriterionIds.has(reference)) {
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [section, itemIndex, 'success_outcome_refs', referenceIndex],
+            message: `引用的成功结果 ${reference} 不存在于本岗位说明 success_criteria`,
+          })
+        }
+      })
+    })
+  }
+  validateSuccessReferences('key_accountabilities', description.key_accountabilities)
+  validateSuccessReferences('work_scenarios', description.work_scenarios)
+})
 export type JobDescription = z.infer<typeof JobDescriptionSchema>
 
 export const JobDescriptionDraftInputSchema = z.object({
@@ -295,30 +336,30 @@ const TraceableTalentRequirementSchema = z.object({
 
 export const TargetTalentProfileSchema = z.object({
   core_definition: ArtifactTextSchema,
-  transferable_backgrounds: z.array(ArtifactTextSchema).max(12),
-  fit_signals: z.array(ArtifactTextSchema).max(12),
-  non_target_and_misjudgments: z.array(ArtifactTextSchema).max(12),
-  attraction_factors: z.array(ArtifactTextSchema).max(12),
-  evidence_refs: ArtifactEvidenceRefsSchema,
+  transferable_backgrounds: z.array(ArtifactTextSchema).min(1).max(12),
+  fit_signals: z.array(ArtifactTextSchema).min(1).max(12),
+  non_target_and_misjudgments: z.array(ArtifactTextSchema).min(1).max(12),
+  attraction_factors: z.array(ArtifactTextSchema).min(1).max(12),
+  evidence_refs: z.array(z.string().trim().min(1).max(120)).min(1).max(20),
 }).strict()
 export type TargetTalentProfile = z.infer<typeof TargetTalentProfileSchema>
 
 export const QualificationsSchema = z.object({
   hard_qualifications: z.array(TraceableTalentRequirementSchema).max(12),
-  necessary_experience: z.array(TraceableTalentRequirementSchema).max(12),
+  necessary_experience: z.array(TraceableTalentRequirementSchema).min(1).max(12),
   role_conditions: z.array(TraceableTalentRequirementSchema).max(12),
-  must_have: z.array(TraceableTalentRequirementSchema).max(12),
+  must_have: z.array(TraceableTalentRequirementSchema).min(1).max(12),
   preferred: z.array(TraceableTalentRequirementSchema).max(12),
   alternatives: z.array(TraceableTalentRequirementSchema).max(12),
 }).strict()
 export type Qualifications = z.infer<typeof QualificationsSchema>
 
 export const CompetencyModelSchema = z.object({
-  knowledge: z.array(TraceableTalentRequirementSchema).max(12),
-  skills: z.array(TraceableTalentRequirementSchema).max(12),
-  behavioral_competencies: z.array(TraceableTalentRequirementSchema).max(12),
-  values_and_work_style: z.array(TraceableTalentRequirementSchema).max(12),
-  career_motivation: z.array(TraceableTalentRequirementSchema).max(12),
+  knowledge: z.array(TraceableTalentRequirementSchema).min(1).max(12),
+  skills: z.array(TraceableTalentRequirementSchema).min(1).max(12),
+  behavioral_competencies: z.array(TraceableTalentRequirementSchema).min(1).max(12),
+  values_and_work_style: z.array(TraceableTalentRequirementSchema).min(1).max(12),
+  career_motivation: z.array(TraceableTalentRequirementSchema).min(1).max(12),
 }).strict()
 export type CompetencyModel = z.infer<typeof CompetencyModelSchema>
 
@@ -331,13 +372,6 @@ export const TalentProfileSchema = z.object({
     ...Object.values(profile.qualifications),
     ...Object.values(profile.competency_model),
   ]
-  const requirementCount = requirementGroups.reduce((total, requirements) => total + requirements.length, 0)
-  if (requirementCount === 0) {
-    context.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: '任职资格和胜任力模型必须合计至少包含一项人才要求',
-    })
-  }
   const requirementIds = requirementGroups.flatMap((requirements) => requirements.map(({ id }) => id))
   if (new Set(requirementIds).size !== requirementIds.length) {
     context.addIssue({

@@ -3,6 +3,7 @@ import { ROLE_CLARIFIER_SYSTEM_PROMPT as SHARED_SYSTEM_PROMPT } from '@role-clar
 import {
   AssessmentScorecardSchema,
   FactCategorySchema,
+  JobDescriptionSchema,
   LegacyRoleProfileContentSchema,
   PublicJDSchema,
   ROLE_CLARIFIER_PROMPT_VERSION,
@@ -131,6 +132,82 @@ describe('三类岗位产物契约', () => {
     expect(RoleProfileContentSchema.safeParse({ ...base, talent_profile: {} }).success).toBe(false)
   })
 
+  it('岗位说明拒绝 KRA、成功结果与场景之间重复的全局 ID', () => {
+    const duplicateAcrossSections = structuredClone({
+      hiring_background: {
+        business_change: '业务从项目交付转向平台化。', organization_gap: '缺少产品负责人。',
+        hiring_conclusion: '招聘平台产品经理。', no_hire_impact: '重复建设增加。', evidence_refs: ['HC-001'],
+      },
+      job_purpose: { statement: '沉淀标准产品能力。', evidence_refs: ['F-001'] },
+      key_accountabilities: [{
+        id: 'KRA-01', name: '产品规划', responsibility: '定义产品边界。', core_outputs: ['路线图'],
+        success_outcome_refs: ['O-01'], evidence_refs: ['F-002'],
+      }],
+      success_criteria: [
+        { id: 'O-01', horizon: '3个月', title: '形成路线图', definition: '完成诊断。', measures: ['通过评审'], status: '待确认', evidence_refs: ['F-003'] },
+        { id: 'O-02', horizon: '6个月', title: '完成验证', definition: '完成试点。', measures: ['通过验收'], status: '待确认', evidence_refs: ['F-003'] },
+        { id: 'O-03', horizon: '12个月', title: '规模复用', definition: '多场景复用。', measures: ['达到目标'], status: '待确认', evidence_refs: ['F-003'] },
+      ],
+      work_scenarios: [{
+        id: 'O-01', title: '需求抽象', frequency: '每周', trigger: '出现共性需求', actions: '定义边界',
+        output: '机会清单', challenge: '平衡短期与长期', stakeholders: ['研发'],
+        success_outcome_refs: ['O-01'], evidence_refs: ['F-004'],
+      }],
+      boundaries: {
+        owns: ['产品边界'], does_not_own: ['项目交付'], decision_rights: ['提出优先级'],
+        key_collaborations: ['研发'], available_resources: ['客户反馈'], evidence_refs: ['F-005'],
+      },
+    })
+
+    const result = JobDescriptionSchema.safeParse(duplicateAcrossSections)
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      expect(result.error.issues).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          path: ['work_scenarios', 0, 'id'],
+          message: expect.stringContaining('全局唯一'),
+        }),
+      ]))
+    }
+  })
+
+  it('岗位说明拒绝 KRA 或场景引用不存在的成功结果', () => {
+    const base = {
+      hiring_background: {
+        business_change: '业务从项目交付转向平台化。', organization_gap: '缺少产品负责人。',
+        hiring_conclusion: '招聘平台产品经理。', no_hire_impact: '重复建设增加。', evidence_refs: ['HC-001'],
+      },
+      job_purpose: { statement: '沉淀标准产品能力。', evidence_refs: ['F-001'] },
+      key_accountabilities: [{
+        id: 'KRA-01', name: '产品规划', responsibility: '定义产品边界。', core_outputs: ['路线图'],
+        success_outcome_refs: ['O-MISSING'], evidence_refs: ['F-002'],
+      }],
+      success_criteria: [
+        { id: 'O-01', horizon: '3个月', title: '形成路线图', definition: '完成诊断。', measures: ['通过评审'], status: '待确认', evidence_refs: ['F-003'] },
+        { id: 'O-02', horizon: '6个月', title: '完成验证', definition: '完成试点。', measures: ['通过验收'], status: '待确认', evidence_refs: ['F-003'] },
+        { id: 'O-03', horizon: '12个月', title: '规模复用', definition: '多场景复用。', measures: ['达到目标'], status: '待确认', evidence_refs: ['F-003'] },
+      ],
+      work_scenarios: [{
+        id: 'S-01', title: '需求抽象', frequency: '每周', trigger: '出现共性需求', actions: '定义边界',
+        output: '机会清单', challenge: '平衡短期与长期', stakeholders: ['研发'],
+        success_outcome_refs: ['O-UNKNOWN'], evidence_refs: ['F-004'],
+      }],
+      boundaries: {
+        owns: ['产品边界'], does_not_own: ['项目交付'], decision_rights: ['提出优先级'],
+        key_collaborations: ['研发'], available_resources: ['客户反馈'], evidence_refs: ['F-005'],
+      },
+    }
+
+    const result = JobDescriptionSchema.safeParse(base)
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      expect(result.error.issues).toEqual(expect.arrayContaining([
+        expect.objectContaining({ path: ['key_accountabilities', 0, 'success_outcome_refs', 0], message: expect.stringContaining('不存在') }),
+        expect.objectContaining({ path: ['work_scenarios', 0, 'success_outcome_refs', 0], message: expect.stringContaining('不存在') }),
+      ]))
+    }
+  })
+
   it('岗位画像必须包含前端展示所需的完整判断链', () => {
     const result = RoleProfileContentSchema.safeParse({
       hiring_reason: {
@@ -215,18 +292,18 @@ describe('人才画像增量契约', () => {
       },
       qualifications: {
         hard_qualifications: [],
-        necessary_experience: [],
+        necessary_experience: [{ ...traceableRequirement, id: 'QUAL-EXP-01' }],
         role_conditions: [],
         must_have: [traceableRequirement],
         preferred: [],
         alternatives: [],
       },
       competency_model: {
-        knowledge: [],
+        knowledge: [{ ...traceableRequirement, id: 'COMP-KNOW-01' }],
         skills: [{ ...traceableRequirement, id: 'COMP-01' }],
-        behavioral_competencies: [],
-        values_and_work_style: [],
-        career_motivation: [],
+        behavioral_competencies: [{ ...traceableRequirement, id: 'COMP-BEHAVIOR-01' }],
+        values_and_work_style: [{ ...traceableRequirement, id: 'COMP-VALUES-01' }],
+        career_motivation: [{ ...traceableRequirement, id: 'COMP-MOTIVATION-01' }],
       },
     },
   }
@@ -393,6 +470,45 @@ describe('人才画像增量契约', () => {
     }).success).toBe(false)
   })
 
+  it('拒绝目标人才画像任一关键证据数组为空', () => {
+    for (const field of [
+      'transferable_backgrounds',
+      'fit_signals',
+      'non_target_and_misjudgments',
+      'attraction_factors',
+      'evidence_refs',
+    ] as const) {
+      const input = structuredClone(validTalentProfileDraft)
+      input.talent_profile.target_talent_profile[field] = []
+      const result = TalentProfileDraftInputSchema.safeParse(input)
+      expect(result.success, `${field} must not be empty`).toBe(false)
+    }
+  })
+
+  it('拒绝必要经历或 Must-have 为空', () => {
+    for (const field of ['necessary_experience', 'must_have'] as const) {
+      const input = structuredClone(validTalentProfileDraft)
+      input.talent_profile.qualifications[field] = []
+      const result = TalentProfileDraftInputSchema.safeParse(input)
+      expect(result.success, `${field} must not be empty`).toBe(false)
+    }
+  })
+
+  it('拒绝胜任力素质模型任一冰山维度为空', () => {
+    for (const field of [
+      'knowledge',
+      'skills',
+      'behavioral_competencies',
+      'values_and_work_style',
+      'career_motivation',
+    ] as const) {
+      const input = structuredClone(validTalentProfileDraft)
+      input.talent_profile.competency_model[field] = []
+      const result = TalentProfileDraftInputSchema.safeParse(input)
+      expect(result.success, `${field} must not be empty`).toBe(false)
+    }
+  })
+
   it('接受分布在不同分组的 13 项人才要求输入', () => {
     expect(TalentProfileDraftInputSchema.safeParse(thirteenTalentProfileDraft).success).toBe(true)
   })
@@ -498,7 +614,9 @@ describe('人才画像增量契约', () => {
     expect(talentPrompt).toContain('observable_evidence')
     expect(talentPrompt).toContain('evidence_refs')
     expect(talentPrompt).toContain('status')
-    expect(talentPrompt).toContain('11 个分组合计至少包含 1 项 TraceableRequirement')
+    expect(talentPrompt).toContain('necessary_experience 和 must_have 各至少 1 项')
+    expect(talentPrompt).toContain('五个分组各至少 1 项')
+    expect(talentPrompt).toContain('只能引用已锁定岗位说明中的 KRA、O、S ID')
     expect(talentPrompt).toContain('11 个分组内及跨分组的 id 必须全局唯一')
     expect(talentPrompt.indexOf('target_talent_profile')).toBeLessThan(talentPrompt.indexOf('qualifications'))
     expect(talentPrompt.indexOf('qualifications')).toBeLessThan(talentPrompt.indexOf('competency_model'))

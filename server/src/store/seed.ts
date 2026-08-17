@@ -238,7 +238,7 @@ const lockedJobDescription = {
   ],
   work_scenarios: [
     {
-      id: 'T-01', title: '跨项目业务诊断与共性抽象', frequency: '入职前 90 天高频，之后按季度复盘',
+      id: 'S-01', title: '跨项目业务诊断与共性抽象', frequency: '入职前 90 天高频，之后按季度复盘',
       trigger: '多个客户提出相似但表达不同的需求，团队无法判断应该定制还是产品化。',
       actions: '梳理业务目标、使用场景、差异和共性，建立需求分类与机会评估框架。',
       output: '项目需求图谱、共性机会清单和产品边界判断。',
@@ -246,7 +246,7 @@ const lockedJobDescription = {
       stakeholders: ['销售', '解决方案', '交付', '客户成功'], success_outcome_refs: ['O-01'], evidence_refs: ['conversation://turn/3'],
     },
     {
-      id: 'T-02', title: '产品路线与优先级决策', frequency: '月度规划与重大需求触发',
+      id: 'S-02', title: '产品路线与优先级决策', frequency: '月度规划与重大需求触发',
       trigger: '业务价值、客户承诺、研发成本和长期产品方向发生冲突。',
       actions: '建立统一决策依据，量化价值与成本，明确做、不做和延后，并推动关键角色承诺。',
       output: '产品路线图、需求决策记录、范围与里程碑。',
@@ -254,7 +254,7 @@ const lockedJobDescription = {
       stakeholders: ['产品负责人', '研发负责人', '销售负责人', '交付负责人'], success_outcome_refs: ['O-01', 'O-02'], evidence_refs: ['hc://HC-2026-EP-001'],
     },
     {
-      id: 'T-03', title: '标准能力定义与 MVP 推动', frequency: '每个产品化机会一个完整周期',
+      id: 'S-03', title: '标准能力定义与 MVP 推动', frequency: '每个产品化机会一个完整周期',
       trigger: '标准化机会进入路线，需要从客户方案转化为清晰的产品能力。',
       actions: '定义核心用户、场景边界、能力模型和 MVP，协调研发完成方案并控制范围。',
       output: '产品方案、MVP 范围、验收标准和上线计划。',
@@ -284,17 +284,17 @@ const talentProfile = {
   qualifications: {
     hard_qualifications: [],
     necessary_experience: [{
-      id: 'C-01', name: '复杂 B 端问题抽象与产品化', definition: '能够独立完成', maps_to: ['T-01', 'T-02'],
+      id: 'C-01', name: '复杂 B 端问题抽象与产品化', definition: '能够独立完成', maps_to: ['S-01', 'S-02'],
       observable_evidence: ['覆盖多个客户或业务单元，并形成被复用的标准能力'], evidence_refs: ['conversation://turn/3'], status: '推断',
     }],
     role_conditions: [],
     must_have: [
       {
-        id: 'C-02', name: '从机会判断到 MVP 验证的闭环能力', definition: '至少主导过 1 次', maps_to: ['T-03'],
+        id: 'C-02', name: '从机会判断到 MVP 验证的闭环能力', definition: '至少主导过 1 次', maps_to: ['S-03'],
         observable_evidence: ['能说明机会判断、MVP 取舍、上线验证、指标结果和后续迭代'], evidence_refs: ['conversation://turn/5'], status: '推断',
       },
       {
-        id: 'C-03', name: '跨销售、交付与研发的决策推动', definition: '能在无汇报关系下推动', maps_to: ['T-02', 'T-03'],
+        id: 'C-03', name: '跨销售、交付与研发的决策推动', definition: '能在无汇报关系下推动', maps_to: ['S-02', 'S-03'],
         observable_evidence: ['能还原目标冲突、决策依据、关键角色承诺和最终结果'], evidence_refs: ['hc://HC-2026-EP-001'], status: '推断',
       },
       {
@@ -304,31 +304,75 @@ const talentProfile = {
     ],
     preferred: [
       {
-        id: 'C-05', name: '企业服务客户与交付链路理解', definition: '能够快速进入复杂场景', maps_to: ['T-01'],
+        id: 'C-05', name: '企业服务客户与交付链路理解', definition: '能够快速进入复杂场景', maps_to: ['S-01'],
         observable_evidence: ['接触过采购、决策、使用和交付角色分离的复杂 B 端场景'], evidence_refs: ['hc://HC-2026-EP-001'], status: '推断',
       },
       {
-        id: 'C-06', name: '同行业经验', definition: '加速项，不作为简历硬筛', maps_to: ['T-01'],
+        id: 'C-06', name: '同行业经验', definition: '加速项，不作为简历硬筛', maps_to: ['S-01'],
         observable_evidence: ['能从行业洞察推导到产品决策并说明结果'], evidence_refs: ['hc://HC-2026-EP-001'], status: '推断',
       },
     ],
     alternatives: [],
   },
   competency_model: {
-    knowledge: [], skills: [], behavioral_competencies: [], values_and_work_style: [], career_motivation: [],
+    knowledge: [{
+      id: 'C-07',
+      name: '企业服务产品经营知识',
+      definition: '理解企业客户多角色决策、产品标准化与规模复用之间的关系。',
+      maps_to: ['KRA-01', 'O-01'],
+      observable_evidence: ['能结合真实业务说明采购、使用、交付角色差异如何影响产品边界与路线决策。'],
+      evidence_refs: ['hc://HC-2026-EP-001', 'conversation://turn/3'],
+      status: '推断',
+    }],
+    skills: [{
+      id: 'C-08',
+      name: '共性需求抽象与 MVP 定义',
+      definition: '能把分散客户诉求转化为边界清晰、可验证的标准产品能力。',
+      maps_to: ['KRA-01', 'KRA-02', 'S-01', 'S-03'],
+      observable_evidence: ['能完整说明需求归类、取舍依据、MVP 范围、客户验证与后续迭代结果。'],
+      evidence_refs: ['conversation://turn/3', 'conversation://turn/5'],
+      status: '推断',
+    }],
+    behavioral_competencies: [{
+      id: 'C-09',
+      name: '跨团队影响与决策推动',
+      definition: '在无直接汇报关系下推动销售、交付与研发围绕共同产品目标作出承诺。',
+      maps_to: ['KRA-02', 'S-02', 'S-03'],
+      observable_evidence: ['能还原一次目标冲突中的关键关系人、影响动作、决策形成过程和最终业务结果。'],
+      evidence_refs: ['hc://HC-2026-EP-001', 'conversation://turn/5'],
+      status: '推断',
+    }],
+    values_and_work_style: [{
+      id: 'C-10',
+      name: '长期价值与事实导向',
+      definition: '面对短期交付压力时，以客户证据和经营指标维护长期产品边界。',
+      maps_to: ['KRA-03', 'O-03', 'S-02'],
+      observable_evidence: ['能说明一次拒绝、延后或收敛低复用需求的证据、取舍及对客户关系的处理。'],
+      evidence_refs: ['hc://HC-2026-EP-001', 'conversation://turn/5'],
+      status: '推断',
+    }],
+    career_motivation: [{
+      id: 'C-11',
+      name: '规模化产品建设动机',
+      definition: '愿意承担从不确定机会识别到多客户复用的长期产品经营责任。',
+      maps_to: ['KRA-02', 'KRA-03', 'O-02', 'O-03'],
+      observable_evidence: ['能具体说明为何选择长期产品建设，以及过去如何在延迟反馈中持续推动验证和复用。'],
+      evidence_refs: ['hc://HC-2026-EP-001', 'conversation://turn/3'],
+      status: '推断',
+    }],
   },
 } as const
 
-const roleProfile = {
+const buildRoleProfile = (jobDescriptionConfirmation: {
+  source_artifact_id: string
+  section_hash: string
+  confirmed_by: string
+  confirmed_at: string
+}) => ({
   schema_version: '2',
   stage: 'TALENT_PROFILE_DRAFT',
   job_description: lockedJobDescription,
-  job_description_confirmation: {
-    source_artifact_id: '11111111-1111-4111-8111-111111111112',
-    section_hash: contentHash(lockedJobDescription),
-    confirmed_by: 'manager-demo',
-    confirmed_at: '2026-08-17T09:00:00.000Z',
-  },
+  job_description_confirmation: jobDescriptionConfirmation,
   talent_profile: talentProfile,
   hiring_reason: {
     conclusion: lockedJobDescription.hiring_background.hiring_conclusion,
@@ -355,6 +399,11 @@ const roleProfile = {
     ...talentProfile.qualifications.necessary_experience.map((item) => ({ ...item, priority: 'Must-have' as const })),
     ...talentProfile.qualifications.must_have.map((item) => ({ ...item, priority: 'Must-have' as const })),
     ...talentProfile.qualifications.preferred.map((item) => ({ ...item, priority: 'Preferred' as const })),
+    ...talentProfile.competency_model.knowledge.map((item) => ({ ...item, priority: 'Must-have' as const })),
+    ...talentProfile.competency_model.skills.map((item) => ({ ...item, priority: 'Must-have' as const })),
+    ...talentProfile.competency_model.behavioral_competencies.map((item) => ({ ...item, priority: 'Must-have' as const })),
+    ...talentProfile.competency_model.values_and_work_style.map((item) => ({ ...item, priority: 'Must-have' as const })),
+    ...talentProfile.competency_model.career_motivation.map((item) => ({ ...item, priority: 'Must-have' as const })),
   ].map((item) => ({
     id: item.id,
     priority: item.priority,
@@ -378,7 +427,7 @@ const roleProfile = {
     ].join('；'),
     evidence_refs: lockedJobDescription.boundaries.evidence_refs,
   },
-}
+})
 
 const scorecard = {
   dimensions: [
@@ -488,15 +537,54 @@ const hrBrief = {
 }
 
 export const createDemoAggregate = (): RoleAggregate => {
-  const artifacts: ArtifactEnvelope[] = [
-    createArtifactEnvelope({
+  const sourceRoleProfile = createArtifactEnvelope({
+    roleSessionId: DEMO_ROLE_SESSION_ID,
+    type: 'ROLE_PROFILE',
+    version: 1,
+    content: {
+      schema_version: '2',
+      stage: 'JOB_DESCRIPTION_DRAFT',
+      job_description: structuredClone(lockedJobDescription),
+    },
+    createdBy: 'manager-demo',
+  })
+  const jobDescriptionConfirmation = {
+    source_artifact_id: sourceRoleProfile.id,
+    section_hash: contentHash(lockedJobDescription),
+    confirmed_by: 'manager-demo',
+    confirmed_at: '2026-08-17T09:00:00.000Z',
+  }
+  const lockedRoleProfile = createArtifactEnvelope({
+    roleSessionId: DEMO_ROLE_SESSION_ID,
+    type: 'ROLE_PROFILE',
+    version: 2,
+    content: {
+      schema_version: '2',
+      stage: 'JOB_DESCRIPTION_CONFIRMED',
+      job_description: structuredClone(lockedJobDescription),
+      job_description_confirmation: structuredClone(jobDescriptionConfirmation),
+    },
+    createdBy: 'manager-demo',
+    basedOnHash: sourceRoleProfile.content_hash,
+  })
+  const finalRoleProfileContent = structuredClone(buildRoleProfile(jobDescriptionConfirmation))
+  const finalRoleProfile: ArtifactEnvelope = {
+    ...createArtifactEnvelope({
       roleSessionId: DEMO_ROLE_SESSION_ID,
       type: 'ROLE_PROFILE',
-      version: 1,
-      content: structuredClone(roleProfile),
+      version: 3,
+      content: finalRoleProfileContent,
       createdBy: 'manager-demo',
+      basedOnHash: lockedRoleProfile.content_hash,
       status: 'CONFIRMED',
     }),
+    confirmed_by: 'manager-demo',
+    confirmed_at: '2026-08-17T09:05:00.000Z',
+  }
+  const artifacts: ArtifactEnvelope[] = [
+    sourceRoleProfile,
+    lockedRoleProfile,
+    finalRoleProfile,
     createArtifactEnvelope({
       roleSessionId: DEMO_ROLE_SESSION_ID,
       type: 'ASSESSMENT_SCORECARD',
