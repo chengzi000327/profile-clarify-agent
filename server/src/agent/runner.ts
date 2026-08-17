@@ -48,6 +48,12 @@ const artifactTaskMap: Record<ArtifactType, HarnessTask> = {
   HR_RECRUITING_BRIEF: 'GENERATE_HR_BRIEF',
 }
 
+export const artifactTypeForTask = (task: string): ArtifactType | null => {
+  const match = (Object.entries(artifactTaskMap) as Array<[ArtifactType, HarnessTask]>)
+    .find(([, mappedTask]) => mappedTask === task)
+  return match?.[0] ?? null
+}
+
 export class AgentRunner {
   private readonly pending: PendingRun[] = []
   private readonly activeRoleRuns = new Map<string, string>()
@@ -571,6 +577,14 @@ export class AgentRunner {
       return message
     }
     if (result.kind === 'ARTIFACT') {
+      const expectedArtifactType = artifactTypeForTask(pending.task)
+      if (expectedArtifactType !== result.artifact_type) {
+        throw new DomainError(
+          'ARTIFACT_TASK_MISMATCH',
+          `产物类型与 Agent 任务不匹配：${pending.task} 只能生成 ${expectedArtifactType ?? 'NONE'}`,
+          409,
+        )
+      }
       if (result.persistence === 'TOOL') {
         await emit('artifact.updated', {
           artifact_type: result.artifact_type,
@@ -588,6 +602,7 @@ export class AgentRunner {
         actor,
         result.artifact_type,
         result.content,
+        pending.effectiveRole,
       )
       await emit('artifact.updated', {
         artifact_id: artifact.id,

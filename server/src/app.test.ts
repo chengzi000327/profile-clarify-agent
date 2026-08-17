@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { FastifyInstance } from 'fastify'
+import { randomUUID } from 'node:crypto'
 import {
   ROLE_CLARIFIER_SYSTEM_PROMPT,
   RoleProfileContentSchema,
   RoleProfileTalentDraftContentSchema,
+  type AgentRun,
   type ArtifactType,
   type CandidateEvidence,
   type RoleProfileJobDescriptionContent,
@@ -27,6 +29,20 @@ const managerActor = {
   user_id: 'manager-demo',
   role: 'MANAGER',
   display_name: '用人经理 · 陈曦',
+} as const
+
+const hrActor = {
+  tenant_id: 'tenant-demo',
+  user_id: 'hr-demo',
+  role: 'HR',
+  display_name: 'HR · 林夏',
+} as const
+
+const adminActor = {
+  tenant_id: 'tenant-demo',
+  user_id: 'admin-demo',
+  role: 'ADMIN',
+  display_name: '企业管理员 · 周宁',
 } as const
 
 const validJobDescription = {
@@ -151,6 +167,30 @@ const validTalentProfile = {
     behavioral_competencies: [],
     values_and_work_style: [],
     career_motivation: [],
+  },
+} as const
+
+const validAssessmentScorecard = {
+  dimensions: [{
+    id: 'A-01',
+    name: '结构化问题解决',
+    weight: 100,
+    method: '案例面试',
+    owner: '用人经理',
+    question: '请说明一次复杂问题的判断与推进过程。',
+    evidence: '问题、取舍、行动和结果完整',
+    anchors: {
+      1: '只能描述过程',
+      3: '能够说明方案与结果',
+      5: '形成可复用的方法并验证结果',
+    },
+  }],
+  decision_rule: {
+    status: '草稿',
+    summary: '核心维度达到 3 分后进入综合校准',
+    scoring: '按权重计算加权得分',
+    pass_thresholds: '核心维度不得低于 3 分',
+    calibration: '面试官提交证据后统一校准',
   },
 } as const
 
@@ -983,6 +1023,128 @@ describe('Role Clarifier API', () => {
     )).rejects.toMatchObject({ code: 'TALENT_PROFILE_CONFIRMATION_REQUIRED' })
   })
 
+  it('直接保存产物时重验 HC、有效角色和上游已确认依赖', async () => {
+    await expect(roleService.saveArtifactDraft(
+      DEMO_ROLE_SESSION_ID,
+      hrActor,
+      'ROLE_PROFILE',
+      { job_description: validJobDescription },
+    )).rejects.toMatchObject({ code: 'FORBIDDEN' })
+
+    const pending = await roleService.create(managerActor, {
+      title: '待审批岗位',
+      department: '测试团队',
+    })
+    await expect(roleService.saveArtifactDraft(
+      pending.state.id,
+      managerActor,
+      'ROLE_PROFILE',
+      { job_description: validJobDescription },
+    )).rejects.toMatchObject({ code: 'HC_NOT_APPROVED' })
+    await expect(roleService.saveArtifactDraft(
+      pending.state.id,
+      managerActor,
+      'ASSESSMENT_SCORECARD',
+      validAssessmentScorecard,
+    )).rejects.toMatchObject({ code: 'HC_NOT_APPROVED' })
+
+    const approvedWithoutProfile = await roleService.createIntake(managerActor)
+    await expect(roleService.saveArtifactDraft(
+      approvedWithoutProfile.state.id,
+      managerActor,
+      'ASSESSMENT_SCORECARD',
+      validAssessmentScorecard,
+    )).rejects.toMatchObject({ code: 'ARTIFACT_PREREQUISITES_MISSING' })
+  })
+
+  it('企业管理员保存岗位画像时按测试身份执行写权限', async () => {
+    const approved = await roleService.createIntake(adminActor)
+
+    await expect(roleService.saveArtifactDraft(
+      approved.state.id,
+      adminActor,
+      'ROLE_PROFILE',
+      { job_description: validJobDescription },
+      'HR',
+    )).rejects.toMatchObject({ code: 'FORBIDDEN' })
+
+    await expect(roleService.saveArtifactDraft(
+      approved.state.id,
+      adminActor,
+      'ROLE_PROFILE',
+      { job_description: validJobDescription },
+      'MANAGER',
+    )).resolves.toMatchObject({ type: 'ROLE_PROFILE', status: 'DRAFT' })
+  })
+
+  it('同一岗位说明阶段只允许保存一份草稿', async () => {
+    await roleService.saveArtifactDraft(
+      DEMO_ROLE_SESSION_ID,
+      managerActor,
+      'ROLE_PROFILE',
+      { job_description: validJobDescription },
+    )
+
+    await expect(roleService.saveArtifactDraft(
+      DEMO_ROLE_SESSION_ID,
+      managerActor,
+      'ROLE_PROFILE',
+      { job_description: validJobDescription },
+    )).rejects.toMatchObject({ code: 'JOB_DESCRIPTION_CONFIRMATION_REQUIRED' })
+  })
+
+  it('内部保存工具按 active run task 绑定唯一产物类型', async () => {
+    const cases = [
+      ['GENERATE_ROLE_PROFILE', 'PUBLIC_JD'],
+      ['GENERATE_ASSESSMENT', 'ROLE_PROFILE'],
+      ['GENERATE_JD', 'ASSESSMENT_SCORECARD'],
+      ['GENERATE_HR_BRIEF', 'PUBLIC_JD'],
+    ] as const
+
+    for (const [task, artifactType] of cases) {
+      const run: AgentRun = {
+        id: randomUUID(),
+        role_session_id: DEMO_ROLE_SESSION_ID,
+        actor_user_id: 'manager-demo',
+        effective_actor_role: task === 'GENERATE_HR_BRIEF' ? 'HR' : 'MANAGER',
+        status: 'RUNNING',
+        model_tier: 'PRO',
+        task,
+        harness_session_id: `role-${DEMO_ROLE_SESSION_ID}`,
+        prompt_version: 'test',
+        model_name: 'test',
+        tool_count: 0,
+        input_tokens: 0,
+        output_tokens: 0,
+        started_at: new Date().toISOString(),
+        completed_at: null,
+        error_code: null,
+        input_message_id: null,
+        output_message_id: null,
+      }
+      await store.createRun(run)
+
+      const response = await app.inject({
+        method: 'POST',
+        url: '/internal/v1/harness/tools/save_artifact_draft',
+        headers: {
+          authorization: `Bearer ${config.ROLE_AGENT_TOOL_TOKEN}`,
+          'x-harness-session-id': `role-${DEMO_ROLE_SESSION_ID}`,
+        },
+        payload: { artifact_type: artifactType, content: {} },
+      })
+
+      expect(response.statusCode, `${task} must reject ${artifactType}: ${response.body}`).toBe(409)
+      expect(response.json().error.code).toBe('ARTIFACT_TASK_MISMATCH')
+      await store.updateRun({
+        ...run,
+        status: 'FAILED',
+        completed_at: new Date().toISOString(),
+        error_code: 'TEST_FINISHED',
+      })
+    }
+  })
+
   it('锁定岗位说明后只接受人才增量，服务端复制锁定内容并确定性投影兼容字段', async () => {
     const { locked } = await lockJobDescription()
     const lockedContent = locked.content as Extract<
@@ -1089,34 +1251,32 @@ describe('Role Clarifier API', () => {
     })
   })
 
-  it('岗位说明确认拒绝旧版本、错误 hash、错误 revision 和 HR 操作', async () => {
+  it('岗位说明确认拒绝非最新版本、错误 hash、错误 revision 和 HR 操作', async () => {
     const managerCookie = await login(app, 'manager-demo')
-    const firstDraft = await roleService.saveArtifactDraft(
+    const seeded = (await roleService.get(DEMO_ROLE_SESSION_ID, managerActor))
+      .artifacts.find((artifact) => artifact.type === 'ROLE_PROFILE')!
+    const draft = await roleService.saveArtifactDraft(
       DEMO_ROLE_SESSION_ID, managerActor, 'ROLE_PROFILE', { job_description: validJobDescription },
     )
-    await roleService.saveArtifactDraft(
-      DEMO_ROLE_SESSION_ID, managerActor, 'ROLE_PROFILE', { job_description: validJobDescription },
-    )
-    const afterSecondDraft = await app.inject({
+    const afterDraft = await app.inject({
       method: 'GET',
       url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}`,
       headers: { cookie: managerCookie },
     })
     const stale = await app.inject({
       method: 'POST',
-      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/artifacts/${firstDraft.id}:confirm`,
+      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/artifacts/${seeded.id}:confirm`,
       headers: { cookie: managerCookie },
-      payload: { content_hash: firstDraft.content_hash, expected_revision: afterSecondDraft.json().state.revision },
+      payload: { content_hash: seeded.content_hash, expected_revision: afterDraft.json().state.revision },
     })
     expect(stale.statusCode).toBe(409)
     expect(stale.json().error.code).toBe('ARTIFACT_VERSION_STALE')
 
-    const draft = afterSecondDraft.json().state.latest_artifacts.ROLE_PROFILE
     const wrongHash = await app.inject({
       method: 'POST',
       url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/artifacts/${draft.id}:confirm`,
       headers: { cookie: managerCookie },
-      payload: { content_hash: '0'.repeat(64), expected_revision: afterSecondDraft.json().state.revision },
+      payload: { content_hash: '0'.repeat(64), expected_revision: afterDraft.json().state.revision },
     })
     expect(wrongHash.statusCode).toBe(409)
     expect(wrongHash.json().error.code).toBe('CONTENT_HASH_MISMATCH')
@@ -1125,7 +1285,7 @@ describe('Role Clarifier API', () => {
       method: 'POST',
       url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/artifacts/${draft.id}:confirm`,
       headers: { cookie: managerCookie },
-      payload: { content_hash: draft.content_hash, expected_revision: afterSecondDraft.json().state.revision - 1 },
+      payload: { content_hash: draft.content_hash, expected_revision: afterDraft.json().state.revision - 1 },
     })
     expect(wrongRevision.statusCode).toBe(409)
     expect(wrongRevision.json().error.code).toBe('REVISION_CONFLICT')
@@ -1135,10 +1295,53 @@ describe('Role Clarifier API', () => {
       method: 'POST',
       url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/artifacts/${draft.id}:confirm`,
       headers: { cookie: hrCookie },
-      payload: { content_hash: draft.content_hash, expected_revision: afterSecondDraft.json().state.revision },
+      payload: { content_hash: draft.content_hash, expected_revision: afterDraft.json().state.revision },
     })
     expect(hr.statusCode).toBe(403)
     expect(hr.json().error.code).toBe('FORBIDDEN')
+  })
+
+  it('确认产物时重验 HC、有效角色、上游依赖和最新版本', async () => {
+    const approved = await roleService.createIntake(managerActor)
+    const draft = await roleService.saveArtifactDraft(
+      approved.state.id,
+      managerActor,
+      'ROLE_PROFILE',
+      { job_description: validJobDescription },
+    )
+    const pendingAggregate = await store.getRoleAggregate(approved.state.id, managerActor)
+    expect(pendingAggregate).not.toBeNull()
+    await store.saveRoleState({
+      ...pendingAggregate!.state,
+      hc_status: 'PENDING',
+      revision: pendingAggregate!.state.revision + 1,
+      updated_at: new Date().toISOString(),
+    }, pendingAggregate!.state.revision)
+    const afterPending = await roleService.get(approved.state.id, managerActor)
+    await expect(roleService.confirmArtifact(
+      approved.state.id,
+      draft.id,
+      managerActor,
+      draft.content_hash,
+      afterPending.state.revision,
+    )).rejects.toMatchObject({ code: 'HC_NOT_APPROVED' })
+
+    const publicJd = (await roleService.get(DEMO_ROLE_SESSION_ID, managerActor))
+      .artifacts.find((artifact) => artifact.type === 'PUBLIC_JD')!
+    await roleService.saveArtifactDraft(
+      DEMO_ROLE_SESSION_ID,
+      managerActor,
+      'ROLE_PROFILE',
+      { job_description: validJobDescription },
+    )
+    const invalidated = await roleService.get(DEMO_ROLE_SESSION_ID, managerActor)
+    await expect(roleService.confirmArtifact(
+      DEMO_ROLE_SESSION_ID,
+      publicJd.id,
+      managerActor,
+      publicJd.content_hash,
+      invalidated.state.revision,
+    )).rejects.toMatchObject({ code: 'ARTIFACT_PREREQUISITES_MISSING' })
   })
 
   it('权限由后端 Session 决定，经理响应中不存在 HR 内部数据', async () => {

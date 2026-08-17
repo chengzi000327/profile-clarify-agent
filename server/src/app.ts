@@ -32,7 +32,7 @@ import {
   type ConversationMessage,
 } from '@role-clarifier/contracts'
 import { DomainError } from '@role-clarifier/domain'
-import { AgentRunner } from './agent/runner.js'
+import { AgentRunner, artifactTypeForTask } from './agent/runner.js'
 import { SidecarHarnessAdapter, type HarnessAdapter } from './agent/harness-adapter.js'
 import type { AppConfig } from './config.js'
 import { RoleService } from './services/role-service.js'
@@ -440,11 +440,20 @@ export const buildApp = async (
         })
         .strict()
         .parse(body)
+      const expectedArtifactType = artifactTypeForTask(activeRun.run.task)
+      if (expectedArtifactType !== input.artifact_type) {
+        throw new DomainError(
+          'ARTIFACT_TASK_MISMATCH',
+          `当前 Agent 任务只能保存 ${expectedArtifactType ?? 'NONE'} 产物`,
+          409,
+        )
+      }
       const artifact = await roleService.saveArtifactDraft(
         roleSessionId,
         actor,
         input.artifact_type,
         input.content,
+        activeRun.run.effective_actor_role,
       )
       return {
         saved: true,

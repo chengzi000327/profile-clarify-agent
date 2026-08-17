@@ -60,6 +60,8 @@ const artifactNames: Record<ArtifactType, string> = {
   HR_RECRUITING_BRIEF: '招聘画像',
 }
 
+type ArtifactWriteAction = '生成' | '确认'
+
 export type RoleProfileJobDescriptionConfirmedContent = Extract<
   RoleProfileJobDescriptionContent,
   { stage: 'JOB_DESCRIPTION_CONFIRMED' }
@@ -525,36 +527,24 @@ export class RoleService {
     return this.filterState(state, actor)
   }
 
-  async assertArtifactGenerationAllowed(
-    roleSessionId: string,
+  private assertArtifactWritePrerequisites(
+    aggregate: RoleAggregate,
     actor: ActorContext,
     effectiveRole: ActorContext['role'],
     artifactType: ArtifactType,
-  ): Promise<void> {
-    const aggregate = await this.requireAggregate(roleSessionId, actor)
+    action: ArtifactWriteAction,
+  ): void {
     if (aggregate.state.hc_status !== 'APPROVED') {
       throw new DomainError('HC_NOT_APPROVED', 'HC 审批通过后才能生成正式岗位产物', 409)
     }
+    if (effectiveRole !== actor.role && actor.role !== 'ADMIN') {
+      throw new DomainError('FORBIDDEN', '只有企业管理员可以使用测试身份操作岗位产物', 403)
+    }
     if (artifactType === 'HR_RECRUITING_BRIEF' && !['HR', 'ADMIN'].includes(effectiveRole)) {
-      throw new DomainError('FORBIDDEN', '仅 HR 可以生成内部招聘画像', 403)
+      throw new DomainError('FORBIDDEN', `仅 HR 可以${action}内部招聘画像`, 403)
     }
     if (artifactType !== 'HR_RECRUITING_BRIEF' && !['MANAGER', 'ADMIN'].includes(effectiveRole)) {
-      throw new DomainError('FORBIDDEN', '该产物需要由用人经理生成', 403)
-    }
-    if (artifactType === 'ROLE_PROFILE') {
-      const latestRoleProfile = aggregate.state.latest_artifacts.ROLE_PROFILE
-      const staged = RoleProfileJobDescriptionContentSchema.safeParse(
-        latestRoleProfile?.content,
-      )
-      const talentDraft = RoleProfileTalentDraftContentSchema.safeParse(
-        latestRoleProfile?.content,
-      )
-      if (staged.success && staged.data.stage === 'JOB_DESCRIPTION_DRAFT') {
-        throw new DomainError('JOB_DESCRIPTION_CONFIRMATION_REQUIRED', '请先确认岗位说明，再继续生成岗位画像', 409)
-      }
-      if (talentDraft.success && latestRoleProfile?.status === 'DRAFT') {
-        throw new DomainError('TALENT_PROFILE_CONFIRMATION_REQUIRED', '请先确认完整人才画像，再继续生成', 409)
-      }
+      throw new DomainError('FORBIDDEN', `该产物需要由用人经理${action}`, 403)
     }
     const missing = artifactDependencies[artifactType].filter(
       (dependency) => aggregate.state.latest_artifacts[dependency]?.status !== 'CONFIRMED',
@@ -562,9 +552,38 @@ export class RoleService {
     if (missing.length > 0) {
       throw new DomainError(
         'ARTIFACT_PREREQUISITES_MISSING',
-        `请先确认${missing.map((type) => artifactNames[type]).join('、')}，再生成${artifactNames[artifactType]}`,
+        `请先确认${missing.map((type) => artifactNames[type]).join('、')}，再${action}${artifactNames[artifactType]}`,
         409,
       )
+    }
+  }
+
+  private assertRoleProfileDraftCanBeGenerated(aggregate: RoleAggregate): void {
+    const latestRoleProfile = aggregate.state.latest_artifacts.ROLE_PROFILE
+    const staged = RoleProfileJobDescriptionContentSchema.safeParse(latestRoleProfile?.content)
+    const talentDraft = RoleProfileTalentDraftContentSchema.safeParse(latestRoleProfile?.content)
+    if (
+      staged.success
+      && staged.data.stage === 'JOB_DESCRIPTION_DRAFT'
+      && latestRoleProfile?.status === 'DRAFT'
+    ) {
+      throw new DomainError('JOB_DESCRIPTION_CONFIRMATION_REQUIRED', '请先确认岗位说明，再继续生成岗位画像', 409)
+    }
+    if (talentDraft.success && latestRoleProfile?.status === 'DRAFT') {
+      throw new DomainError('TALENT_PROFILE_CONFIRMATION_REQUIRED', '请先确认完整人才画像，再继续生成', 409)
+    }
+  }
+
+  async assertArtifactGenerationAllowed(
+    roleSessionId: string,
+    actor: ActorContext,
+    effectiveRole: ActorContext['role'],
+    artifactType: ArtifactType,
+  ): Promise<void> {
+    const aggregate = await this.requireAggregate(roleSessionId, actor)
+    this.assertArtifactWritePrerequisites(aggregate, actor, effectiveRole, artifactType, '生成')
+    if (artifactType === 'ROLE_PROFILE') {
+      this.assertRoleProfileDraftCanBeGenerated(aggregate)
     }
   }
 
@@ -573,21 +592,18 @@ export class RoleService {
     actor: ActorContext,
     type: ArtifactType,
     content: T,
+    effectiveRole: ActorContext['role'] = actor.role,
   ): Promise<ArtifactEnvelope<T>> {
     const aggregate = await this.requireAggregate(roleSessionId, actor)
     assertArtifactAccess(actor, type)
+    this.assertArtifactWritePrerequisites(aggregate, actor, effectiveRole, type, '生成')
+    if (type === 'ROLE_PROFILE') this.assertRoleProfileDraftCanBeGenerated(aggregate)
     let validatedContent = content
     if (type === 'ROLE_PROFILE') {
       const latestRoleProfile = aggregate.state.latest_artifacts.ROLE_PROFILE
       const latestStaged = RoleProfileJobDescriptionContentSchema.safeParse(
         latestRoleProfile?.content,
       )
-      const latestTalentDraft = RoleProfileTalentDraftContentSchema.safeParse(
-        latestRoleProfile?.content,
-      )
-      if (latestTalentDraft.success && latestRoleProfile?.status === 'DRAFT') {
-        throw new DomainError('TALENT_PROFILE_CONFIRMATION_REQUIRED', '请先确认完整人才画像，再继续生成', 409)
-      }
       if (latestStaged.success && latestStaged.data.stage === 'JOB_DESCRIPTION_CONFIRMED') {
         const validation = TalentProfileDraftInputSchema.safeParse(content)
         if (!validation.success) {
@@ -727,11 +743,15 @@ export class RoleService {
     const artifact = aggregate.artifacts.find((item) => item.id === artifactId)
     if (!artifact) throw new DomainError('ARTIFACT_NOT_FOUND', '产物不存在', 404)
     assertArtifactAccess(actor, artifact.type)
-    if (artifact.type === 'HR_RECRUITING_BRIEF' && !['HR', 'ADMIN'].includes(effectiveRole)) {
-      throw new DomainError('FORBIDDEN', '仅 HR 可以确认内部招聘画像', 403)
-    }
-    if (artifact.type !== 'HR_RECRUITING_BRIEF' && !['MANAGER', 'ADMIN'].includes(effectiveRole)) {
-      throw new DomainError('FORBIDDEN', '该产物需要用人经理确认', 403)
+    this.assertArtifactWritePrerequisites(
+      aggregate,
+      actor,
+      effectiveRole,
+      artifact.type,
+      '确认',
+    )
+    if (aggregate.state.latest_artifacts[artifact.type]?.id !== artifact.id) {
+      throw new DomainError('ARTIFACT_VERSION_STALE', '该产物已生成新版本，请确认最新版本', 409)
     }
     if (artifact.type === 'ROLE_PROFILE') {
       const staged = RoleProfileJobDescriptionContentSchema.safeParse(artifact.content)
@@ -743,9 +763,6 @@ export class RoleService {
         )
       }
       if (staged.success && staged.data.stage === 'JOB_DESCRIPTION_DRAFT') {
-        if (aggregate.state.latest_artifacts.ROLE_PROFILE?.id !== artifact.id) {
-          throw new DomainError('ARTIFACT_VERSION_STALE', '岗位说明已生成新版本，请确认最新版本', 409)
-        }
         if (artifact.content_hash !== submittedHash) {
           throw new DomainError('CONTENT_HASH_MISMATCH', '产物已发生变化，请查看最新版本后再确认', 409)
         }

@@ -50,6 +50,18 @@ class CapturingHarness implements HarnessAdapter {
   }
 }
 
+class MismatchedArtifactHarness implements HarnessAdapter {
+  async run(_request: HarnessRequest, _hooks: HarnessHooks): Promise<HarnessResult> {
+    return {
+      kind: 'ARTIFACT',
+      persistence: 'TOOL',
+      artifact_type: 'PUBLIC_JD',
+      content: {},
+      summary: '错误产物不应被声明为成功。',
+    }
+  }
+}
+
 describe('AgentRunner role profile context boundary', () => {
   let store: MemoryStore
   let roleService: RoleService
@@ -151,5 +163,39 @@ describe('AgentRunner role profile context boundary', () => {
       latest_artifacts: expect.any(Object),
     })
     expect(request.role_state).not.toHaveProperty('projection')
+  })
+
+  it('fails the run when the final artifact type does not match its task', async () => {
+    const mismatchedRunner = new AgentRunner(
+      store,
+      roleService,
+      new MismatchedArtifactHarness(),
+      config,
+    )
+    const run = await mismatchedRunner.submitArtifact(
+      DEMO_ROLE_SESSION_ID,
+      manager,
+      'ROLE_PROFILE',
+    )
+
+    let stored = await store.getRun(run.id)
+    for (
+      let attempt = 0;
+      attempt < 30 && !['COMPLETED', 'FAILED', 'CANCELLED'].includes(stored?.run.status ?? '');
+      attempt += 1
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      stored = await store.getRun(run.id)
+    }
+
+    expect(stored?.run).toMatchObject({
+      status: 'FAILED',
+      error_code: 'HARNESS_EXECUTION_FAILED',
+      output_message_id: null,
+    })
+    const events = await store.listRunEvents(run.id)
+    expect(events.some((event) => event.type === 'run.completed')).toBe(false)
+    expect(events.find((event) => event.type === 'run.failed')?.payload.internal_message)
+      .toContain('产物类型与 Agent 任务不匹配')
   })
 })
