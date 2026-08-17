@@ -1608,6 +1608,11 @@ function GeneratedProfileBasis({ artifact, state, onOpenEvidence }) {
   const hc = state?.hc_context;
   const profile = normalizeRoleProfileContent(content, hc);
   const boundary = profile.boundaryGroups;
+  const [stagedDetailOpen, setStagedDetailOpen] = useState({});
+  const isStagedDetailOpen = (key, initiallyOpen) => stagedDetailOpen[key] ?? initiallyOpen;
+  const rememberStagedDetailToggle = (key) => (event) => {
+    setStagedDetailOpen((current) => ({ ...current, [key]: event.currentTarget.open }));
+  };
   const approvedFact = `${({
     NEW_HEADCOUNT: '新增正式编制',
     REPLACEMENT: '人员替换',
@@ -1648,17 +1653,24 @@ function GeneratedProfileBasis({ artifact, state, onOpenEvidence }) {
         <section className="generated-section">
           <header><span>03</span><div><h3>关键责任领域</h3><p>持续承担的主要责任、核心产出及其关联成功结果。</p></div></header>
           <div className="generated-requirement-list">
-            {jobDescription.accountabilities.map((item, index) => (
-              <details key={item.id} open={index === 0}>
-                <summary><span className="must">{item.id}</span><strong>{item.name}</strong><ChevronDown size={15} /></summary>
-                <div className="generated-requirement-detail">
-                  <DefinitionItem label="持续承担的责任" value={item.responsibility} />
-                  <DefinitionItem label="核心产出" value={item.coreOutputs.join('；')} />
-                  <DefinitionItem label="关联成功结果" value={item.successOutcomeRefs.join('；')} />
-                  <ArtifactEvidenceRefs refs={item.evidenceRefs} onOpenEvidence={onOpenEvidence} />
-                </div>
-              </details>
-            ))}
+            {jobDescription.accountabilities.map((item, index) => {
+              const detailKey = `accountability:${item.id}`;
+              return (
+                <details
+                  key={item.id}
+                  open={isStagedDetailOpen(detailKey, index === 0)}
+                  onToggle={rememberStagedDetailToggle(detailKey)}
+                >
+                  <summary><span className="must">{item.id}</span><strong>{item.name}</strong><ChevronDown size={15} /></summary>
+                  <div className="generated-requirement-detail">
+                    <DefinitionItem label="持续承担的责任" value={item.responsibility} />
+                    <DefinitionItem label="核心产出" value={item.coreOutputs.join('；')} />
+                    <DefinitionItem label="关联成功结果" value={item.successOutcomeRefs.join('；')} />
+                    <ArtifactEvidenceRefs refs={item.evidenceRefs} onOpenEvidence={onOpenEvidence} />
+                  </div>
+                </details>
+              );
+            })}
           </div>
         </section>
         <section className="generated-section">
@@ -1680,23 +1692,30 @@ function GeneratedProfileBasis({ artifact, state, onOpenEvidence }) {
         <section className="generated-section">
           <header><span>05</span><div><h3>关键工作场景与挑战</h3><p>描述岗位成功所面对的真实工作情境、挑战与协作关系。</p></div></header>
           <div className="generated-scenario-list">
-            {jobDescription.workScenarios.map((scenario, index) => (
-              <details key={scenario.id} open={index === 0}>
-                <summary>
-                  <span>{scenario.id}</span><strong>{scenario.title}</strong><small>{scenario.frequency}</small>
-                  {scenario.successOutcomeRefs.length > 0 && <em>{scenario.successOutcomeRefs.join(' · ')}</em>}
-                  <ChevronDown size={15} />
-                </summary>
-                <div className="generated-scenario-detail">
-                  <DefinitionItem label="触发情境" value={scenario.trigger} />
-                  <DefinitionItem label="关键动作" value={scenario.actions} />
-                  <DefinitionItem label="主要产出" value={scenario.output} />
-                  <DefinitionItem label="核心挑战" value={scenario.challenge} />
-                  <DefinitionItem label="协作对象" value={scenario.stakeholders.join('；')} />
-                  <ArtifactEvidenceRefs refs={scenario.evidenceRefs} onOpenEvidence={onOpenEvidence} />
-                </div>
-              </details>
-            ))}
+            {jobDescription.workScenarios.map((scenario, index) => {
+              const detailKey = `scenario:${scenario.id}`;
+              return (
+                <details
+                  key={scenario.id}
+                  open={isStagedDetailOpen(detailKey, index === 0)}
+                  onToggle={rememberStagedDetailToggle(detailKey)}
+                >
+                  <summary>
+                    <span>{scenario.id}</span><strong>{scenario.title}</strong><small>{scenario.frequency}</small>
+                    {scenario.successOutcomeRefs.length > 0 && <em>{scenario.successOutcomeRefs.join(' · ')}</em>}
+                    <ChevronDown size={15} />
+                  </summary>
+                  <div className="generated-scenario-detail">
+                    <DefinitionItem label="触发情境" value={scenario.trigger} />
+                    <DefinitionItem label="关键动作" value={scenario.actions} />
+                    <DefinitionItem label="主要产出" value={scenario.output} />
+                    <DefinitionItem label="核心挑战" value={scenario.challenge} />
+                    <DefinitionItem label="协作对象" value={scenario.stakeholders.join('；')} />
+                    <ArtifactEvidenceRefs refs={scenario.evidenceRefs} onOpenEvidence={onOpenEvidence} />
+                  </div>
+                </details>
+              );
+            })}
           </div>
         </section>
         <section className="generated-section boundary-generated-section">
