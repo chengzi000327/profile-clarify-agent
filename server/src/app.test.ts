@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify'
 import {
   ROLE_CLARIFIER_SYSTEM_PROMPT,
   RoleProfileContentSchema,
+  RoleProfileTalentDraftContentSchema,
   type ArtifactType,
   type CandidateEvidence,
   type RoleProfileJobDescriptionContent,
@@ -10,7 +11,7 @@ import {
 } from '@role-clarifier/contracts'
 import { contentHash } from '@role-clarifier/domain'
 import { buildApp, visibleAgentEvent } from './app.js'
-import { RoleService } from './services/role-service.js'
+import { buildLegacyRoleProfileProjection, RoleService } from './services/role-service.js'
 import type {
   HarnessAdapter,
   HarnessHooks,
@@ -19,7 +20,7 @@ import type {
 } from './agent/harness-adapter.js'
 import { loadConfig } from './config.js'
 import { MemoryStore } from './store/memory-store.js'
-import { DEMO_ROLE_SESSION_ID } from './store/seed.js'
+import { createDemoAggregate, DEMO_ROLE_SESSION_ID } from './store/seed.js'
 
 const managerActor = {
   tenant_id: 'tenant-demo',
@@ -388,6 +389,61 @@ describe('Role Clarifier API', () => {
     store = new MemoryStore()
     roleService = new RoleService(store)
     app = await buildApp(config, { store, harness: testHarness })
+  })
+
+  it('预置 ROLE_PROFILE 是已确认的 V2 人才画像，并保留确定性兼容投影', () => {
+    const aggregate = createDemoAggregate()
+    const seedRoleProfile = aggregate.artifacts.find((artifact) => artifact.type === 'ROLE_PROFILE')
+
+    expect(seedRoleProfile).toMatchObject({
+      type: 'ROLE_PROFILE',
+      status: 'CONFIRMED',
+      content: {
+        schema_version: '2',
+        stage: 'TALENT_PROFILE_DRAFT',
+        job_description_confirmation: expect.any(Object),
+        talent_profile: expect.any(Object),
+        mission: expect.any(String),
+        requirements: expect.any(Array),
+      },
+    })
+    expect(seedRoleProfile).toBeDefined()
+
+    const parsed = RoleProfileContentSchema.safeParse(seedRoleProfile!.content)
+    expect(parsed.success).toBe(true)
+    const talentParsed = RoleProfileTalentDraftContentSchema.safeParse(seedRoleProfile!.content)
+    expect(talentParsed.success).toBe(true)
+    if (!talentParsed.success) {
+      throw new Error('预置 ROLE_PROFILE 必须是 V2 TALENT_PROFILE_DRAFT 内容')
+    }
+
+    const content = talentParsed.data
+    expect(content.job_description_confirmation).toMatchObject({
+      source_artifact_id: expect.any(String),
+      confirmed_by: 'manager-demo',
+      confirmed_at: expect.any(String),
+    })
+    expect(content.job_description_confirmation.section_hash).toBe(contentHash(content.job_description))
+    expect({
+      hiring_reason: content.hiring_reason,
+      mission: content.mission,
+      success_outcomes: content.success_outcomes,
+      work_scenarios: content.work_scenarios,
+      boundaries: content.boundaries,
+      requirements: content.requirements,
+    }).toEqual(buildLegacyRoleProfileProjection(content))
+
+    expect(aggregate.artifacts.filter((artifact) => artifact.type !== 'ROLE_PROFILE')).toMatchObject([
+      { type: 'ASSESSMENT_SCORECARD', version: 1, status: 'CONFIRMED', created_by: 'manager-demo' },
+      { type: 'PUBLIC_JD', version: 1, status: 'DRAFT', created_by: 'manager-demo' },
+      { type: 'HR_RECRUITING_BRIEF', version: 1, status: 'DRAFT', created_by: 'hr-demo' },
+    ])
+    expect(aggregate).toMatchObject({
+      member_ids: ['manager-demo', 'hr-demo'],
+      candidates: [],
+      calibration_signals: [],
+      manager_tasks: [],
+    })
   })
 
   const lockJobDescription = async () => {
