@@ -741,6 +741,31 @@ describe('Role Clarifier API', () => {
     })
     expect(detail.json().artifacts.filter((artifact: { type: string }) => artifact.type === 'ROLE_PROFILE'))
       .toHaveLength(3)
+
+    const lockedAgain = await app.inject({
+      method: 'POST',
+      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/artifacts/${locked.id}:confirm`,
+      headers: { cookie: managerCookie },
+      payload: {
+        content_hash: locked.content_hash,
+        expected_revision: detail.json().state.revision,
+      },
+    })
+    expect(lockedAgain.statusCode).toBe(409)
+    expect(lockedAgain.json().error.code).toBe('TALENT_PROFILE_GENERATION_REQUIRED')
+
+    const unchanged = await app.inject({
+      method: 'GET',
+      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}`,
+      headers: { cookie: managerCookie },
+    })
+    expect(unchanged.json().state).toMatchObject({
+      stage: 'PROFILE_DRAFT',
+      revision: detail.json().state.revision,
+      latest_artifacts: {
+        ROLE_PROFILE: { id: locked.id, status: 'DRAFT', content_hash: locked.content_hash },
+      },
+    })
   })
 
   it('岗位说明确认拒绝旧版本、错误 hash、错误 revision 和 HR 操作', async () => {

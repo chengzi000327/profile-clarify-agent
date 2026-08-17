@@ -591,6 +591,13 @@ export class RoleService {
     }
     if (artifact.type === 'ROLE_PROFILE') {
       const staged = RoleProfileJobDescriptionContentSchema.safeParse(artifact.content)
+      if (staged.success && staged.data.stage === 'JOB_DESCRIPTION_CONFIRMED') {
+        throw new DomainError(
+          'TALENT_PROFILE_GENERATION_REQUIRED',
+          '岗位说明已锁定，请先生成并确认完整人才画像',
+          409,
+        )
+      }
       if (staged.success && staged.data.stage === 'JOB_DESCRIPTION_DRAFT') {
         if (aggregate.state.latest_artifacts.ROLE_PROFILE?.id !== artifact.id) {
           throw new DomainError('ARTIFACT_VERSION_STALE', '岗位说明已生成新版本，请确认最新版本', 409)
