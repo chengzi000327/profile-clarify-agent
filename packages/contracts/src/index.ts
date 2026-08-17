@@ -689,6 +689,80 @@ export const RoleStateSchema = z.object({
 })
 export type RoleState = z.infer<typeof RoleStateSchema>
 
+const RoleProfileProjectedFactSchema = FactSchema.pick({
+  category: true,
+  statement: true,
+  source: true,
+  status: true,
+  evidence_refs: true,
+}).strict()
+
+const RoleProfileProjectedConflictSchema = ConflictSchema.pick({
+  field: true,
+  left_value: true,
+  right_value: true,
+  source_refs: true,
+  status: true,
+  resolution: true,
+}).strict()
+
+const RoleProfileProjectionBaseSchema = z.object({
+  projection: z.literal('ROLE_PROFILE'),
+  state_revision: z.number().int().nonnegative(),
+}).strict()
+
+const RoleProfileProjectionRoleBaseSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  department: z.string(),
+  stage: RoleSessionStageSchema,
+  hc_status: z.enum(['PENDING', 'APPROVED', 'REJECTED']),
+}).strict()
+
+const EmptyProjectionCollectionSchema = z.array(z.never()).max(0)
+
+export const RoleProfileJobDescriptionProjectionSchema = RoleProfileProjectionBaseSchema.extend({
+  role: RoleProfileProjectionRoleBaseSchema.extend({
+    hc_context: HcContextSchema.nullable(),
+  }).strict(),
+  facts: z.array(RoleProfileProjectedFactSchema),
+  conflicts: z.array(RoleProfileProjectedConflictSchema),
+  artifact_refs: EmptyProjectionCollectionSchema,
+  task_context: z.object({
+    task: z.literal('GENERATE_ROLE_PROFILE'),
+    artifacts: EmptyProjectionCollectionSchema,
+    role_profile_mode: z.literal('JOB_DESCRIPTION'),
+  }).strict(),
+}).strict()
+
+export const RoleProfileTalentProjectionSchema = RoleProfileProjectionBaseSchema.extend({
+  role: RoleProfileProjectionRoleBaseSchema,
+  facts: EmptyProjectionCollectionSchema,
+  conflicts: EmptyProjectionCollectionSchema,
+  artifact_refs: EmptyProjectionCollectionSchema,
+  task_context: z.object({
+    task: z.literal('GENERATE_ROLE_PROFILE'),
+    artifacts: EmptyProjectionCollectionSchema,
+    role_profile_mode: z.literal('TALENT_PROFILE'),
+    locked_job_description: z.object({
+      artifact_id: z.string(),
+      version: z.number().int().positive(),
+      section_hash: z.string().min(16),
+      confirmed_by: z.string().min(1),
+      confirmed_at: z.string().datetime(),
+      content: JobDescriptionSchema,
+    }).strict(),
+  }).strict(),
+}).strict()
+
+export const RoleProfileGenerationProjectionSchema = z.union([
+  RoleProfileJobDescriptionProjectionSchema,
+  RoleProfileTalentProjectionSchema,
+])
+export type RoleProfileGenerationProjection = z.infer<
+  typeof RoleProfileGenerationProjectionSchema
+>
+
 export const ToolExecutionContextSchema = z.object({
   tenant_id: z.string(),
   actor_user_id: z.string(),

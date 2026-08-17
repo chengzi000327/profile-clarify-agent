@@ -14,6 +14,8 @@ const artifactByTask: Partial<Record<HarnessTask, string>> = {
 
 const projectInitialRoleState = (request: HarnessRequest): Record<string, unknown> => {
   const state = request.role_state
+  if ('projection' in state) return { ...state }
+
   const artifactRefs = Object.entries(state.latest_artifacts).flatMap(([type, artifact]) =>
     artifact
       ? [{

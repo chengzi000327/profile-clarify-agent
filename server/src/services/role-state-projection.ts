@@ -215,7 +215,7 @@ export const projectRoleStateForTask = (
   const roleProfileGenerationMode = generatingRoleProfile ? roleProfileMode(state) : null
   const isTalentProfileGeneration = roleProfileGenerationMode === 'TALENT_PROFILE'
   const dependencies = isHarnessTask(task) ? artifactDependencies[task] : []
-  const artifactRefs = artifactTypes.flatMap((type) => {
+  const artifactRefs = generatingRoleProfile ? [] : artifactTypes.flatMap((type) => {
     const artifact = state.latest_artifacts[type]
     return artifact
       ? [{

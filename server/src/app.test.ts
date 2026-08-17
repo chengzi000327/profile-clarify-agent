@@ -161,7 +161,9 @@ const config = loadConfig({
 
 class TestHarnessStub implements HarnessAdapter {
   async run(request: HarnessRequest, hooks: HarnessHooks): Promise<HarnessResult> {
-    const { tenant_id: _tenantId, ...roleState } = request.role_state
+    const roleState = 'tenant_id' in request.role_state
+      ? (({ tenant_id: _tenantId, ...visibleState }) => visibleState)(request.role_state)
+      : request.role_state
     let toolCount = 0
     const tool = async (name: string, args: unknown, result: unknown): Promise<void> => {
       toolCount += 1
@@ -304,13 +306,15 @@ class TestHarnessStub implements HarnessAdapter {
       GENERATE_HR_BRIEF: 'HR_RECRUITING_BRIEF',
     }
     const artifactType = artifactTypeByTask[request.task]
-    const roleProfileMode = (request.role_state as unknown as {
-      task_context?: { role_profile_mode?: 'JOB_DESCRIPTION' | 'TALENT_PROFILE' }
-    }).task_context?.role_profile_mode
-      ?? ((request.role_state.latest_artifacts.ROLE_PROFILE?.content as { stage?: string } | undefined)?.stage
-        === 'JOB_DESCRIPTION_CONFIRMED'
-        ? 'TALENT_PROFILE'
-        : 'JOB_DESCRIPTION')
+    const roleProfileMode = request.task === 'GENERATE_ROLE_PROFILE'
+      ? request.role_state.task_context.role_profile_mode
+      : 'JOB_DESCRIPTION'
+    const roleTitle = request.task === 'GENERATE_ROLE_PROFILE'
+      ? request.role_state.role.title
+      : request.role_state.title
+    const roleDepartment = request.task === 'GENERATE_ROLE_PROFILE'
+      ? request.role_state.role.department
+      : request.role_state.department
     const content = artifactType === 'ROLE_PROFILE'
       ? roleProfileMode === 'JOB_DESCRIPTION'
         ? { job_description: validJobDescription }
@@ -330,16 +334,16 @@ class TestHarnessStub implements HarnessAdapter {
         : artifactType === 'PUBLIC_JD'
           ? {
           title_and_basics: {
-            title: request.role_state.title,
+            title: roleTitle,
             location: '上海 / 可协商',
             employment_type: '全职',
-            reporting_line: `${request.role_state.department}负责人`,
+            reporting_line: `${roleDepartment}负责人`,
           },
           about_the_role: '负责围绕关键业务目标推动方案落地。',
           what_you_will_do: ['澄清目标并推动交付'],
           what_we_look_for: ['具备结构化分析和协作能力'],
         }
-          : { title: request.role_state.title, generated_for: artifactType }
+          : { title: roleTitle, generated_for: artifactType }
     await tool('save_artifact_draft', { artifact_type: artifactType, content }, { saved: true })
     const summary = artifactType === 'ROLE_PROFILE' ? '岗位画像草稿已生成。' : '产物草稿已生成。'
     return finish({ kind: 'ARTIFACT', artifact_type: artifactType, content, summary }, summary)

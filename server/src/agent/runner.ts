@@ -10,7 +10,10 @@ import type {
   ConversationMessage,
   ToolExecutionContext,
 } from '@role-clarifier/contracts'
-import { ROLE_CLARIFIER_PROMPT_VERSION } from '@role-clarifier/contracts'
+import {
+  ROLE_CLARIFIER_PROMPT_VERSION,
+  RoleProfileGenerationProjectionSchema,
+} from '@role-clarifier/contracts'
 import { DomainError } from '@role-clarifier/domain'
 import type { AppConfig } from '../config.js'
 import { RoleService } from '../services/role-service.js'
@@ -294,12 +297,10 @@ export class AgentRunner {
       const conversationMessages = pending.task === 'CLARIFY_MESSAGE'
         ? await this.store.listConversationMessages(run.role_session_id)
         : []
-      const request: HarnessRequest = {
-        task: pending.task,
-        role_state: view.state,
+      const requestBase = {
         execution_context: executionContext,
-        maximum_transitions: 10,
-        structured_output_repair_attempts: 1,
+        maximum_transitions: 10 as const,
+        structured_output_repair_attempts: 1 as const,
         ...(pending.task === 'CLARIFY_MESSAGE'
           ? {
               conversation_context: {
@@ -328,6 +329,24 @@ export class AgentRunner {
         ...(pending.message !== undefined ? { message: pending.message } : {}),
         ...(pending.candidates !== undefined ? { candidates: pending.candidates } : {}),
       }
+      const request: HarnessRequest = pending.task === 'GENERATE_ROLE_PROFILE'
+        ? {
+            ...requestBase,
+            task: pending.task,
+            role_state: RoleProfileGenerationProjectionSchema.parse(
+              await this.roleService.readStateForTask(
+                run.role_session_id,
+                pending.actor,
+                pending.task,
+                pending.effectiveRole,
+              ),
+            ),
+          }
+        : {
+            ...requestBase,
+            task: pending.task,
+            role_state: view.state,
+          }
       const result = await this.harness.run(request, {
         signal: controller.signal,
         onStatus: async (status) => emit('agent.status', { status }),
