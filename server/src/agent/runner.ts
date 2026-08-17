@@ -10,6 +10,7 @@ import type {
   ConversationMessage,
   ToolExecutionContext,
 } from '@role-clarifier/contracts'
+import { ROLE_CLARIFIER_PROMPT_VERSION } from '@role-clarifier/contracts'
 import { DomainError } from '@role-clarifier/domain'
 import type { AppConfig } from '../config.js'
 import { RoleService } from '../services/role-service.js'
@@ -166,7 +167,7 @@ export class AgentRunner {
       model_tier: modelTier,
       task,
       harness_session_id: null,
-      prompt_version: 'role-clarifier-v2',
+      prompt_version: ROLE_CLARIFIER_PROMPT_VERSION,
       model_name:
         modelTier === 'FLASH'
           ? this.config.DEEPSEEK_FLASH_MODEL

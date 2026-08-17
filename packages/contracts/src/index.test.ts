@@ -1,15 +1,23 @@
 import { describe, expect, it } from 'vitest'
 import { ROLE_CLARIFIER_SYSTEM_PROMPT as SHARED_SYSTEM_PROMPT } from '@role-clarifier/agent-spec'
 import {
-  AssessmentScorecardSchema,
   FactCategorySchema,
   PublicJDSchema,
+  ROLE_CLARIFIER_PROMPT_VERSION,
   ROLE_CLARIFIER_SYSTEM_PROMPT,
+  promptForTask,
 } from './index.js'
 
 describe('共享 Agent 规范', () => {
   it('从单一事实源导出 System Prompt', () => {
     expect(ROLE_CLARIFIER_SYSTEM_PROMPT).toBe(SHARED_SYSTEM_PROMPT)
+  })
+
+  it('按任务只组合核心规则和对应任务规则', () => {
+    expect(ROLE_CLARIFIER_PROMPT_VERSION).toBe('role-clarifier-v11-layered')
+    expect(promptForTask('GENERATE_JD')).toContain('<P-01')
+    expect(promptForTask('GENERATE_JD')).toContain('<P-05')
+    expect(promptForTask('GENERATE_JD')).not.toContain('<P-07')
   })
 
   it('统一支持四类岗位事实', () => {
@@ -19,45 +27,6 @@ describe('共享 Agent 规范', () => {
       'SUCCESS_CRITERION',
       'CONSTRAINT',
     ])
-  })
-})
-
-describe('AssessmentScorecardSchema', () => {
-  it('接受模型生成的结构化录用规则和对象评分锚点', () => {
-    const result = AssessmentScorecardSchema.safeParse({
-      role_id: 'role-001',
-      dimensions: [{
-        name: '业务判断',
-        weight: 35,
-        method: '结构化案例面试',
-        owner: '用人经理',
-        question: '请说明一次关键业务取舍。',
-        evidence: '能够说明约束、取舍和结果。',
-        anchors: { 1: '无法说明取舍', 3: '能完成基本判断', 5: '能验证复杂取舍' },
-      }],
-      decision_rule: {
-        status: '待确认',
-        scoring: '各维度按 1-5 分评分',
-        pass_thresholds: '加权总分不低于 3.5',
-        calibration: '由 HR 和用人经理校准',
-      },
-    })
-
-    expect(result.success).toBe(true)
-  })
-
-  it('拒绝无法渲染的嵌套录用规则字段', () => {
-    const result = AssessmentScorecardSchema.safeParse({
-      dimensions: [{
-        name: '业务判断',
-        weight: 35,
-        method: '案例面试',
-        anchors: { 3: '能完成基本判断' },
-      }],
-      decision_rule: { scoring: { unexpected: true } },
-    })
-
-    expect(result.success).toBe(false)
   })
 })
 

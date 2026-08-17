@@ -1,14 +1,15 @@
 import { randomUUID } from 'node:crypto'
 import {
   ARTIFACT_VISIBILITY,
-  AssessmentScorecardSchema,
   CandidateEvidenceSchema,
+  type ConversationMessage,
   PublicJDSchema,
   type ActorContext,
   type ArtifactEnvelope,
   type ArtifactType,
   type CandidateEvidence,
   type FactCategory,
+  type HcApproval,
   type RoleState,
 } from '@role-clarifier/contracts'
 import {
@@ -65,6 +66,131 @@ export class RoleService {
   async list(actor: ActorContext): Promise<RoleState[]> {
     const states = await this.store.listRoleStates(actor)
     return states.map((state) => this.filterState(state, actor))
+  }
+
+  async listApprovedHc(actor: ActorContext): Promise<HcApproval[]> {
+    const [approvals, roleStates] = await Promise.all([
+      this.store.listHcApprovals(actor),
+      this.store.listRoleStates(actor),
+    ])
+    const roleById = new Map(roleStates.map((state) => [state.id, state]))
+    return approvals.map((approval) => {
+      const hc = structuredClone(approval)
+      const role = hc.role_session_id ? roleById.get(hc.role_session_id) : undefined
+      if (actor.role === 'MANAGER') hc.context.job_basics.salary_range = '按权限可见'
+      return {
+        ...hc,
+        clarification_status: !role
+          ? 'NOT_STARTED'
+          : ['CREATED', 'CONTEXT_SYNCING', 'REASON_CLARIFYING', 'SUCCESS_CLARIFYING'].includes(role.stage)
+            ? 'IN_PROGRESS'
+            : 'PROFILE_READY',
+        role_stage: role?.stage ?? null,
+      }
+    })
+  }
+
+  async openApprovedHc(
+    requestId: string,
+    actor: ActorContext,
+  ): Promise<{ role: RoleView; created: boolean }> {
+    const hc = await this.store.getHcApproval(requestId, actor)
+    if (!hc) throw new DomainError('HC_APPROVAL_NOT_FOUND', '未找到可访问的已通过 HC', 404)
+    if (hc.role_session_id) {
+      await this.ensureHcOpeningQuestion(hc.role_session_id, hc, actor)
+      return { role: await this.get(hc.role_session_id, actor), created: false }
+    }
+
+    const timestamp = nowIso()
+    const state: RoleState = {
+      id: randomUUID(),
+      tenant_id: actor.tenant_id,
+      title: hc.title,
+      department: hc.department,
+      stage: 'REASON_CLARIFYING',
+      revision: 0,
+      hc_status: 'APPROVED',
+      hc_context: structuredClone(hc.context),
+      facts: [
+        {
+          id: randomUUID(),
+          category: 'BACKGROUND',
+          statement: hc.context.business_change,
+          source: `${hc.request_id} HC 审批`,
+          status: 'CONFIRMED',
+          evidence_refs: [`hc://${hc.request_id}`],
+          visible_to: 'ALL',
+          updated_at: timestamp,
+        },
+        {
+          id: randomUUID(),
+          category: 'HIRING_REASON',
+          statement: hc.context.approved_reason,
+          source: `${hc.request_id} HC 审批`,
+          status: 'CONFIRMED',
+          evidence_refs: [`hc://${hc.request_id}`],
+          visible_to: 'ALL',
+          updated_at: timestamp,
+        },
+      ],
+      conflicts: [],
+      latest_artifacts: {},
+      candidate_count: 0,
+      candidate_channels: [],
+      calibration_status: 'OBSERVING',
+      created_at: timestamp,
+      updated_at: timestamp,
+    }
+    const aggregate: RoleAggregate = {
+      state,
+      member_ids: [
+        hc.context.hiring_manager_user_id,
+        ...(hc.context.assigned_hr_user_id ? [hc.context.assigned_hr_user_id] : []),
+      ],
+      artifacts: [],
+      candidates: [],
+      calibration_signals: [],
+      manager_tasks: [],
+    }
+    const roleSessionId = await this.store.createRoleAggregateForHc(hc.request_id, aggregate)
+    await this.ensureHcOpeningQuestion(roleSessionId, hc, actor)
+    return {
+      role: await this.get(roleSessionId, actor),
+      created: roleSessionId === state.id,
+    }
+  }
+
+  private async ensureHcOpeningQuestion(
+    roleSessionId: string,
+    hc: HcApproval,
+    actor: ActorContext,
+  ): Promise<void> {
+    const existing = await this.store.listConversationMessages(roleSessionId)
+    if (existing.length > 0) return
+
+    const timestamp = nowIso()
+    const message: ConversationMessage = {
+      id: roleSessionId,
+      tenant_id: actor.tenant_id,
+      role_session_id: roleSessionId,
+      run_id: null,
+      clarification_round_id: null,
+      sender_type: 'AGENT',
+      sender_user_id: null,
+      sender_role: null,
+      sender_name: '画像澄清 Agent',
+      content: `这条「${hc.title}」HC 已通过审批。我会主动带你完成岗位澄清，你只需要逐题回答；审批材料会作为已确认背景，不需要重复填写。`,
+      structured_content: {
+        kind: 'HC_OPENING_QUESTION',
+        hc_request_id: hc.request_id,
+        question: `先从最关键的结果开始：这位${hc.title}入职 90 天后，针对“${hc.context.organization_gap}”，必须交付什么可验证的结果，才说明这个人招对了？`,
+      },
+      status: 'COMPLETED',
+      sequence: 1,
+      created_at: timestamp,
+      completed_at: timestamp,
+    }
+    await this.store.appendConversationMessageIfAbsent(message)
   }
 
   async get(roleSessionId: string, actor: ActorContext): Promise<RoleView> {
@@ -334,11 +460,7 @@ export class RoleService {
   ): Promise<ArtifactEnvelope<T>> {
     const aggregate = await this.requireAggregate(roleSessionId, actor)
     assertArtifactAccess(actor, type)
-    let validatedContent: unknown = content
-    if (type === 'PUBLIC_JD') validatedContent = PublicJDSchema.parse(content)
-    if (type === 'ASSESSMENT_SCORECARD') {
-      validatedContent = AssessmentScorecardSchema.parse(content)
-    }
+    if (type === 'PUBLIC_JD') PublicJDSchema.parse(content)
     const version =
       Math.max(
         0,
@@ -353,7 +475,7 @@ export class RoleService {
       roleSessionId,
       type,
       version,
-      content: validatedContent as T,
+      content,
       createdBy: actor.user_id,
       basedOnHash: previous?.content_hash ?? null,
     })

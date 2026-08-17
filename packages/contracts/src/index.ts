@@ -1,11 +1,20 @@
 import {
   FACT_CATEGORIES,
+  ROLE_CLARIFIER_PROMPT_VERSION,
   ROLE_CLARIFIER_SYSTEM_PROMPT,
+  promptForTask,
+  taskPromptForTask,
   type FactCategory,
 } from '@role-clarifier/agent-spec'
 import { z } from 'zod'
 
-export { ROLE_CLARIFIER_SYSTEM_PROMPT, type FactCategory }
+export {
+  ROLE_CLARIFIER_PROMPT_VERSION,
+  ROLE_CLARIFIER_SYSTEM_PROMPT,
+  promptForTask,
+  taskPromptForTask,
+  type FactCategory,
+}
 
 export const ActorRoleSchema = z.enum(['MANAGER', 'HR', 'ADMIN'])
 export type ActorRole = z.infer<typeof ActorRoleSchema>
@@ -80,7 +89,14 @@ export const JobHeaderSchema = z.object({
 export type JobHeader = z.infer<typeof JobHeaderSchema>
 
 export const JobBasicsSchema = z.object({
-  recruitment_type: z.enum(['NEW_HEADCOUNT', 'REPLACEMENT', 'ORGANIZATION_ADJUSTMENT']),
+  recruitment_type: z.enum([
+    'NEW_HEADCOUNT',
+    'REPLACEMENT',
+    'ATTRITION_REPLACEMENT',
+    'PERFORMANCE_REPLACEMENT',
+    'ORGANIZATION_ADJUSTMENT',
+    'OTHER',
+  ]),
   headcount: z.number().int().positive(),
   level: z.string().min(1),
   reporting_line: z.string().min(1),
@@ -107,6 +123,21 @@ export const HcContextSchema = z.object({
 })
 export type HcContext = z.infer<typeof HcContextSchema>
 
+export const HcApprovalSchema = z.object({
+  request_id: z.string().min(1),
+  tenant_id: z.string().min(1),
+  title: z.string().min(1),
+  department: z.string().min(1),
+  status: z.literal('APPROVED'),
+  context: HcContextSchema,
+  role_session_id: z.string().uuid().nullable(),
+  clarification_status: z.enum(['NOT_STARTED', 'IN_PROGRESS', 'PROFILE_READY']).optional(),
+  role_stage: RoleSessionStageSchema.nullable().optional(),
+  created_at: z.string().datetime(),
+  updated_at: z.string().datetime(),
+})
+export type HcApproval = z.infer<typeof HcApprovalSchema>
+
 export const PublicJDSchema = z
   .object({
     title_and_basics: JobHeaderSchema,
@@ -116,39 +147,6 @@ export const PublicJDSchema = z
   })
   .strict()
 export type PublicJD = z.infer<typeof PublicJDSchema>
-
-export const AssessmentDecisionRuleSchema = z.union([
-  z.string().min(1),
-  z.object({
-    status: z.string().min(1).optional(),
-    scoring: z.string().min(1),
-    pass_thresholds: z.string().min(1),
-    calibration: z.string().min(1),
-    summary: z.string().min(1).optional(),
-    conclusion: z.string().min(1).optional(),
-  }).passthrough(),
-])
-
-export const AssessmentScorecardSchema = z.object({
-  dimensions: z.array(z.object({
-    name: z.string().min(1),
-    weight: z.number().min(0).max(100),
-    method: z.string().min(1),
-    owner: z.string().min(1).optional(),
-    question: z.string().min(1).optional(),
-    evidence: z.string().min(1).optional(),
-    anchors: z.union([
-      z.array(z.string().min(1)).min(1),
-      z.object({
-        1: z.string().min(1),
-        3: z.string().min(1),
-        5: z.string().min(1),
-      }).passthrough(),
-    ]),
-  }).passthrough()).min(1),
-  decision_rule: AssessmentDecisionRuleSchema,
-}).passthrough()
-export type AssessmentScorecard = z.infer<typeof AssessmentScorecardSchema>
 
 export const ArtifactTypeSchema = z.enum([
   'ROLE_PROFILE',

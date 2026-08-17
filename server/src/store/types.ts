@@ -7,6 +7,7 @@ import type {
   ClarificationPolicy,
   ClarificationRound,
   ConversationMessage,
+  HcApproval,
   RoleState,
 } from '@role-clarifier/contracts'
 
@@ -77,6 +78,22 @@ export interface AdminRunRecord extends RunRecord {
   actor_role: ActorContext['role']
 }
 
+export interface AdminRunFilters {
+  status?: AgentRun['status']
+  model_tier?: AgentRun['model_tier']
+  role_session_id?: string
+  query?: string
+  page: number
+  page_size: number
+}
+
+export interface AdminRunPage {
+  items: AdminRunRecord[]
+  total: number
+  page: number
+  page_size: number
+}
+
 export interface TraceAccessAuditRecord {
   id: string
   tenant_id: string
@@ -95,6 +112,9 @@ export interface ApplicationStore {
   getUser(userId: string): Promise<StoredUser | null>
   saveUser(user: StoredUser): Promise<void>
   claimExternalEvent(channel: string, eventId: string): Promise<boolean>
+  listHcApprovals(actor: ActorContext): Promise<HcApproval[]>
+  getHcApproval(requestId: string, actor: ActorContext): Promise<HcApproval | null>
+  createRoleAggregateForHc(hcRequestId: string, aggregate: RoleAggregate): Promise<string>
   listRoleStates(actor: ActorContext): Promise<RoleState[]>
   getRoleAggregate(
     roleSessionId: string,
@@ -126,13 +146,14 @@ export interface ApplicationStore {
   subscribeToRun(runId: string, subscriber: EventSubscriber): () => void
   listConversationMessages(roleSessionId: string, afterSequence?: number): Promise<ConversationMessage[]>
   appendConversationMessage(message: ConversationMessage): Promise<void>
+  appendConversationMessageIfAbsent(message: ConversationMessage): Promise<boolean>
   updateConversationMessage(message: ConversationMessage): Promise<void>
   getClarificationPolicy(roleSessionId: string): Promise<ClarificationPolicy>
   saveClarificationPolicy(policy: ClarificationPolicy): Promise<void>
   getOpenClarificationRound(roleSessionId: string): Promise<ClarificationRound | null>
   insertClarificationRound(round: ClarificationRound): Promise<void>
   updateClarificationRound(round: ClarificationRound): Promise<void>
-  listRunsForTenant(tenantId: string): Promise<AdminRunRecord[]>
+  listRunsForTenant(tenantId: string, filters: AdminRunFilters): Promise<AdminRunPage>
   appendTraceAccessAudit(record: TraceAccessAuditRecord): Promise<void>
   listTraceAccessAudits(tenantId: string): Promise<TraceAccessAuditRecord[]>
 }

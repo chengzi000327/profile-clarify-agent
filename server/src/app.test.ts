@@ -178,24 +178,6 @@ class TestHarnessStub implements HarnessAdapter {
           what_you_will_do: ['澄清目标并推动交付'],
           what_we_look_for: ['具备结构化分析和协作能力'],
         }
-      : artifactType === 'ASSESSMENT_SCORECARD'
-        ? {
-            dimensions: [{
-              name: '业务判断',
-              weight: 100,
-              method: '结构化案例面试',
-              owner: '用人经理',
-              question: '请说明一次关键业务取舍。',
-              evidence: '能够说明约束、取舍和结果。',
-              anchors: { 1: '无法说明取舍', 3: '能完成基本判断', 5: '能验证复杂取舍' },
-            }],
-            decision_rule: {
-              status: '待确认',
-              scoring: '各维度按 1-5 分评分',
-              pass_thresholds: '加权总分不低于 3.5',
-              calibration: '由 HR 和用人经理校准',
-            },
-          }
       : { title: request.role_state.title, generated_for: artifactType }
     await tool('save_artifact_draft', { artifact_type: artifactType, content }, { saved: true })
     const summary = artifactType === 'ROLE_PROFILE' ? '岗位画像草稿已生成。' : '产物草稿已生成。'
@@ -274,76 +256,165 @@ describe('Role Clarifier API', () => {
     expect(adminEvent.payload.internal_message).toBe('runtime stack for administrator')
   })
 
-  it('动态账号选择角色：新账号为空，同一账号恢复岗位，不同账号互相隔离', async () => {
-    const loginDynamic = async (accountId: string, displayName: string, role = 'MANAGER') => {
-      const response = await app.inject({
-        method: 'POST',
-        url: '/api/v1/auth/login',
-        payload: {
-          workspace_id: 'acme-demo',
-          account_id: accountId,
-          display_name: displayName,
-          role,
-        },
-      })
-      return { response, cookie: response.statusCode === 200 ? cookieFrom(response) : '' }
-    }
-
-    const first = await loginDynamic('zhangsan', '张三')
-    expect(first.response.statusCode).toBe(200)
-    expect(first.response.json()).toMatchObject({
-      is_new_account: true,
-      actor: { display_name: '张三', role: 'MANAGER' },
-    })
-    const initiallyEmpty = await app.inject({
-      method: 'GET',
-      url: '/api/v1/role-sessions',
-      headers: { cookie: first.cookie },
-    })
-    expect(initiallyEmpty.json().items).toEqual([])
-
-    const created = await app.inject({
-      method: 'POST',
-      url: '/api/v1/role-sessions',
-      headers: { cookie: first.cookie },
-      payload: { title: '增长负责人', department: '增长团队' },
-    })
-    expect(created.statusCode).toBe(201)
-
-    const sameAccount = await loginDynamic('zhangsan', '张三')
-    expect(sameAccount.response.json().is_new_account).toBe(false)
-    const restored = await app.inject({
-      method: 'GET',
-      url: '/api/v1/role-sessions',
-      headers: { cookie: sameAccount.cookie },
-    })
-    expect(restored.json().items).toHaveLength(1)
-
-    const second = await loginDynamic('lisi', '李四')
-    const isolated = await app.inject({
-      method: 'GET',
-      url: '/api/v1/role-sessions',
-      headers: { cookie: second.cookie },
-    })
-    expect(isolated.json().items).toEqual([])
-
-    const roleMismatch = await loginDynamic('zhangsan', '张三', 'HR')
-    expect(roleMismatch.response.statusCode).toBe(409)
-    expect(roleMismatch.response.json().error.code).toBe('ACCOUNT_ROLE_MISMATCH')
-  })
-
-  it('空账号发送第一条消息后自动建立岗位并由 Agent 识别岗位名称', async () => {
-    const loginResponse = await app.inject({
+  it('只允许三个预置账号按固定姓名和角色登录', async () => {
+    const arbitrary = await app.inject({
       method: 'POST',
       url: '/api/v1/auth/login',
       payload: {
-        workspace_id: 'conversation-first-demo',
-        account_id: 'manager-one',
-        display_name: '对话经理',
-        role: 'MANAGER',
+        workspace_id: 'demo-company',
+        account_id: 'someone@example.com',
+        display_name: '临时账号',
+        role: 'HR',
       },
     })
-    const cookie = cookieFrom(loginResponse)
+    expect(arbitrary.statusCode).toBe(403)
+    expect(arbitrary.json().error.code).toBe('LOGIN_NOT_ALLOWED')
+
+    const mismatchedIdentity = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: {
+        workspace_id: 'legacy-demo',
+        account_id: 'manager-demo',
+        display_name: '用人经理 · 陈曦',
+        role: 'HR',
+      },
+    })
+    expect(mismatchedIdentity.statusCode).toBe(403)
+    expect(mismatchedIdentity.json().error.code).toBe('LOGIN_IDENTITY_MISMATCH')
+
+    const managerCookie = await login(app, 'manager-demo')
+    const session = await app.inject({
+      method: 'GET',
+      url: '/api/v1/auth/me',
+      headers: { cookie: managerCookie },
+    })
+    expect(session.statusCode).toBe(200)
+    expect(session.json().actor).toMatchObject({
+      tenant_id: 'tenant-demo',
+      user_id: 'manager-demo',
+      role: 'MANAGER',
+      display_name: '用人经理 · 陈曦',
+    })
+  })
+
+  it('三个角色登录后读取十条有效 HC，经理敏感薪酬字段保持脱敏', async () => {
+    for (const userId of ['manager-demo', 'hr-demo', 'admin-demo'] as const) {
+      const cookie = await login(app, userId)
+      const response = await app.inject({
+        method: 'GET',
+        url: '/api/v1/hc-approvals',
+        headers: { cookie },
+      })
+      expect(response.statusCode).toBe(200)
+      expect(response.json().items).toHaveLength(10)
+      expect(response.json().items.every(
+        (item: { status: string; clarification_status: string; context: { request_id: string } }) =>
+          item.status === 'APPROVED' && Boolean(item.context.request_id) &&
+          ['NOT_STARTED', 'IN_PROGRESS', 'PROFILE_READY'].includes(item.clarification_status),
+      )).toBe(true)
+      expect(response.json().items.map((item: { title: string }) => item.title).sort())
+        .toEqual([
+          'AI 产品经理', '企业产品经理', '客户端工程师', '推荐算法工程师', '数据产品经理',
+          '数据工程师', '机器学习平台工程师', '测试开发工程师', '高级前端工程师', '高级后端工程师',
+        ].sort())
+      expect(new Set(response.json().items.map(
+        (item: { context: { job_basics: { recruitment_type: string } } }) =>
+          item.context.job_basics.recruitment_type,
+      ))).toEqual(new Set([
+        'NEW_HEADCOUNT',
+        'ATTRITION_REPLACEMENT',
+        'PERFORMANCE_REPLACEMENT',
+        'ORGANIZATION_ADJUSTMENT',
+        'OTHER',
+      ]))
+      expect(response.json().items.some(
+        (item: { context: { approved_reason: string } }) => item.context.approved_reason.includes('离职'),
+      )).toBe(true)
+      expect(response.json().items.some(
+        (item: { context: { approved_reason: string } }) => item.context.approved_reason.includes('汰换'),
+      )).toBe(true)
+      const salary = response.json().items[0].context.job_basics.salary_range
+      expect(salary).toBe(userId === 'manager-demo' ? '按权限可见' : '35K-50K·15薪')
+    }
+  })
+
+  it('选择 HC 后由 Agent 幂等发起首问，重复进入不会生成重复会话或消息', async () => {
+    const managerCookie = await login(app, 'manager-demo')
+    const first = await app.inject({
+      method: 'POST',
+      url: '/api/v1/hc-approvals/HC-2026-RD-002/workspace',
+      headers: { cookie: managerCookie },
+    })
+    expect(first.statusCode, first.body).toBe(201)
+    expect(first.json().created).toBe(true)
+    expect(first.json().role.state).toMatchObject({
+      title: '高级后端工程师',
+      department: '平台研发部',
+      stage: 'REASON_CLARIFYING',
+      hc_status: 'APPROVED',
+    })
+    const roleId = first.json().role.state.id
+    const approvalsAfterOpen = await app.inject({
+      method: 'GET',
+      url: '/api/v1/hc-approvals',
+      headers: { cookie: managerCookie },
+    })
+    const openedHc = approvalsAfterOpen.json().items.find(
+      (item: { request_id: string }) => item.request_id === 'HC-2026-RD-002',
+    )
+    expect(openedHc).toMatchObject({
+      role_session_id: roleId,
+      clarification_status: 'IN_PROGRESS',
+      role_stage: 'REASON_CLARIFYING',
+    })
+    const messages = await app.inject({
+      method: 'GET',
+      url: `/api/v1/role-sessions/${roleId}/messages`,
+      headers: { cookie: managerCookie },
+    })
+    expect(messages.statusCode).toBe(200)
+    expect(messages.json().items).toHaveLength(1)
+    expect(messages.json().items[0]).toMatchObject({
+      sender_type: 'AGENT',
+      sender_name: '画像澄清 Agent',
+      sequence: 1,
+      status: 'COMPLETED',
+      structured_content: {
+        kind: 'HC_OPENING_QUESTION',
+        hc_request_id: 'HC-2026-RD-002',
+      },
+    })
+    expect(messages.json().items[0].structured_content.question).toContain('入职 90 天后')
+
+    const second = await app.inject({
+      method: 'POST',
+      url: '/api/v1/hc-approvals/HC-2026-RD-002/workspace',
+      headers: { cookie: managerCookie },
+    })
+    expect(second.statusCode).toBe(200)
+    expect(second.json().created).toBe(false)
+    expect(second.json().role.state.id).toBe(roleId)
+
+    const repeatedMessages = await app.inject({
+      method: 'GET',
+      url: `/api/v1/role-sessions/${roleId}/messages`,
+      headers: { cookie: managerCookie },
+    })
+    expect(repeatedMessages.json().items).toHaveLength(1)
+
+    const hrCookie = await login(app, 'hr-demo')
+    const hrView = await app.inject({
+      method: 'POST',
+      url: '/api/v1/hc-approvals/HC-2026-RD-002/workspace',
+      headers: { cookie: hrCookie },
+    })
+    expect(hrView.statusCode).toBe(200)
+    expect(hrView.json().role.state.id).toBe(roleId)
+  })
+
+  it('预置经理发送第一条 intake 消息后自动建立岗位并由 Agent 识别岗位名称', async () => {
+    const cookie = await login(app, 'manager-demo')
     const intake = await app.inject({
       method: 'POST',
       url: '/api/v1/intake/messages',
@@ -372,8 +443,10 @@ describe('Role Clarifier API', () => {
       url: '/api/v1/role-sessions',
       headers: { cookie },
     })
-    expect(roles.json().items).toHaveLength(1)
-    expect(roles.json().items[0].title).toBe('企业产品经理')
+    const createdRole = roles.json().items.find(
+      (item: { id: string }) => item.id === intake.json().role.state.id,
+    )
+    expect(createdRole?.title).toBe('企业产品经理')
     const messages = await app.inject({
       method: 'GET',
       url: `/api/v1/role-sessions/${intake.json().role.state.id}/messages`,
@@ -534,59 +607,6 @@ describe('Role Clarifier API', () => {
     expect(allowed.json().state.hc_context.job_basics.salary_range).toBe('35K-50K·15薪')
   })
 
-  it('结构化评估方案可以生成并保存为前端可消费的数据', async () => {
-    const managerCookie = await login(app, 'manager-demo')
-    const response = await app.inject({
-      method: 'POST',
-      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/artifacts/ASSESSMENT_SCORECARD/generate`,
-      headers: { cookie: managerCookie },
-    })
-    expect(response.statusCode, response.body).toBe(202)
-
-    const runId = response.json().run_id
-    let completedRun
-    for (let attempt = 0; attempt < 30; attempt += 1) {
-      const run = await app.inject({
-        method: 'GET',
-        url: `/api/v1/agent-runs/${runId}`,
-        headers: { cookie: managerCookie },
-      })
-      completedRun = run.json().run
-      if (completedRun.status === 'COMPLETED' || completedRun.status === 'FAILED') break
-      await new Promise((resolve) => setTimeout(resolve, 10))
-    }
-    let failureDetail: unknown = completedRun
-    if (completedRun?.status === 'FAILED') {
-      const adminCookie = await login(app, 'admin-demo')
-      const trace = await app.inject({
-        method: 'GET',
-        url: `/api/v1/admin/agent-runs/${runId}/trace`,
-        headers: { cookie: adminCookie },
-      })
-      failureDetail = trace.json().events.find((event: { type: string }) => event.type === 'run.failed')
-    }
-    expect(completedRun?.status, JSON.stringify(failureDetail)).toBe('COMPLETED')
-
-    const role = await app.inject({
-      method: 'GET',
-      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}`,
-      headers: { cookie: managerCookie },
-    })
-    expect(role.statusCode).toBe(200)
-    expect(role.json().state.latest_artifacts.ASSESSMENT_SCORECARD.content).toMatchObject({
-      dimensions: [expect.objectContaining({
-        name: '业务判断',
-        anchors: { 1: '无法说明取舍', 3: '能完成基本判断', 5: '能验证复杂取舍' },
-      })],
-      decision_rule: {
-        status: '待确认',
-        scoring: '各维度按 1-5 分评分',
-        pass_thresholds: '加权总分不低于 3.5',
-        calibration: '由 HR 和用人经理校准',
-      },
-    })
-  })
-
   it('HC Mock 指定负责 HR 后自动把 HR 加入同一岗位会话', async () => {
     const managerCookie = await login(app, 'manager-demo')
     const intake = await app.inject({
@@ -715,6 +735,15 @@ describe('Role Clarifier API', () => {
     })
     expect(JSON.stringify(trace)).toContain('半年内要建立')
     expect(trace.events.map((event: { type: string }) => event.type)).toContain('context.snapshot')
+    const runPage = await app.inject({
+      method: 'GET',
+      url: '/api/v1/admin/agent-runs?page=1&page_size=1&q=企业产品经理',
+      headers: { cookie: adminCookie },
+    })
+    expect(runPage.statusCode).toBe(200)
+    expect(runPage.json()).toMatchObject({ page: 1, page_size: 1 })
+    expect(runPage.json().total).toBeGreaterThanOrEqual(1)
+    expect(runPage.json().items).toHaveLength(1)
     const contextEvent = trace.events.find(
       (event: { type: string }) => event.type === 'context.snapshot',
     )

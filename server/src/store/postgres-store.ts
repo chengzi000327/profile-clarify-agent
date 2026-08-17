@@ -1,10 +1,14 @@
 import {
   and,
   asc,
+  count,
   desc,
   eq,
   gt,
+  ilike,
   inArray,
+  or,
+  sql,
 } from 'drizzle-orm'
 import { drizzle, type PostgresJsDatabase } from 'drizzle-orm/postgres-js'
 import postgres, { type Sql } from 'postgres'
@@ -17,11 +21,14 @@ import type {
   ClarificationPolicy,
   ClarificationRound,
   ConversationMessage,
+  HcApproval,
   RoleState,
 } from '@role-clarifier/contracts'
 import * as schema from '../db/schema.js'
 import type {
   AdminRunRecord,
+  AdminRunFilters,
+  AdminRunPage,
   ApplicationStore,
   CalibrationSignalRecord,
   DecisionRecord,
@@ -38,6 +45,7 @@ const iso = (value: Date | string): string =>
   value instanceof Date ? value.toISOString() : new Date(value).toISOString()
 
 type RoleSessionRow = typeof schema.roleSessions.$inferSelect
+type HcApprovalRow = typeof schema.hcApprovals.$inferSelect
 type ArtifactRow = typeof schema.artifacts.$inferSelect
 type AgentRunRow = typeof schema.agentRuns.$inferSelect
 type AgentEventRow = typeof schema.agentRunEvents.$inferSelect
@@ -67,6 +75,18 @@ const roleStateFromRow = (row: RoleSessionRow): RoleState => ({
   department: row.department,
   stage: row.stage as RoleState['stage'],
   revision: row.revision,
+  created_at: iso(row.createdAt),
+  updated_at: iso(row.updatedAt),
+})
+
+const hcApprovalFromRow = (row: HcApprovalRow): HcApproval => ({
+  request_id: row.requestId,
+  tenant_id: row.tenantId,
+  title: row.title,
+  department: row.department,
+  status: row.status,
+  context: row.context,
+  role_session_id: row.roleSessionId,
   created_at: iso(row.createdAt),
   updated_at: iso(row.updatedAt),
 })
@@ -236,6 +256,44 @@ export class PostgresStore implements ApplicationStore {
     return rows.length === 1
   }
 
+  async listHcApprovals(actor: ActorContext): Promise<HcApproval[]> {
+    const access = actor.role === 'ADMIN'
+      ? and(
+          eq(schema.hcApprovals.tenantId, actor.tenant_id),
+          eq(schema.hcApprovals.status, 'APPROVED'),
+        )
+      : and(
+          eq(schema.hcApprovals.tenantId, actor.tenant_id),
+          eq(schema.hcApprovals.status, 'APPROVED'),
+          actor.role === 'MANAGER'
+            ? eq(schema.hcApprovals.hiringManagerUserId, actor.user_id)
+            : eq(schema.hcApprovals.assignedHrUserId, actor.user_id),
+        )
+    const rows = await this.db
+      .select()
+      .from(schema.hcApprovals)
+      .where(access)
+      .orderBy(desc(schema.hcApprovals.createdAt))
+    return rows.map(hcApprovalFromRow)
+  }
+
+  async getHcApproval(requestId: string, actor: ActorContext): Promise<HcApproval | null> {
+    const access = actor.role === 'ADMIN'
+      ? and(
+          eq(schema.hcApprovals.requestId, requestId),
+          eq(schema.hcApprovals.tenantId, actor.tenant_id),
+        )
+      : and(
+          eq(schema.hcApprovals.requestId, requestId),
+          eq(schema.hcApprovals.tenantId, actor.tenant_id),
+          actor.role === 'MANAGER'
+            ? eq(schema.hcApprovals.hiringManagerUserId, actor.user_id)
+            : eq(schema.hcApprovals.assignedHrUserId, actor.user_id),
+        )
+    const [row] = await this.db.select().from(schema.hcApprovals).where(access).limit(1)
+    return row ? hcApprovalFromRow(row) : null
+  }
+
   async listRoleStates(actor: ActorContext): Promise<RoleState[]> {
     if (actor.role === 'ADMIN') {
       const rows = await this.db
@@ -390,6 +448,62 @@ export class PostgresStore implements ApplicationStore {
           })),
         )
       }
+    })
+  }
+
+  async createRoleAggregateForHc(
+    hcRequestId: string,
+    aggregate: RoleAggregate,
+  ): Promise<string> {
+    return this.db.transaction(async (tx) => {
+      const [hc] = await tx
+        .select({ roleSessionId: schema.hcApprovals.roleSessionId })
+        .from(schema.hcApprovals)
+        .where(
+          and(
+            eq(schema.hcApprovals.requestId, hcRequestId),
+            eq(schema.hcApprovals.tenantId, aggregate.state.tenant_id),
+          ),
+        )
+        .for('update')
+        .limit(1)
+      if (!hc) throw new Error('HC_APPROVAL_NOT_FOUND')
+      if (hc.roleSessionId) return hc.roleSessionId
+
+      const memberIds = [...new Set([
+        ...aggregate.member_ids,
+        ...(aggregate.state.hc_context?.assigned_hr_user_id
+          ? [aggregate.state.hc_context.assigned_hr_user_id]
+          : []),
+      ])]
+      const policy = this.makeDefaultPolicy(aggregate.state.id)
+      await tx.insert(schema.roleSessions).values({
+        id: aggregate.state.id,
+        tenantId: aggregate.state.tenant_id,
+        title: aggregate.state.title,
+        department: aggregate.state.department,
+        stage: aggregate.state.stage,
+        revision: aggregate.state.revision,
+        businessState: roleBusinessState(aggregate.state),
+        ...this.toPolicyColumns(policy),
+        createdAt: new Date(aggregate.state.created_at),
+        updatedAt: new Date(aggregate.state.updated_at),
+      })
+      if (memberIds.length > 0) {
+        await tx.insert(schema.roleMembers).values(
+          memberIds.map((userId) => ({ roleSessionId: aggregate.state.id, userId })),
+        )
+      }
+      await tx
+        .update(schema.hcApprovals)
+        .set({ roleSessionId: aggregate.state.id, updatedAt: new Date() })
+        .where(
+          and(
+            eq(schema.hcApprovals.requestId, hcRequestId),
+            eq(schema.hcApprovals.tenantId, aggregate.state.tenant_id),
+          ),
+        )
+      return aggregate.state.id
     })
   }
 
@@ -717,6 +831,28 @@ export class PostgresStore implements ApplicationStore {
     })
   }
 
+  async appendConversationMessageIfAbsent(message: ConversationMessage): Promise<boolean> {
+    const rows = await this.db.insert(schema.conversationMessages).values({
+      id: message.id,
+      tenantId: message.tenant_id,
+      roleSessionId: message.role_session_id,
+      runId: message.run_id,
+      clarificationRoundId: message.clarification_round_id,
+      senderKind: message.sender_type === 'HUMAN'
+        ? message.sender_role ?? 'HUMAN'
+        : message.sender_type,
+      senderUserId: message.sender_user_id,
+      senderName: message.sender_name,
+      content: message.content,
+      structuredContent: message.structured_content,
+      status: message.status,
+      sequence: message.sequence,
+      createdAt: new Date(message.created_at),
+      completedAt: message.completed_at ? new Date(message.completed_at) : null,
+    }).onConflictDoNothing().returning({ id: schema.conversationMessages.id })
+    return rows.length > 0
+  }
+
   async updateConversationMessage(message: ConversationMessage): Promise<void> {
     await this.db
       .update(schema.conversationMessages)
@@ -784,8 +920,30 @@ export class PostgresStore implements ApplicationStore {
       .where(eq(schema.clarificationRounds.id, round.id))
   }
 
-  async listRunsForTenant(tenantId: string): Promise<AdminRunRecord[]> {
-    const rows = await this.db
+  async listRunsForTenant(
+    tenantId: string,
+    filters: AdminRunFilters,
+  ): Promise<AdminRunPage> {
+    const conditions = [eq(schema.roleSessions.tenantId, tenantId)]
+    if (filters.status) conditions.push(eq(schema.agentRuns.status, filters.status))
+    if (filters.model_tier) conditions.push(eq(schema.agentRuns.modelTier, filters.model_tier))
+    if (filters.role_session_id) {
+      conditions.push(eq(schema.agentRuns.roleSessionId, filters.role_session_id))
+    }
+    const keyword = filters.query?.trim()
+    if (keyword) {
+      const pattern = `%${keyword}%`
+      const search = or(
+        ilike(schema.roleSessions.title, pattern),
+        ilike(schema.users.displayName, pattern),
+        ilike(schema.agentRuns.modelName, pattern),
+        sql<boolean>`${schema.agentRuns.id}::text ILIKE ${pattern}`,
+      )
+      if (search) conditions.push(search)
+    }
+    const where = and(...conditions)
+    const [rows, totals] = await Promise.all([
+      this.db
       .select({
         run: schema.agentRuns,
         cancelRequested: schema.agentRuns.cancelRequested,
@@ -795,17 +953,30 @@ export class PostgresStore implements ApplicationStore {
       })
       .from(schema.agentRuns)
       .innerJoin(schema.roleSessions, eq(schema.agentRuns.roleSessionId, schema.roleSessions.id))
-      .innerJoin(schema.users, eq(schema.agentRuns.actorUserId, schema.users.id))
-      .where(eq(schema.roleSessions.tenantId, tenantId))
+      .leftJoin(schema.users, eq(schema.agentRuns.actorUserId, schema.users.id))
+      .where(where)
       .orderBy(desc(schema.agentRuns.createdAt))
-      .limit(200)
-    return rows.map((row) => ({
-      run: agentRunFromRow(row.run),
-      cancel_requested: row.cancelRequested,
-      role_title: row.roleTitle,
-      actor_display_name: row.actorDisplayName,
-      actor_role: row.actorRole,
-    }))
+      .limit(filters.page_size)
+      .offset((filters.page - 1) * filters.page_size),
+      this.db
+        .select({ value: count() })
+        .from(schema.agentRuns)
+        .innerJoin(schema.roleSessions, eq(schema.agentRuns.roleSessionId, schema.roleSessions.id))
+        .leftJoin(schema.users, eq(schema.agentRuns.actorUserId, schema.users.id))
+        .where(where),
+    ])
+    return {
+      items: rows.map((row) => ({
+        run: agentRunFromRow(row.run),
+        cancel_requested: row.cancelRequested,
+        role_title: row.roleTitle,
+        actor_display_name: row.actorDisplayName ?? row.run.actorUserId,
+        actor_role: row.actorRole ?? row.run.effectiveActorRole,
+      })),
+      total: Number(totals[0]?.value ?? 0),
+      page: filters.page,
+      page_size: filters.page_size,
+    }
   }
 
   async appendTraceAccessAudit(record: TraceAccessAuditRecord): Promise<void> {

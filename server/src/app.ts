@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto'
+import { randomUUID } from 'node:crypto'
 import cookie from '@fastify/cookie'
 import cors from '@fastify/cors'
 import sensible from '@fastify/sensible'
@@ -18,6 +18,7 @@ import {
   ConversationMessageSchema,
   FactCategorySchema,
   HumanDecisionSchema,
+  HcApprovalSchema,
   LoginRequestSchema,
   MessageRequestSchema,
   PublicJDSchema,
@@ -36,6 +37,7 @@ import { SidecarHarnessAdapter, type HarnessAdapter } from './agent/harness-adap
 import type { AppConfig } from './config.js'
 import { RoleService } from './services/role-service.js'
 import { createStore, type ApplicationStore } from './store/index.js'
+import { demoUsers } from './store/seed.js'
 import { writeSseEvent } from './http/sse.js'
 import {
   FeishuGateway,
@@ -44,6 +46,7 @@ import {
 } from './integrations/feishu.js'
 
 const IdParamsSchema = z.object({ id: z.string().uuid() })
+const HcParamsSchema = z.object({ request_id: z.string().min(1).max(100) })
 const RunParamsSchema = z.object({ run_id: z.string().uuid() })
 const ArtifactParamsSchema = z.object({
   id: z.string().uuid(),
@@ -55,21 +58,21 @@ const ArtifactIdParamsSchema = z.object({
 })
 const RevisionSchema = z.object({ expected_revision: z.number().int().nonnegative() })
 
-const stableId = (prefix: string, value: string): string =>
-  `${prefix}-${createHash('sha256').update(value).digest('hex').slice(0, 24)}`
+const DEMO_WORKSPACE_ID = 'legacy-demo'
+const demoUsersById = new Map(demoUsers.map((user) => [user.user_id, user]))
 
-const resolveLoginIdentity = (workspaceId: string, accountId: string) => {
-  const workspace = workspaceId.trim().toLowerCase()
-  const account = accountId.trim().toLowerCase()
-  const legacyIds = new Set(['manager-demo', 'hr-demo', 'admin-demo'])
-  if (workspace === 'legacy-demo' && legacyIds.has(account)) {
-    return { tenantId: 'tenant-demo', userId: account }
-  }
-  const tenantId = stableId('tenant', workspace)
-  return {
-    tenantId,
-    userId: stableId('user', `${tenantId}\u0000${account}`),
-  }
+const resolveLoginUser = (workspaceId: string, accountId: string) => {
+  if (workspaceId.trim().toLowerCase() !== DEMO_WORKSPACE_ID) return null
+  return demoUsersById.get(accountId.trim().toLowerCase()) ?? null
+}
+
+const isAllowedDemoUser = (user: ActorContext): boolean => {
+  const allowed = demoUsersById.get(user.user_id)
+  return Boolean(
+    allowed &&
+    user.tenant_id === allowed.tenant_id &&
+    user.role === allowed.role,
+  )
 }
 
 const suffixedParam = (
@@ -302,6 +305,9 @@ export const buildApp = async (
     }
     const user = await store.getUser(unsigned.value)
     if (!user) throw new DomainError('UNAUTHENTICATED', '用户不存在或已停用', 401)
+    if (!isAllowedDemoUser(user)) {
+      throw new DomainError('UNAUTHENTICATED', '当前账号不在允许登录名单中', 401)
+    }
     request.actor = {
       tenant_id: user.tenant_id,
       user_id: user.user_id,
@@ -506,24 +512,24 @@ export const buildApp = async (
 
   app.post('/api/v1/auth/login', async (request, reply) => {
     const body = LoginRequestSchema.parse(request.body)
-    const identity = resolveLoginIdentity(body.workspace_id, body.account_id)
-    const existing = await store.getUser(identity.userId)
-    if (existing && (existing.tenant_id !== identity.tenantId || existing.role !== body.role)) {
+    const allowed = resolveLoginUser(body.workspace_id, body.account_id)
+    if (!allowed) {
       throw new DomainError(
-        'ACCOUNT_ROLE_MISMATCH',
-        '该账号已绑定其他角色；同一账号的角色不能在登录时变更',
-        409,
+        'LOGIN_NOT_ALLOWED',
+        '当前演示环境只允许三个预置账号登录',
+        403,
       )
     }
+    if (body.role !== allowed.role || body.display_name !== allowed.display_name) {
+      throw new DomainError('LOGIN_IDENTITY_MISMATCH', '账号、姓名与角色必须使用预置身份', 403)
+    }
+    const existing = await store.getUser(allowed.user_id)
+    if (existing && (existing.tenant_id !== allowed.tenant_id || existing.role !== allowed.role)) {
+      throw new DomainError('ACCOUNT_CONFIGURATION_INVALID', '预置账号配置异常', 409)
+    }
     const user = existing
-      ? { ...existing, display_name: body.display_name, active: true }
-      : {
-          tenant_id: identity.tenantId,
-          user_id: identity.userId,
-          role: body.role,
-          display_name: body.display_name,
-          active: true,
-        }
+      ? { ...existing, display_name: allowed.display_name, active: true }
+      : { ...allowed, active: true }
     await store.saveUser(user)
     reply.setCookie('role_agent_session', user.user_id, {
       signed: true,
@@ -550,6 +556,16 @@ export const buildApp = async (
   })
 
   app.get('/api/v1/auth/me', async (request) => ({ actor: request.actor }))
+
+  app.get('/api/v1/hc-approvals', async (request) => ({
+    items: await roleService.listApprovedHc(request.actor),
+  }))
+
+  app.post('/api/v1/hc-approvals/:request_id/workspace', async (request, reply) => {
+    const { request_id } = HcParamsSchema.parse(request.params)
+    const result = await roleService.openApprovedHc(request_id, request.actor)
+    return reply.status(result.created ? 201 : 200).send(result)
+  })
 
   app.get('/api/v1/role-sessions', async (request) => ({
     items: await roleService.list(request.actor),
@@ -849,17 +865,19 @@ export const buildApp = async (
         status: z.enum(['QUEUED', 'RUNNING', 'COMPLETED', 'FAILED', 'CANCELLED']).optional(),
         model_tier: z.enum(['FLASH', 'PRO']).optional(),
         role_session_id: z.string().uuid().optional(),
+        q: z.string().trim().max(100).optional(),
+        page: z.coerce.number().int().positive().default(1),
+        page_size: z.coerce.number().int().min(1).max(100).default(25),
       })
       .parse(request.query)
-    const records = await store.listRunsForTenant(request.actor.tenant_id)
-    return {
-      items: records.filter(
-        ({ run }) =>
-          (!query.status || run.status === query.status) &&
-          (!query.model_tier || run.model_tier === query.model_tier) &&
-          (!query.role_session_id || run.role_session_id === query.role_session_id),
-      ),
-    }
+    return store.listRunsForTenant(request.actor.tenant_id, {
+      page: query.page,
+      page_size: query.page_size,
+      ...(query.status ? { status: query.status } : {}),
+      ...(query.model_tier ? { model_tier: query.model_tier } : {}),
+      ...(query.role_session_id ? { role_session_id: query.role_session_id } : {}),
+      ...(query.q ? { query: query.q } : {}),
+    })
   })
 
   app.get('/api/v1/admin/agent-runs/:run_id/trace', async (request) => {
@@ -902,6 +920,12 @@ export const buildApp = async (
     openapi: '3.1.0',
     info: { title: 'Role Clarifier Agent API', version: '0.1.0' },
     paths: {
+      '/api/v1/hc-approvals': {
+        get: { summary: '按真实角色读取已通过 HC 审批列表' },
+      },
+      '/api/v1/hc-approvals/{request_id}/workspace': {
+        post: { summary: '幂等创建或继续 HC 对应的岗位工作区' },
+      },
       '/api/v1/intake/messages': {
         post: { summary: '以第一条自然语言消息建立岗位并创建异步 Agent Run' },
       },
@@ -928,6 +952,7 @@ export const buildApp = async (
     components: {
       schemas: {
         ActorContext: z.toJSONSchema(ActorContextSchema),
+        HcApproval: z.toJSONSchema(HcApprovalSchema),
         RoleState: z.toJSONSchema(RoleStateSchema),
         AgentRun: z.toJSONSchema(AgentRunSchema),
         AgentEvent: z.toJSONSchema(AgentEventSchema),

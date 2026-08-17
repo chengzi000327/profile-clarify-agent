@@ -42,6 +42,14 @@ export const api = {
   me() {
     return request('/api/v1/auth/me');
   },
+  listHcApprovals() {
+    return request('/api/v1/hc-approvals');
+  },
+  openHcWorkspace(requestId) {
+    return request(`/api/v1/hc-approvals/${encodeURIComponent(requestId)}/workspace`, {
+      method: 'POST',
+    });
+  },
   listRoleSessions() {
     return request('/api/v1/role-sessions');
   },

@@ -49,6 +49,14 @@ export const maxTokensForTask = (task: HarnessTask, configuredMaximum: number): 
   return configuredMaximum
 }
 
+export const timeoutMsForTask = (
+  task: HarnessTask,
+  configuredDefault: number,
+  configuredRoleProfile: number,
+): number => task === 'GENERATE_ROLE_PROFILE'
+  ? configuredRoleProfile
+  : configuredDefault
+
 const combineTurns = (turns: RuntimeTurn[]) => ({
   tools: turns.flatMap((turn) => turn.toolNames),
   successfulTools: turns.flatMap((turn) => turn.successfulToolNames),
@@ -154,6 +162,11 @@ export class HarnessExecutor {
     const model = request.task === 'CLARIFY_MESSAGE' || request.task === 'EXTRACT_CANDIDATES'
       ? this.config.DEEPSEEK_FLASH_MODEL
       : this.config.DEEPSEEK_PRO_MODEL
+    const timeoutMs = timeoutMsForTask(
+      request.task,
+      this.config.DSH_RUN_TIMEOUT_MS,
+      this.config.DSH_ROLE_PROFILE_TIMEOUT_MS,
+    )
     const sessionRoot = await mkdtemp(join(tmpdir(), 'role-clarifier-dsh-'))
     const runtime = new JsonRpcHarnessRuntime({
       runtimeBin: this.config.DSH_RUNTIME_BIN,
@@ -170,7 +183,7 @@ export class HarnessExecutor {
       model,
       provider: 'deepseek-official',
       maxTokens: maxTokensForTask(request.task, this.config.DSH_MAX_TOKENS),
-      requestTimeoutMs: this.config.DSH_RUN_TIMEOUT_MS,
+      requestTimeoutMs: timeoutMs,
     })
     const sessionId = `role-${request.execution_context.role_session_id}`
     const turns: RuntimeTurn[] = []
@@ -179,7 +192,7 @@ export class HarnessExecutor {
     let recoveredFromTool = false
     const runSignal = AbortSignal.any([
       signal,
-      AbortSignal.timeout(this.config.DSH_RUN_TIMEOUT_MS),
+      AbortSignal.timeout(timeoutMs),
     ])
     try {
       const initialPrompt = buildTaskPrompt(request)

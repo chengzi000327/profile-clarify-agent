@@ -1,5 +1,6 @@
 import type {
   CandidateEvidence,
+  HcContext,
   RoleState,
 } from '@role-clarifier/contracts'
 import {
@@ -79,6 +80,31 @@ export const roleMembers = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [primaryKey({ columns: [table.roleSessionId, table.userId] })],
+)
+
+export const hcApprovals = pgTable(
+  'hc_approvals',
+  {
+    requestId: text('request_id').notNull(),
+    tenantId: text('tenant_id').notNull(),
+    title: text('title').notNull(),
+    department: text('department').notNull(),
+    status: text('status', { enum: ['APPROVED'] }).notNull(),
+    context: jsonb('context').$type<HcContext>().notNull(),
+    hiringManagerUserId: text('hiring_manager_user_id').notNull(),
+    assignedHrUserId: text('assigned_hr_user_id'),
+    roleSessionId: uuid('role_session_id')
+      .references(() => roleSessions.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.tenantId, table.requestId] }),
+    index('hc_approvals_tenant_status_idx').on(table.tenantId, table.status),
+    index('hc_approvals_manager_idx').on(table.tenantId, table.hiringManagerUserId),
+    index('hc_approvals_hr_idx').on(table.tenantId, table.assignedHrUserId),
+    uniqueIndex('hc_approvals_role_session_uidx').on(table.roleSessionId),
+  ],
 )
 
 export const artifacts = pgTable(

@@ -4,6 +4,7 @@ import {
   ArrowRight,
   ArrowUp,
   BarChart3,
+  BriefcaseBusiness,
   Check,
   CheckCircle2,
   ChevronDown,
@@ -20,10 +21,8 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Plus,
-  Search,
   Settings,
   ShieldCheck,
-  SlidersHorizontal,
   Sparkles,
   Target,
   Users,
@@ -37,13 +36,12 @@ import {
   versions,
 } from './data.js';
 import { api, ApiError } from './api/client.js';
+import { normalizeRoleProfileContent } from './profile-content.js';
 import LoginScreen from './components/LoginScreen.jsx';
 import { Composer, LiveAgentRun } from './components/AgentConversation.jsx';
 import AdminTraceConsole from './components/AdminTraceConsole.jsx';
-import { normalizeAssessmentContent } from './assessment-content.js';
-import { normalizeRoleProfileContent } from './role-profile-content.js';
-import { normalizeRecruitingContent } from './recruiting-content.js';
-import { normalizePublicJDContent } from './public-jd-content.js';
+import HcApprovalLanding from './components/HcApprovalLanding.jsx';
+import ClarifierMark from './components/ClarifierMark.jsx';
 
 const sourceIcons = {
   org: Users,
@@ -82,7 +80,10 @@ const actorRoleLabel = {
 const recruitmentTypeLabel = {
   NEW_HEADCOUNT: '新增编制',
   REPLACEMENT: '人员替换',
+  ATTRITION_REPLACEMENT: '离职补充',
+  PERFORMANCE_REPLACEMENT: '汰换补充',
   ORGANIZATION_ADJUSTMENT: '组织调整',
+  OTHER: '其他补充',
 };
 
 const artifactPresentation = {
@@ -121,47 +122,6 @@ function toRoleCard(state) {
   };
 }
 
-function ClarifierMark({ size = 32, plate = false }) {
-  return (
-    <span className={`clarifier-mark ${plate ? 'with-plate' : ''}`} style={{ width: size, height: size }} aria-hidden="true">
-      <svg viewBox="0 0 40 40" role="img">
-        <path className="mark-blue" d="M18.1 7.5h-6.3A5.8 5.8 0 0 0 6 13.3v6.3a5.8 5.8 0 0 0 4.4 5.6L7.6 29l6.3-3.6h4.2" />
-        <path className="mark-cyan" d="M21.9 7.5h6.3a5.8 5.8 0 0 1 5.8 5.8v6.3a5.8 5.8 0 0 1-4.4 5.6l2.8 3.8-6.3-3.6h-4.2" />
-        <path className="mark-focus" d="M15.8 14.2h-2.1v2.2M24.2 14.2h2.1v2.2M15.8 22.6h-2.1v-2.2M24.2 22.6h2.1v-2.2" />
-        <circle className="mark-dot" cx="20" cy="18.4" r="2.2" />
-      </svg>
-    </span>
-  );
-}
-
-class ArtifactRenderBoundary extends React.Component {
-  constructor(props) {
-    super(props);
-    this.state = { failed: false };
-  }
-
-  static getDerivedStateFromError() {
-    return { failed: true };
-  }
-
-  componentDidCatch(error) {
-    console.error('Artifact rendering failed', error);
-  }
-
-  render() {
-    if (this.state.failed) {
-      return (
-        <div className="artifact-render-error" role="alert">
-          <span><AlertTriangle size={22} /></span>
-          <strong>当前产物暂时无法展示</strong>
-          <p>这份历史产物的数据格式与当前页面不兼容。工作台和其他页签仍可继续使用，请生成新版本或稍后重试。</p>
-        </div>
-      );
-    }
-    return this.props.children;
-  }
-}
-
 function AdminTestRoleSwitch({ value, onChange, compact = false }) {
   return (
     <div className={`admin-test-role-switch ${compact ? 'compact' : ''}`} aria-label="Agent 测试身份">
@@ -178,6 +138,10 @@ function AdminTestRoleSwitch({ value, onChange, compact = false }) {
 function App() {
   const [actor, setActor] = useState(null);
   const [booting, setBooting] = useState(true);
+  const [hcApprovals, setHcApprovals] = useState([]);
+  const [hcLoading, setHcLoading] = useState(false);
+  const [hcError, setHcError] = useState('');
+  const [landingMode, setLandingMode] = useState(true);
   const [roleSessions, setRoleSessions] = useState([]);
   const [activeRoleId, setActiveRoleId] = useState(null);
   const [newConversationMode, setNewConversationMode] = useState(false);
@@ -230,7 +194,8 @@ function App() {
         const session = await api.me();
         if (cancelled) return;
         setActor(session.actor);
-        await loadRoleSessions(cancelled);
+        setActiveView('hc');
+        await loadHcApprovals(cancelled);
       } catch (error) {
         if (!(error instanceof ApiError) || error.status !== 401) setRequestError(error.message);
       } finally {
@@ -267,9 +232,7 @@ function App() {
         }
       })
       .catch((error) => {
-        if (!cancelled) {
-          setRoleDetailError(error.message || '岗位详情加载失败');
-        }
+        if (!cancelled) setRoleDetailError(error.message || '岗位详情加载失败');
       })
       .finally(() => {
         if (!cancelled) setRoleDetailLoading(false);
@@ -280,9 +243,18 @@ function App() {
   }, [actor, activeRoleId, roleDetailReloadKey]);
 
   async function loadRoleSessions(cancelled = false, preferredRoleId = null) {
-    const result = await api.listRoleSessions();
+    const [result, hcResult] = await Promise.all([
+      api.listRoleSessions(),
+      api.listHcApprovals(),
+    ]);
     if (cancelled) return;
-    const cards = result.items.map(toRoleCard);
+    setHcApprovals(hcResult.items);
+    const linkedRoleIds = new Set(
+      hcResult.items.map((hc) => hc.role_session_id).filter(Boolean),
+    );
+    const cards = result.items
+      .filter((role) => linkedRoleIds.has(role.id))
+      .map(toRoleCard);
     setRoleSessions(cards);
     setActiveRoleId((current) => {
       if (preferredRoleId && cards.some((item) => item.id === preferredRoleId)) return preferredRoleId;
@@ -291,20 +263,38 @@ function App() {
     if (cards.length === 0) setNewConversationMode(true);
   }
 
+  async function loadHcApprovals(cancelled = false) {
+    setHcLoading(true);
+    setHcError('');
+    try {
+      const result = await api.listHcApprovals();
+      if (!cancelled) setHcApprovals(result.items);
+    } catch (error) {
+      if (!cancelled) setHcError(error.message || 'HC 审批读取失败');
+      throw error;
+    } finally {
+      if (!cancelled) setHcLoading(false);
+    }
+  }
+
   async function handleLogin(credentials) {
     const session = await api.login(credentials);
     setActor(session.actor);
-    setActiveView('conversation');
+    setActiveView('hc');
+    setLandingMode(true);
     setNewConversationMode(false);
     setRequestError('');
     setAdminTestRole('MANAGER');
-    await loadRoleSessions();
+    await loadHcApprovals();
   }
 
   async function handleLogout() {
     streamStopRef.current?.();
     await api.logout();
     setActor(null);
+    setHcApprovals([]);
+    setHcError('');
+    setLandingMode(true);
     setRoleSessions([]);
     setActiveRoleId(null);
     setNewConversationMode(false);
@@ -313,6 +303,40 @@ function App() {
     setClarificationPolicy(null);
     setProfileMenuOpen(false);
     setActiveView('conversation');
+  }
+
+  async function handleOpenHc(requestId) {
+    setHcError('');
+    try {
+      const result = await api.openHcWorkspace(requestId);
+      const roleId = result.role.state.id;
+      const conversation = await api.getMessages(roleId);
+      await loadRoleSessions(false, roleId);
+      setNewConversationMode(false);
+      setActiveRoleId(roleId);
+      setRoleDetail(result.role);
+      setMessages(conversation.items);
+      setClarificationPolicy(conversation.policy);
+      setActiveView('conversation');
+      setLandingMode(false);
+    } catch (error) {
+      setHcError(error.message || '岗位澄清会话打开失败');
+      throw error;
+    }
+  }
+
+  function openHcLanding() {
+    streamStopRef.current?.();
+    setLandingMode(true);
+    setActiveRoleId(null);
+    setRoleDetail(null);
+    setMessages([]);
+    setClarificationPolicy(null);
+    setAgentEvents([]);
+    setAgentStatus('idle');
+    setActiveView('hc');
+    setRequestError('');
+    loadHcApprovals().catch(() => {});
   }
 
   function chooseRole(roleId, nextView = 'conversation') {
@@ -472,10 +496,27 @@ function App() {
   }
 
   if (booting) {
-    return <div className="app-loading"><ClarifierMark size={46} plate /><span>正在加载岗位工作台…</span></div>;
+    return <div className="app-loading"><ClarifierMark size={46} plate /><span>正在加载岗位澄清…</span></div>;
   }
 
   if (!actor) return <LoginScreen onLogin={handleLogin} />;
+
+  if (landingMode) {
+    return (
+      <HcApprovalLanding
+        actor={actor}
+        approvals={hcApprovals}
+        loading={hcLoading}
+        error={hcError}
+        activeView={activeView}
+        onOpenHc={handleOpenHc}
+        onOpenApprovals={() => setActiveView('hc')}
+        onOpenProfile={() => setActiveView('profile')}
+        onOpenTrace={() => setActiveView('admin-trace')}
+        onLogout={handleLogout}
+      />
+    );
+  }
 
   if (!activeRole) {
     return (
@@ -523,53 +564,31 @@ function App() {
           </button>
         </div>
 
-        <button className="new-project-button" onClick={startNewConversation} disabled={!canCreateRole}>
-          <Plus size={17} />
-          {!sidebarCollapsed && <span>{canCreateRole ? '开始新岗位对话' : 'HR 查看获批岗位'}</span>}
+        <button className="new-project-button" onClick={openHcLanding}>
+          <BriefcaseBusiness size={17} />
+          {!sidebarCollapsed && <span>返回选择 HC</span>}
         </button>
 
         {actor.role === 'ADMIN' && !sidebarCollapsed && (
           <AdminTestRoleSwitch value={adminTestRole} onChange={handleAdminTestRoleChange} />
         )}
 
-        {!sidebarCollapsed && (
-          <div className="sidebar-section-title">
-            <span>最近会话</span>
-            <div>
-              <button className="icon-button tiny" aria-label="搜索会话"><Search size={15} /></button>
-              <button className="icon-button tiny" aria-label="会话筛选"><SlidersHorizontal size={15} /></button>
-            </div>
-          </div>
-        )}
-
-        <nav className="role-session-list" aria-label="岗位澄清会话列表">
-          {roleSessions.map((role) => {
-            const active = role.id === activeRoleId;
-            return (
-              <button
-                className={`role-session-row ${active ? 'active' : ''}`}
-                key={role.id}
-                onClick={() => {
-                  if (sidebarCollapsed) setSidebarCollapsed(false);
-                  chooseRole(role.id);
-                }}
-                title={`${role.name} · ${role.stage}`}
-              >
-                <span className="session-icon"><MessageSquare size={15} /></span>
-                {!sidebarCollapsed && (
-                  <span className="role-session-copy">
-                    <span className="role-session-title"><strong>{role.name}</strong><small>{role.updatedAt}</small></span>
-                    <span className="role-session-meta">
-                      <em className={role.stageTone}>{role.stage}</em>
-                      <i>·</i>
-                      <small>{role.meta}</small>
-                    </span>
-                  </span>
-                )}
-                {role.unread && <span className="session-unread">{role.unread}</span>}
-              </button>
-            );
-          })}
+        {!sidebarCollapsed && <div className="sidebar-section-title"><span>当前会话</span></div>}
+        <nav className="role-session-list current-role-session-list" aria-label="当前岗位澄清会话">
+          <button
+            className="role-session-row active"
+            type="button"
+            onClick={() => setActiveView('conversation')}
+            title={`${activeRole.name} · ${activeRole.stage}`}
+          >
+            <span className="session-icon"><MessageSquare size={15} /></span>
+            {!sidebarCollapsed && (
+              <span className="role-session-copy">
+                <span className="role-session-title"><strong>{activeRole.name}</strong><small>{activeRole.updatedAt}</small></span>
+                <span className="role-session-meta"><em className={activeRole.stageTone}>{activeRole.stage}</em><i>·</i><small>{activeRole.meta}</small></span>
+              </span>
+            )}
+          </button>
         </nav>
 
         <div className="sidebar-footer">
@@ -723,29 +742,6 @@ function EmptyWorkspace({
         {actor.role === 'ADMIN' && (
           <AdminTestRoleSwitch value={adminTestRole} onChange={onAdminTestRoleChange} />
         )}
-        <div className="sidebar-section-title">
-          <span>最近会话</span>
-          <div>
-            <button className="icon-button tiny" aria-label="搜索会话"><Search size={15} /></button>
-            <button className="icon-button tiny" aria-label="会话筛选"><SlidersHorizontal size={15} /></button>
-          </div>
-        </div>
-        <nav className="role-session-list empty-role-session-list" aria-label="岗位澄清会话列表">
-          {roleSessions.length === 0 ? (
-            <div className="empty-session-list">
-              <span className="session-icon"><MessageSquare size={15} /></span>
-              <span><strong>还没有岗位会话</strong><small>直接在右侧和 Agent 聊聊</small></span>
-            </div>
-          ) : roleSessions.map((role) => (
-            <button className="role-session-row" key={role.id} onClick={() => onChooseRole(role.id)}>
-              <span className="session-icon"><MessageSquare size={15} /></span>
-              <span className="role-session-copy">
-                <span className="role-session-title"><strong>{role.name}</strong><small>{role.updatedAt}</small></span>
-                <span className="role-session-meta"><em className={role.stageTone}>{role.stage}</em><i>·</i><small>{role.meta}</small></span>
-              </span>
-            </button>
-          ))}
-        </nav>
         <div className="sidebar-footer">
           {actor.role === 'ADMIN' && (
             <button className={`sidebar-utility ${activeView === 'admin-trace' ? 'active' : ''}`} onClick={onOpenTrace}>
@@ -918,8 +914,8 @@ function ConversationView({
           {messages.length === 0 && (
             <div className="conversation-empty-state">
               <ClarifierMark size={34} plate />
-              <strong>开始真实岗位对话</strong>
-              <p>{actor.display_name}，请补充招聘原因、成功标准或希望Agent协助判断的问题。消息发送后会立即保存。</p>
+              <strong>Agent 正在准备第一个澄清问题</strong>
+              <p>系统会根据已审批 HC 的招聘原因和组织缺口主动发问，请稍候。</p>
             </div>
           )}
 
@@ -945,9 +941,13 @@ function ConversationView({
                   {message.content.split('\n').filter(Boolean).map((paragraph, index) => <p key={`${message.id}-${index}`}>{paragraph}</p>)}
                   {structured.question && (
                     <div className="persisted-question">
-                      <span><CircleDot size={13} />第 {structured.round_ordinal} / {structured.budget} 轮主动澄清</span>
+                      <span><CircleDot size={13} />{structured.kind === 'HC_OPENING_QUESTION'
+                        ? 'Agent 主动发起 · 第一个问题'
+                        : `第 ${structured.round_ordinal} / ${structured.budget} 轮主动澄清`}</span>
                       <strong>{structured.question}</strong>
-                      <small>经理、HR或企业管理员都可以直接在下方回答。</small>
+                      <small>{structured.kind === 'HC_OPENING_QUESTION'
+                        ? '请用人经理直接在下方回答；HR 和企业管理员可以补充事实。'
+                        : '经理、HR或企业管理员都可以直接在下方回答。'}</small>
                     </div>
                   )}
                   {structured.kind === 'CLARIFICATION_LIMIT' && (
@@ -1279,9 +1279,6 @@ function ProfileView({
     : latestArtifact?.status === 'CONFIRMED'
       ? '生成新版本'
       : presentation.generateAction;
-  const decisionSteps = ['招聘原因与成功标准', '岗位画像', '评估方案', '对外 JD'];
-  const currentDecisionStep = section === 'assessment' ? 2 : section === 'jd' ? 3 : 1;
-
   return (
     <section className="profile-surface redesigned-profile">
       <div className="profile-page profile-page-wide">
@@ -1319,19 +1316,6 @@ function ProfileView({
           <span>{actualActorRole === 'ADMIN' ? `企业管理员正在以“${viewerRole === 'hr' ? 'HR' : '用人经理'}”身份测试；真实身份仍写入审计记录。` : viewerRole === 'hr' ? 'HR 权限：在同一岗位会话中查看招聘画像、画像依据、评估方案和对外 JD。' : '用人经理权限：确认画像依据、评估方案和对外 JD；HR 内部招聘画像不可见。'}</span>
         </div>
 
-        {section !== 'portrait' && (
-          <div className="decision-flow" aria-label="岗位画像产出流程">
-            {decisionSteps.map((step, index) => (
-              <React.Fragment key={step}>
-                <div className={`${index < currentDecisionStep ? 'completed' : ''} ${index === currentDecisionStep ? 'current' : ''}`}>
-                  <span>{index < currentDecisionStep ? <Check size={11} /> : index + 1}</span><strong>{step}</strong>
-                </div>
-                {index < decisionSteps.length - 1 && <ChevronRight size={13} />}
-              </React.Fragment>
-            ))}
-          </div>
-        )}
-
         <nav className={`profile-subnav tabs-${profileTabs.length}`} aria-label="岗位画像目录" style={{ gridTemplateColumns: `repeat(${profileTabs.length}, minmax(0, 1fr))` }}>
           {profileTabs.map((item) => (
             <button className={section === item.id ? 'active' : ''} key={item.id} onClick={() => setSection(item.id)}>
@@ -1341,25 +1325,23 @@ function ProfileView({
         </nav>
 
         <div className="profile-content-frame">
-          <ArtifactRenderBoundary key={`${artifactType}-${latestArtifact?.id ?? 'empty'}-${latestArtifact?.version ?? 0}`}>
-            {(!latestArtifact || latestArtifact.status === 'INVALIDATED') ? (
-              <ArtifactEmptyState
-                artifactType={artifactType}
-                invalidated={latestArtifact?.status === 'INVALIDATED'}
-                canManage={canManageArtifact}
-                onGenerate={() => onArtifactAction?.(artifactType)}
-                busy={agentStatus === 'running'}
-              />
-            ) : section === 'portrait' ? (
-              <RecruitingPortrait onOpenEvidence={onOpenEvidence} artifact={latestArtifact} roleDetail={roleDetail} />
-            ) : section === 'basis' ? (
-              <GeneratedProfileBasis artifact={latestArtifact} state={state} />
-            ) : section === 'assessment' ? (
-              <GeneratedAssessment artifact={latestArtifact} />
-            ) : (
-              <JDPreview jd={latestArtifact} state={state} />
-            )}
-          </ArtifactRenderBoundary>
+          {(!latestArtifact || latestArtifact.status === 'INVALIDATED') ? (
+            <ArtifactEmptyState
+              artifactType={artifactType}
+              invalidated={latestArtifact?.status === 'INVALIDATED'}
+              canManage={canManageArtifact}
+              onGenerate={() => onArtifactAction?.(artifactType)}
+              busy={agentStatus === 'running'}
+            />
+          ) : section === 'portrait' ? (
+            <RecruitingPortrait onOpenEvidence={onOpenEvidence} artifact={latestArtifact} roleDetail={roleDetail} />
+          ) : section === 'basis' ? (
+            <GeneratedProfileBasis artifact={latestArtifact} state={state} onOpenEvidence={onOpenEvidence} />
+          ) : section === 'assessment' ? (
+            <GeneratedAssessment artifact={latestArtifact} />
+          ) : (
+            <JDPreview jd={latestArtifact} state={state} />
+          )}
         </div>
       </div>
     </section>
@@ -1367,8 +1349,55 @@ function ProfileView({
 }
 
 function RecruitingPortrait({ onOpenEvidence, artifact, roleDetail }) {
+  const content = artifact?.content ?? {};
   const hc = roleDetail?.state?.hc_context;
-  const portrait = normalizeRecruitingContent(artifact?.content, hc, roleDetail?.candidates);
+  const sourcing = content.sourcing ?? {};
+  const screening = content.resume_screening ?? {};
+  const candidates = roleDetail?.candidates ?? [];
+  const portrait = {
+    approvedContext: {
+      coreProblem: hc?.organization_gap ?? 'HC 审批数据中尚未同步组织缺口。',
+      evidence: [],
+    },
+    candidateDefinition: content.candidate_definition ?? '当前招聘画像缺少一句话目标候选人，请生成新版本补齐。',
+    sourcingBrief: {
+      targetTypes: sourcing.target_types ?? [],
+      titles: sourcing.titles ?? [],
+      keywords: sourcing.keywords ?? [],
+      query: sourcing.query ?? '当前版本未生成检索式',
+      nonTarget: sourcing.non_target ?? [],
+    },
+    resumeScreening: {
+      decision: screening.decision ?? '当前版本未生成推进规则',
+      coreSignals: (screening.core_signals ?? []).map((signal) => ({
+        ...signal,
+        lookFor: signal.look_for ?? [],
+        notEnough: signal.not_enough ?? '待补充反例',
+      })),
+      rules: screening.rules ?? [],
+    },
+    phoneScreen: (content.phone_screen ?? []).map((item) => ({
+      ...item,
+      listenFor: item.listen_for ?? '',
+    })),
+    candidateCalibration: {
+      source: candidates.length > 0 ? `已导入 ${candidates.length} 份脱敏简历` : '尚未导入首批简历',
+      samples: candidates.map((candidate, index) => {
+        const strongCount = candidate.evidence.filter((item) => item.signal === 'STRONG').length;
+        const missingCount = candidate.evidence.filter((item) => item.signal === 'MISSING').length;
+        const decision = strongCount > 0 && missingCount === 0 ? '建议推进' : missingCount > 0 ? '电话验证' : '待校准';
+        return {
+          id: candidate.candidate_ref,
+          name: `匿名候选人 ${index + 1}`,
+          currentRole: candidate.channel,
+          agentDecision: decision,
+          tone: decision === '建议推进' ? 'go' : 'verify',
+          evidence: candidate.evidence.map((item) => item.criterion),
+          gap: candidate.bottlenecks.join('；') || '暂无重复卡点',
+        };
+      }),
+    },
+  };
   const [managerDecisions, setManagerDecisions] = useState({});
   const confirmedCount = Object.keys(managerDecisions).length;
 
@@ -1487,77 +1516,156 @@ function ActionSectionHeading({ number, title, description }) {
   );
 }
 
-function GeneratedProfileBasis({ artifact, state }) {
-  const { mission, hiringReason, outcomes, work, requirements, boundaryGroups } = normalizeRoleProfileContent(
-    artifact?.content,
-    state?.hc_context,
+function ArtifactEvidenceRefs({ refs = [], onOpenEvidence }) {
+  if (!refs.length) return null;
+  return (
+    <div className="generated-evidence-refs" aria-label="证据来源">
+      <span>依据</span>
+      {refs.map((ref) => evidenceById[ref] && onOpenEvidence
+        ? <button type="button" key={ref} onClick={() => onOpenEvidence(ref)}>{ref}<Link2 size={10} /></button>
+        : <em key={ref}>{ref}</em>)}
+    </div>
   );
+}
+
+function GeneratedProfileBasis({ artifact, state, onOpenEvidence }) {
+  const content = artifact?.content ?? {};
+  const hc = state?.hc_context;
+  const profile = normalizeRoleProfileContent(content, hc);
+  const boundary = profile.boundaryGroups;
+  const approvedFact = `${({
+    NEW_HEADCOUNT: '新增正式编制',
+    REPLACEMENT: '人员替换',
+    ATTRITION_REPLACEMENT: '离职补充',
+    PERFORMANCE_REPLACEMENT: '汰换补充',
+    ORGANIZATION_ADJUSTMENT: '组织调整',
+    OTHER: '其他补充',
+  })[hc?.job_basics?.recruitment_type] ?? '已审批编制'} ${hc?.job_basics?.headcount ?? 1} 人`;
   return (
     <article className="generated-artifact-document role-profile-artifact">
       <section className="generated-artifact-hero">
         <span><Target size={14} />岗位使命</span>
-        <h2>{mission}</h2>
-        {hiringReason.noHireImpact && <p><strong>若未及时招聘：</strong>{hiringReason.noHireImpact}</p>}
+        <h2>{profile.mission}</h2>
+        {profile.recruitment.noHireImpact && <p><strong>不招聘的影响：</strong>{profile.recruitment.noHireImpact}</p>}
       </section>
       <section className="generated-section hiring-reason-section">
-        <header><span>01</span><div><h3>为什么新增这个编制</h3><p>来自 HC 审批和用人经理澄清，不重新审批 HC。</p></div></header>
-        <div className="generated-reason-grid">
-          <div><small>业务变化</small><strong>{hiringReason.businessChange}</strong></div>
-          <div><small>组织缺口</small><strong>{hiringReason.organizationGap}</strong></div>
-          <div><small>招聘结论</small><strong>{hiringReason.conclusion}</strong></div>
+        <header><span>01</span><div><h3>岗位为什么存在</h3><p>从已审批事实推导岗位结论，不重新审批 HC。</p></div></header>
+        <div className="generated-decision-chain">
+          <div><small>已审批事实</small><strong>{approvedFact}</strong></div>
+          <ChevronRight size={14} />
+          <div><small>业务变化</small><strong>{profile.recruitment.businessChange}</strong></div>
+          <ChevronRight size={14} />
+          <div><small>组织缺口</small><strong>{profile.recruitment.organizationGap}</strong></div>
+          <ChevronRight size={14} />
+          <div className="conclusion"><small>招聘结论</small><strong>{profile.recruitment.conclusion}</strong></div>
+        </div>
+        <ArtifactEvidenceRefs refs={profile.recruitment.evidenceRefs} onOpenEvidence={onOpenEvidence} />
+      </section>
+      <section className="generated-section">
+        <header><span>02</span><div><h3>阶段性成功结果</h3><p>明确到什么时间、产生什么结果，以及如何观察和验收。</p></div></header>
+        <div className="generated-outcome-list">
+          {profile.outcomes.map((outcome, index) => (
+            <div className="generated-outcome-row" key={`${outcome.id}-${index}`}>
+              <div className="generated-outcome-time"><small>{outcome.id}</small><strong>{outcome.horizon}</strong></div>
+              <div className="generated-outcome-main">
+                <div><h4>{outcome.title}</h4><span>{outcome.status}</span></div>
+                <p>{outcome.definition}</p>
+                {outcome.measures.length > 0 && <div>{outcome.measures.map((measure) => <em key={measure}>{measure}</em>)}</div>}
+                {outcome.evidence && <small>{outcome.evidence}</small>}
+              </div>
+              <ArtifactEvidenceRefs refs={outcome.evidenceRefs} onOpenEvidence={onOpenEvidence} />
+            </div>
+          ))}
+          {profile.outcomes.length === 0 && <p className="generated-empty-copy">当前版本没有成功标准。</p>}
         </div>
       </section>
       <section className="generated-section">
-        <header><span>02</span><div><h3>成功标准</h3><p>HR 可以据此判断候选人是否能在岗位上产生结果。</p></div></header>
-        <div className="generated-outcome-grid">
-          {outcomes.map((outcome, index) => (
-            <div key={outcome.id}><small>{outcome.horizon}</small><strong>{outcome.title}</strong>{outcome.detail && <p>{outcome.detail}</p>}{outcome.measures.length > 0 && <p>衡量：{outcome.measures.join('；')}</p>}</div>
-          ))}
-          {outcomes.length === 0 && <p className="generated-empty-copy">当前版本没有成功标准。</p>}
-        </div>
-      </section>
-      <section className="generated-section split-generated-section">
-        <div><header><span>03</span><div><h3>关键工作场景</h3><p>候选人入职后真正承担的工作。</p></div></header><ol>{work.map((item) => <li key={item.id}><strong>{item.title}</strong>{item.detail && <p>{item.detail}</p>}{item.outputs.length > 0 && <small>产出：{item.outputs.join('；')}</small>}</li>)}</ol>{work.length === 0 && <p className="generated-empty-copy">当前版本没有关键工作场景。</p>}</div>
-        <div><header><span>04</span><div><h3>人才规格</h3><p>用可观察证据表达能力要求。</p></div></header><div className="generated-capability-list">{requirements.map((item) => <div key={item.id}><strong>{item.name}{(item.priority || item.level) && <em>{item.priority || item.level}</em>}</strong>{item.level && item.priority && <small>{item.level}</small>}{item.evidence.length > 0 && <p>{item.evidence.join('；')}</p>}</div>)}</div>{requirements.length === 0 && <p className="generated-empty-copy">当前版本没有人才规格。</p>}</div>
+        <header><span>03</span><div><h3>关键工作场景</h3><p>描述最影响岗位成功、最能区分候选人的真实工作，而不是复制旧 JD。</p></div></header>
+        {profile.scenarios.length > 0 ? (
+          <div className="generated-scenario-list">
+            {profile.scenarios.map((scenario, index) => (
+              <details key={scenario.id} defaultOpen={index === 0}>
+                <summary>
+                  <span>{scenario.id}</span><strong>{scenario.title}</strong><small>{scenario.frequency}</small>
+                  {scenario.outcomeRefs.length > 0 && <em>{scenario.outcomeRefs.join(' · ')}</em>}
+                  <ChevronDown size={15} />
+                </summary>
+                <div className="generated-scenario-detail">
+                  <DefinitionItem label="触发情境" value={scenario.trigger} />
+                  <DefinitionItem label="关键动作" value={scenario.actions} />
+                  <DefinitionItem label="主要产出" value={scenario.output} />
+                  <DefinitionItem label="核心挑战" value={scenario.challenge} />
+                  <DefinitionItem label="协作对象" value={scenario.stakeholders} />
+                  <ArtifactEvidenceRefs refs={scenario.evidenceRefs} onOpenEvidence={onOpenEvidence} />
+                </div>
+              </details>
+            ))}
+          </div>
+        ) : (
+          <ol className="generated-responsibility-fallback">{profile.responsibilities.map((item) => <li key={item}>{item}</li>)}</ol>
+        )}
       </section>
       <section className="generated-section boundary-generated-section">
-        <header><span>05</span><div><h3>岗位边界</h3><p>明确负责、不负责以及关键决策权。</p></div></header>
-        <div className="generated-boundary-groups">{boundaryGroups.map((group) => <div key={group.label}><strong>{group.label}</strong><ul>{group.items.map((item, index) => <li key={`${group.label}-${index}`}><ShieldCheck size={12} />{item}</li>)}</ul></div>)}</div>
-        {boundaryGroups.length === 0 && <p className="generated-empty-copy">当前版本没有岗位边界。</p>}
+        <header><span>04</span><div><h3>权责边界与资源</h3><p>明确负责、不负责、关键决策权和岗位真正可调用的资源。</p></div></header>
+        <div className="generated-boundary-grid">
+          <div><h4><Check size={13} />需要负责</h4>{boundary.owns.map((item) => <p key={item}>{item}</p>)}</div>
+          <div><h4><X size={13} />不直接负责</h4>{boundary.notOwns.map((item) => <p key={item}>{item}</p>)}</div>
+          <div><h4>决策权限</h4><p>{boundary.decisionRights}</p></div>
+          <div><h4>协作与资源</h4><p>{boundary.resources}</p></div>
+        </div>
+        <ArtifactEvidenceRefs refs={boundary.evidenceRefs} onOpenEvidence={onOpenEvidence} />
+      </section>
+      <section className="generated-section">
+        <header><span>05</span><div><h3>人才规格与可观察证据</h3><p>每项要求都要说明业务原因、强证据、替代证据和风险信号。</p></div></header>
+        <div className="generated-requirement-list">
+          {profile.capabilities.map((item, index) => (
+            <details key={item.id ?? item.name} defaultOpen={index === 0}>
+              <summary>
+                <span className={item.priority === 'Must-have' ? 'must' : 'preferred'}>{item.priority}</span>
+                <strong>{item.id} · {item.name}</strong><small>{item.level}</small>
+                {item.mapping.length > 0 && <em>{item.mapping.join(' · ')}</em>}
+                <ChevronDown size={15} />
+              </summary>
+              <div className="generated-requirement-detail">
+                <DefinitionItem label="为什么需要" value={item.rationale} />
+                <DefinitionItem label="强证据" value={item.strongEvidence} tone="positive" />
+                <DefinitionItem label="可接受替代" value={item.substitute} />
+                <DefinitionItem label="风险信号" value={item.risk} tone="negative" />
+                <DefinitionItem label="建议评估" value={item.assessment} />
+                <ArtifactEvidenceRefs refs={item.evidenceRefs} onOpenEvidence={onOpenEvidence} />
+              </div>
+            </details>
+          ))}
+          {profile.capabilities.length === 0 && <p className="generated-empty-copy">当前版本没有人才规格。</p>}
+        </div>
       </section>
     </article>
   );
 }
 
 function GeneratedAssessment({ artifact }) {
-  const { dimensions, decisionRule } = normalizeAssessmentContent(artifact?.content);
+  const content = artifact?.content ?? {};
+  const dimensions = content.dimensions ?? [];
   return (
     <article className="generated-artifact-document assessment-artifact">
       <section className="generated-artifact-hero">
-        <div className="assessment-rule-heading">
-          <span><ListChecks size={14} />招聘评估方案</span>
-          {decisionRule.status && <em>{decisionRule.status}</em>}
-        </div>
+        <span><ListChecks size={14} />招聘评估方案</span>
         <h2>把岗位成功标准转成统一、可观察的面试判断</h2>
-        {decisionRule.summary && <p>{decisionRule.summary}</p>}
-        {decisionRule.items.length > 0 && (
-          <div className="assessment-decision-rule-grid">
-            {decisionRule.items.map((item) => (
-              <div key={item.label}><small>{item.label}</small><strong>{item.value}</strong></div>
-            ))}
-          </div>
-        )}
+        <p>{content.decision_rule ?? '当前版本尚未生成录用决策规则。'}</p>
       </section>
       <section className="generated-section">
         <div className="assessment-dimension-grid">
           {dimensions.map((dimension, index) => {
+            const anchors = Array.isArray(dimension.anchors)
+              ? dimension.anchors
+              : Object.entries(dimension.anchors ?? {}).map(([score, text]) => `${score} 分：${text}`);
             return (
               <div className="assessment-dimension-card" key={`${dimension.name}-${index}`}>
-                <header><span>{String(index + 1).padStart(2, '0')}</span><div><h3>{dimension.name}</h3><p>{dimension.weight === '—' ? '权重待确认' : `${dimension.weight}%`} · {dimension.method}</p></div></header>
+                <header><span>{String(index + 1).padStart(2, '0')}</span><div><h3>{dimension.name}</h3><p>{dimension.weight ?? '—'}% · {dimension.method ?? '待确认'}</p></div></header>
                 {dimension.owner && <p><strong>评估人：</strong>{dimension.owner}</p>}
                 {dimension.question && <p><strong>核心问题：</strong>{dimension.question}</p>}
                 {dimension.evidence && <p><strong>必须听到：</strong>{dimension.evidence}</p>}
-                <div className="assessment-anchor-list">{dimension.anchors.map((anchor) => <span key={anchor}>{anchor}</span>)}</div>
+                <div className="assessment-anchor-list">{anchors.map((anchor) => <span key={String(anchor)}>{anchor}</span>)}</div>
               </div>
             );
           })}
@@ -1642,11 +1750,14 @@ function JDPreview({ jd, state }) {
       description: '能定义有意义的观察指标，理解数据限制，并让数据真正改变产品决策。',
     },
   ];
-  const normalized = normalizePublicJDContent(jd?.content, state, {
-    about: '我们正在从项目交付走向标准产品。你会从多个客户场景中识别高价值共性需求，定义可复用的产品路线，并推动首个标准能力完成真实客户验证。这个岗位主导跨项目的产品化判断，不代替单个客户的项目交付。',
-    responsibilities: fallbackResponsibilities,
-    capabilities: fallbackCapabilities.map((item, index) => ({ id: `fallback-${index}`, ...item })),
-  });
+  const content = jd?.content;
+  const responsibilities = content?.what_you_will_do ?? fallbackResponsibilities;
+  const capabilities = content?.what_we_look_for?.map((item) => ({
+    title: item,
+    description: '',
+  })) ?? fallbackCapabilities;
+  const basics = content?.title_and_basics;
+  const hcBasics = state?.hc_context?.job_basics;
 
   return (
     <div className="jd-preview-shell">
@@ -1656,20 +1767,20 @@ function JDPreview({ jd, state }) {
       </div>
       <article className="jd-document">
         <header>
-          <span>{normalized.department} · {normalized.location}</span>
-          <h1>{normalized.title}</h1>
+          <span>{state?.department ?? '团队待同步'} · {basics?.location ?? hcBasics?.locations?.join(' / ') ?? '地点待同步'}</span>
+          <h1>{basics?.title ?? state?.title ?? '岗位名称待同步'}</h1>
           <p>一起把复杂问题转化为真正可验证的业务结果。</p>
-          <div className="jd-facts"><span>{normalized.employmentType}</span><span>{normalized.level}</span><span>汇报给{normalized.reportingLine}</span></div>
+          <div className="jd-facts"><span>{basics?.employment_type ?? hcBasics?.employment_type ?? '全职'}</span><span>{hcBasics?.level ?? '职级待同步'}</span><span>汇报给{basics?.reporting_line ?? hcBasics?.reporting_line ?? '待同步'}</span></div>
         </header>
         <section className="jd-about-role">
           <h2>关于岗位</h2>
-          <p>{normalized.about}</p>
+          <p>{content?.about_the_role ?? '我们正在从项目交付走向标准产品。你会从多个客户场景中识别高价值共性需求，定义可复用的产品路线，并推动首个标准能力完成真实客户验证。这个岗位主导跨项目的产品化判断，不代替单个客户的项目交付。'}</p>
         </section>
         <section><h2>你会做什么</h2><ol className="jd-responsibility-list">
-          {normalized.responsibilities.map((item, index) => <li key={`${index}-${item}`}>{item}</li>)}
+          {responsibilities.map((item) => <li key={item}>{item}</li>)}
         </ol></section>
         <section><h2>我们希望你具备</h2><div className="jd-capability-list">
-          {normalized.capabilities.map((capability) => <div key={capability.id}><strong>{capability.title}</strong>{capability.description && <p>{capability.description}</p>}</div>)}
+          {capabilities.map((capability) => <div key={capability.title}><strong>{capability.title}</strong>{capability.description && <p>{capability.description}</p>}</div>)}
         </div></section>
         <footer className="jd-document-footer"><span>候选人版预览 · 仅包含可公开字段</span><strong>版本 v{jd?.version ?? '0.5'} · {jd?.status === 'CONFIRMED' ? '已确认' : '待发布'}</strong></footer>
       </article>

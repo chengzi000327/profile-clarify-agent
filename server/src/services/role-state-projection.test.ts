@@ -59,7 +59,7 @@ describe('read_role_state task projection', () => {
       model_tier: task === 'CLARIFY_MESSAGE' || task === 'EXTRACT_CANDIDATES' ? 'FLASH' : 'PRO',
       task,
       harness_session_id: `role-${DEMO_ROLE_SESSION_ID}`,
-      prompt_version: 'role-clarifier-v2',
+      prompt_version: 'role-clarifier-v11-layered',
       model_name: 'test-model',
       tool_count: 0,
       input_tokens: 0,
