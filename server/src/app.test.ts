@@ -45,15 +45,23 @@ const validJobDescription = {
     success_outcome_refs: ['O-01'],
     evidence_refs: ['HC-2026-EP-001'],
   }],
-  success_criteria: [{
-    id: 'O-01',
-    horizon: '3个月',
-    title: '形成平台产品路线图',
-    definition: '完成现状诊断，明确产品范围和优先级。',
-    measures: ['路线图通过评审'],
-    status: '待确认',
-    evidence_refs: ['HC-2026-EP-001'],
-  }],
+  success_criteria: [
+    {
+      id: 'O-01', horizon: '3个月', title: '形成平台产品路线图',
+      definition: '完成现状诊断，明确产品范围和优先级。', measures: ['路线图通过评审'],
+      status: '待确认', evidence_refs: ['HC-2026-EP-001'],
+    },
+    {
+      id: 'O-02', horizon: '6个月', title: '验证重点平台能力',
+      definition: '完成重点场景验证并形成复盘。', measures: ['重点场景完成验收'],
+      status: '待确认', evidence_refs: ['HC-2026-EP-001'],
+    },
+    {
+      id: 'O-03', horizon: '12个月', title: '形成规模化复用',
+      definition: '平台能力在多个业务场景稳定复用。', measures: ['复用范围达到年度目标'],
+      status: '待确认', evidence_refs: ['HC-2026-EP-001'],
+    },
+  ],
   work_scenarios: [{
     id: 'S-01',
     title: '共性需求抽象',
@@ -312,6 +320,24 @@ describe('Role Clarifier API', () => {
     roleService = new RoleService(store)
     app = await buildApp(config, { store, harness: testHarness })
   })
+
+  const lockJobDescription = async () => {
+    const draft = await roleService.saveArtifactDraft(
+      DEMO_ROLE_SESSION_ID,
+      managerActor,
+      'ROLE_PROFILE',
+      { job_description: validJobDescription },
+    )
+    const afterDraft = await roleService.get(DEMO_ROLE_SESSION_ID, managerActor)
+    const locked = await roleService.confirmArtifact(
+      DEMO_ROLE_SESSION_ID,
+      draft.id,
+      managerActor,
+      draft.content_hash,
+      afterDraft.state.revision,
+    )
+    return { locked, afterLock: await roleService.get(DEMO_ROLE_SESSION_ID, managerActor) }
+  }
 
   it('普通成员的 SSE 不暴露内部错误，企业管理员 Trace 保留诊断信息', () => {
     const event = {
@@ -765,6 +791,54 @@ describe('Role Clarifier API', () => {
       latest_artifacts: {
         ROLE_PROFILE: { id: locked.id, status: 'DRAFT', content_hash: locked.content_hash },
       },
+    })
+  })
+
+  it('岗位说明锁定后拒绝再次启动 ROLE_PROFILE 生成且保持锁定版本不变', async () => {
+    const managerCookie = await login(app, 'manager-demo')
+    const { locked, afterLock } = await lockJobDescription()
+
+    await expect(roleService.assertArtifactGenerationAllowed(
+      DEMO_ROLE_SESSION_ID,
+      managerActor,
+      'MANAGER',
+      'ROLE_PROFILE',
+    )).rejects.toMatchObject({ code: 'JOB_DESCRIPTION_LOCKED' })
+    const generated = await app.inject({
+      method: 'POST',
+      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/artifacts/ROLE_PROFILE/generate`,
+      headers: { cookie: managerCookie },
+    })
+    expect(generated.statusCode).toBe(409)
+    expect(generated.json().error.code).toBe('JOB_DESCRIPTION_LOCKED')
+
+    const unchanged = await roleService.get(DEMO_ROLE_SESSION_ID, managerActor)
+    expect(unchanged.state).toEqual(afterLock.state)
+    expect(unchanged.artifacts).toEqual(afterLock.artifacts)
+    expect(unchanged.state.latest_artifacts.ROLE_PROFILE).toMatchObject({
+      id: locked.id,
+      content_hash: locked.content_hash,
+      content: { stage: 'JOB_DESCRIPTION_CONFIRMED' },
+    })
+  })
+
+  it('岗位说明锁定后拒绝直接保存 ROLE_PROFILE 草稿且保持锁定版本不变', async () => {
+    const { locked, afterLock } = await lockJobDescription()
+
+    await expect(roleService.saveArtifactDraft(
+      DEMO_ROLE_SESSION_ID,
+      managerActor,
+      'ROLE_PROFILE',
+      { job_description: validJobDescription },
+    )).rejects.toMatchObject({ code: 'JOB_DESCRIPTION_LOCKED' })
+
+    const unchanged = await roleService.get(DEMO_ROLE_SESSION_ID, managerActor)
+    expect(unchanged.state).toEqual(afterLock.state)
+    expect(unchanged.artifacts).toEqual(afterLock.artifacts)
+    expect(unchanged.state.latest_artifacts.ROLE_PROFILE).toMatchObject({
+      id: locked.id,
+      content_hash: locked.content_hash,
+      content: { stage: 'JOB_DESCRIPTION_CONFIRMED' },
     })
   })
 

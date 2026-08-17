@@ -35,7 +35,55 @@ export const CLARIFICATION_PROMPT = `<P-02 对话与岗位澄清>
 
 export const ROLE_PROFILE_JOB_DESCRIPTION_PROMPT = `当 task_context.role_profile_mode 为 JOB_DESCRIPTION：
 只生成 job_description，不生成人才画像、requirements 或 competency_model。
-save_artifact_draft.content 只能包含 { job_description }。`
+save_artifact_draft.content 只能包含以下完整结构，不得遗漏字段：
+{ job_description: {
+    hiring_background: {
+      business_change: string,
+      organization_gap: string,
+      hiring_conclusion: string,
+      no_hire_impact: string,
+      evidence_refs: string[]
+    },
+    job_purpose: { statement: string, evidence_refs: string[] },
+    key_accountabilities: [{
+      id: string,
+      name: string,
+      responsibility: string,
+      core_outputs: string[],
+      success_outcome_refs: string[],
+      evidence_refs: string[]
+    }],
+    success_criteria: [{
+      id: string,
+      horizon: string,
+      title: string,
+      definition: string,
+      measures: string[],
+      status: string,
+      evidence_refs: string[]
+    }],
+    work_scenarios: [{
+      id: string,
+      title: string,
+      frequency: string,
+      trigger: string,
+      actions: string,
+      output: string,
+      challenge: string,
+      stakeholders: string[],
+      success_outcome_refs: string[],
+      evidence_refs: string[]
+    }],
+    boundaries: {
+      owns: string[],
+      does_not_own: string[],
+      decision_rights: string[],
+      key_collaborations: string[],
+      available_resources: string[],
+      evidence_refs: string[]
+    }
+} }
+success_criteria 必须至少分别包含一项 3个月、6个月、12个月成功标准，可在此基础上增加其他周期。`
 
 export const ROLE_PROFILE_TALENT_PROFILE_PROMPT = `当 task_context.role_profile_mode 为 TALENT_PROFILE：
 只读取 task_context.locked_job_description.content。

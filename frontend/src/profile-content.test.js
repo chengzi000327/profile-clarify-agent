@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { normalizeRoleProfileContent } from './profile-content.js';
 
@@ -22,15 +23,23 @@ const validJobDescription = {
     success_outcome_refs: ['O-01'],
     evidence_refs: ['F-002'],
   }],
-  success_criteria: [{
-    id: 'O-01',
-    horizon: '3个月',
-    title: '形成产品路线图',
-    definition: '完成现状诊断并明确优先级。',
-    measures: ['路线图通过评审'],
-    status: '待确认',
-    evidence_refs: ['F-003'],
-  }],
+  success_criteria: [
+    {
+      id: 'O-01', horizon: '3个月', title: '形成产品路线图',
+      definition: '完成现状诊断并明确优先级。', measures: ['路线图通过评审'],
+      status: '待确认', evidence_refs: ['F-003'],
+    },
+    {
+      id: 'O-02', horizon: '6个月', title: '验证平台能力',
+      definition: '完成重点场景验证并形成复盘。', measures: ['重点场景完成验收'],
+      status: '待确认', evidence_refs: ['F-003'],
+    },
+    {
+      id: 'O-03', horizon: '12个月', title: '形成规模化复用',
+      definition: '平台能力在多个业务场景稳定复用。', measures: ['复用范围达到年度目标'],
+      status: '待确认', evidence_refs: ['F-003'],
+    },
+  ],
   work_scenarios: [{
     id: 'S-01',
     title: '共性需求抽象',
@@ -52,6 +61,16 @@ const validJobDescription = {
     evidence_refs: ['F-005'],
   },
 };
+
+test('keeps the locked job-description action visibly disabled until talent-profile work exists', () => {
+  const appSource = readFileSync(new URL('./App.jsx', import.meta.url), 'utf8');
+
+  assert.match(
+    appSource,
+    /stage === 'JOB_DESCRIPTION_CONFIRMED'[\s\S]*kind: 'locked'[\s\S]*disabled: true/,
+  );
+  assert.match(appSource, /roleProfileAction\(latestArtifact\)\.disabled/);
+});
 
 test('normalizes staged V2 job description without fabricating talent content', () => {
   const result = normalizeRoleProfileContent({

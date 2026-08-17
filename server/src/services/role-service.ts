@@ -450,6 +450,9 @@ export class RoleService {
       if (staged.success && staged.data.stage === 'JOB_DESCRIPTION_DRAFT') {
         throw new DomainError('JOB_DESCRIPTION_CONFIRMATION_REQUIRED', '请先确认岗位说明，再继续生成岗位画像', 409)
       }
+      if (staged.success && staged.data.stage === 'JOB_DESCRIPTION_CONFIRMED') {
+        throw new DomainError('JOB_DESCRIPTION_LOCKED', '岗位说明已锁定，人才画像阶段暂未开放', 409)
+      }
     }
     const missing = artifactDependencies[artifactType].filter(
       (dependency) => aggregate.state.latest_artifacts[dependency]?.status !== 'CONFIRMED',
@@ -473,6 +476,12 @@ export class RoleService {
     assertArtifactAccess(actor, type)
     let validatedContent = content
     if (type === 'ROLE_PROFILE') {
+      const latestStaged = RoleProfileJobDescriptionContentSchema.safeParse(
+        aggregate.state.latest_artifacts.ROLE_PROFILE?.content,
+      )
+      if (latestStaged.success && latestStaged.data.stage === 'JOB_DESCRIPTION_CONFIRMED') {
+        throw new DomainError('JOB_DESCRIPTION_LOCKED', '岗位说明已锁定，人才画像阶段暂未开放', 409)
+      }
       const validation = JobDescriptionDraftInputSchema.safeParse(content)
       if (!validation.success) {
         const issueSummary = validation.error.issues

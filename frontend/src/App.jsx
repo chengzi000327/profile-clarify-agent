@@ -106,7 +106,7 @@ function roleProfileAction(latest) {
     return { kind: 'confirm', label: '确认岗位说明' };
   }
   if (latest.content.stage === 'JOB_DESCRIPTION_CONFIRMED') {
-    return { kind: 'generate', label: '推导人才画像' };
+    return { kind: 'locked', label: '岗位说明已锁定 · 人才画像待开放', disabled: true };
   }
   if (latest.content.stage === 'TALENT_PROFILE_DRAFT' && latest.status === 'DRAFT') {
     return { kind: 'confirm', label: '确认完整岗位画像' };
@@ -532,6 +532,7 @@ function App() {
     if (!activeRoleId || !roleDetail) return;
     const latest = roleDetail.state.latest_artifacts?.[type];
     const action = type === 'ROLE_PROFILE' ? roleProfileAction(latest) : null;
+    if (action?.disabled) return;
     try {
       if (action?.kind === 'confirm' || (!action && latest?.status === 'DRAFT')) {
         await api.confirmArtifact(
@@ -1340,6 +1341,8 @@ function ProfileView({
       : latestArtifact?.status === 'CONFIRMED'
         ? '生成新版本'
         : presentation.generateAction;
+  const roleProfileActionDisabled = artifactType === 'ROLE_PROFILE'
+    && roleProfileAction(latestArtifact).disabled;
   return (
     <section className="profile-surface redesigned-profile">
       <div className="profile-page profile-page-wide">
@@ -1355,7 +1358,7 @@ function ProfileView({
             <button className="quiet-button"><History size={15} />查看版本</button>
             <button
               className="primary-action"
-              disabled={agentStatus === 'running' || !canManageArtifact}
+              disabled={agentStatus === 'running' || !canManageArtifact || roleProfileActionDisabled}
               onClick={() => onArtifactAction?.(artifactType)}
             >
               {agentStatus === 'running' ? 'Agent 生成中…' : canManageArtifact ? connectedActionLabel : '只读查看'}<ChevronRight size={16} />

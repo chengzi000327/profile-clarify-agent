@@ -29,6 +29,19 @@ describe('共享 Agent 规范', () => {
     expect(prompt).toContain('TALENT_PROFILE')
     expect(prompt).toContain('第二阶段不得输出 job_description')
     expect(prompt).toContain('服务端合并已锁定岗位说明')
+    expect(prompt).toContain('{ job_description: {')
+    for (const field of [
+      'hiring_background',
+      'job_purpose',
+      'key_accountabilities',
+      'success_criteria',
+      'work_scenarios',
+      'boundaries',
+      'evidence_refs',
+    ]) {
+      expect(prompt).toContain(field)
+    }
+    expect(prompt).toContain('3个月、6个月、12个月')
   })
 
   it('能力询问以用户明确指定的输出格式为准', () => {
@@ -48,7 +61,7 @@ describe('共享 Agent 规范', () => {
 })
 
 describe('三类岗位产物契约', () => {
-  it('接受 V2 岗位说明草稿并拒绝提前出现人才画像', () => {
+  it('接受含 3/6/12 个月成功标准的 V2 岗位说明，并拒绝缺失周期或提前出现人才画像', () => {
     const base = {
       schema_version: '2',
       stage: 'JOB_DESCRIPTION_DRAFT',
@@ -72,11 +85,23 @@ describe('三类岗位产物契约', () => {
           success_outcome_refs: ['O-01'],
           evidence_refs: ['F-002'],
         }],
-        success_criteria: [{
-          id: 'O-01', horizon: '3个月', title: '形成产品路线图',
-          definition: '完成现状诊断并明确优先级。', measures: ['路线图通过评审'],
-          status: '待确认', evidence_refs: ['F-003'],
-        }],
+        success_criteria: [
+          {
+            id: 'O-01', horizon: '3个月', title: '形成产品路线图',
+            definition: '完成现状诊断并明确优先级。', measures: ['路线图通过评审'],
+            status: '待确认', evidence_refs: ['F-003'],
+          },
+          {
+            id: 'O-02', horizon: '6个月', title: '验证平台能力',
+            definition: '完成重点场景验证并形成复盘。', measures: ['重点场景完成验收'],
+            status: '待确认', evidence_refs: ['F-003'],
+          },
+          {
+            id: 'O-03', horizon: '12个月', title: '形成规模化复用',
+            definition: '平台能力在多个业务场景稳定复用。', measures: ['复用范围达到年度目标'],
+            status: '待确认', evidence_refs: ['F-003'],
+          },
+        ],
         work_scenarios: [{
           id: 'S-01', title: '共性需求抽象', frequency: '每周',
           trigger: '多个客户提出相似需求', actions: '识别共性并定义边界',
@@ -92,6 +117,14 @@ describe('三类岗位产物契约', () => {
     }
 
     expect(RoleProfileContentSchema.safeParse(base).success).toBe(true)
+    const missingSixMonth = {
+      ...base,
+      job_description: {
+        ...base.job_description,
+        success_criteria: base.job_description.success_criteria.filter((item) => item.horizon !== '6个月'),
+      },
+    }
+    expect(RoleProfileContentSchema.safeParse(missingSixMonth).success).toBe(false)
     expect(RoleProfileContentSchema.safeParse({ ...base, talent_profile: {} }).success).toBe(false)
   })
 

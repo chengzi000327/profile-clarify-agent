@@ -56,15 +56,23 @@ const jobDescription: JobDescription = {
     success_outcome_refs: ['success-3m'],
     evidence_refs: ['FACT-001'],
   }],
-  success_criteria: [{
-    id: 'success-3m',
-    horizon: '3个月',
-    title: '完成平台产品规划',
-    definition: '明确优先级并获得关键协作方确认。',
-    measures: ['路线图完成并评审通过'],
-    status: '待确认',
-    evidence_refs: ['FACT-001'],
-  }],
+  success_criteria: [
+    {
+      id: 'success-3m', horizon: '3个月', title: '完成平台产品规划',
+      definition: '明确优先级并获得关键协作方确认。', measures: ['路线图完成并评审通过'],
+      status: '待确认', evidence_refs: ['FACT-001'],
+    },
+    {
+      id: 'success-6m', horizon: '6个月', title: '验证重点平台能力',
+      definition: '完成重点场景验证并形成复盘。', measures: ['重点场景完成验收'],
+      status: '待确认', evidence_refs: ['FACT-001'],
+    },
+    {
+      id: 'success-12m', horizon: '12个月', title: '形成规模化复用',
+      definition: '平台能力在多个业务场景稳定复用。', measures: ['复用范围达到年度目标'],
+      status: '待确认', evidence_refs: ['FACT-001'],
+    },
+  ],
   work_scenarios: [{
     id: 'scenario-1',
     title: '跨团队需求优先级协同',

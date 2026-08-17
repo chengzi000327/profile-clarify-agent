@@ -242,7 +242,16 @@ export const JobDescriptionSchema = z.object({
     measures: z.array(ArtifactTextSchema).min(1).max(8),
     status: z.string().trim().min(1).max(80),
     evidence_refs: ArtifactEvidenceRefsSchema,
-  }).strict()).min(1).max(8),
+  }).strict()).min(3).max(8).superRefine((criteria, context) => {
+    for (const requiredHorizon of ['3个月', '6个月', '12个月']) {
+      if (!criteria.some((criterion) => criterion.horizon.replace(/\s+/g, '') === requiredHorizon)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `关键绩效结果必须包含${requiredHorizon}成功标准`,
+        })
+      }
+    }
+  }),
   work_scenarios: z.array(z.object({
     id: ArtifactIdSchema,
     title: z.string().trim().min(1).max(200),
