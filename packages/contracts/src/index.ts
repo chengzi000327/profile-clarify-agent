@@ -141,7 +141,7 @@ export type HcApproval = z.infer<typeof HcApprovalSchema>
 const ArtifactTextSchema = z.string().trim().min(1).max(4_000)
 const ArtifactEvidenceRefsSchema = z.array(z.string().trim().min(1).max(120)).max(20).default([])
 
-export const RoleProfileContentSchema = z
+export const LegacyRoleProfileContentSchema = z
   .object({
     hiring_reason: z
       .object({
@@ -204,6 +204,100 @@ export const RoleProfileContentSchema = z
       .strict(),
   })
   .strict()
+
+export const RoleProfileInternalStageSchema = z.enum([
+  'JOB_DESCRIPTION_DRAFT',
+  'JOB_DESCRIPTION_CONFIRMED',
+  'TALENT_PROFILE_DRAFT',
+])
+export type RoleProfileInternalStage = z.infer<typeof RoleProfileInternalStageSchema>
+
+const ArtifactIdSchema = z.string().trim().min(1).max(40)
+
+export const JobDescriptionSchema = z.object({
+  hiring_background: z.object({
+    business_change: ArtifactTextSchema,
+    organization_gap: ArtifactTextSchema,
+    hiring_conclusion: ArtifactTextSchema,
+    no_hire_impact: ArtifactTextSchema,
+    evidence_refs: ArtifactEvidenceRefsSchema,
+  }).strict(),
+  job_purpose: z.object({
+    statement: ArtifactTextSchema,
+    evidence_refs: ArtifactEvidenceRefsSchema,
+  }).strict(),
+  key_accountabilities: z.array(z.object({
+    id: ArtifactIdSchema,
+    name: z.string().trim().min(1).max(200),
+    responsibility: ArtifactTextSchema,
+    core_outputs: z.array(ArtifactTextSchema).min(1).max(8),
+    success_outcome_refs: z.array(ArtifactIdSchema).min(1).max(10),
+    evidence_refs: ArtifactEvidenceRefsSchema,
+  }).strict()).min(1).max(12),
+  success_criteria: z.array(z.object({
+    id: ArtifactIdSchema,
+    horizon: z.string().trim().min(1).max(80),
+    title: z.string().trim().min(1).max(200),
+    definition: ArtifactTextSchema,
+    measures: z.array(ArtifactTextSchema).min(1).max(8),
+    status: z.string().trim().min(1).max(80),
+    evidence_refs: ArtifactEvidenceRefsSchema,
+  }).strict()).min(1).max(8),
+  work_scenarios: z.array(z.object({
+    id: ArtifactIdSchema,
+    title: z.string().trim().min(1).max(200),
+    frequency: z.string().trim().min(1).max(120),
+    trigger: ArtifactTextSchema,
+    actions: ArtifactTextSchema,
+    output: ArtifactTextSchema,
+    challenge: ArtifactTextSchema,
+    stakeholders: z.array(ArtifactTextSchema).min(1).max(12),
+    success_outcome_refs: z.array(ArtifactIdSchema).min(1).max(10),
+    evidence_refs: ArtifactEvidenceRefsSchema,
+  }).strict()).min(1).max(8),
+  boundaries: z.object({
+    owns: z.array(ArtifactTextSchema).min(1).max(12),
+    does_not_own: z.array(ArtifactTextSchema).min(1).max(12),
+    decision_rights: z.array(ArtifactTextSchema).min(1).max(12),
+    key_collaborations: z.array(ArtifactTextSchema).min(1).max(12),
+    available_resources: z.array(ArtifactTextSchema).min(1).max(12),
+    evidence_refs: ArtifactEvidenceRefsSchema,
+  }).strict(),
+}).strict()
+export type JobDescription = z.infer<typeof JobDescriptionSchema>
+
+export const JobDescriptionDraftInputSchema = z.object({
+  job_description: JobDescriptionSchema,
+}).strict()
+export type JobDescriptionDraftInput = z.infer<typeof JobDescriptionDraftInputSchema>
+
+export const JobDescriptionConfirmationSchema = z.object({
+  source_artifact_id: z.string().uuid(),
+  section_hash: z.string().min(16),
+  confirmed_by: z.string().min(1),
+  confirmed_at: z.string().datetime(),
+}).strict()
+export type JobDescriptionConfirmation = z.infer<typeof JobDescriptionConfirmationSchema>
+
+export const RoleProfileJobDescriptionContentSchema = z.discriminatedUnion('stage', [
+  z.object({
+    schema_version: z.literal('2'),
+    stage: z.literal('JOB_DESCRIPTION_DRAFT'),
+    job_description: JobDescriptionSchema,
+  }).strict(),
+  z.object({
+    schema_version: z.literal('2'),
+    stage: z.literal('JOB_DESCRIPTION_CONFIRMED'),
+    job_description: JobDescriptionSchema,
+    job_description_confirmation: JobDescriptionConfirmationSchema,
+  }).strict(),
+])
+export type RoleProfileJobDescriptionContent = z.infer<typeof RoleProfileJobDescriptionContentSchema>
+
+export const RoleProfileContentSchema = z.union([
+  RoleProfileJobDescriptionContentSchema,
+  LegacyRoleProfileContentSchema,
+])
 export type RoleProfileContent = z.infer<typeof RoleProfileContentSchema>
 
 export const AssessmentScorecardSchema = z

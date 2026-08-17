@@ -39,6 +39,53 @@ describe('共享 Agent 规范', () => {
 })
 
 describe('三类岗位产物契约', () => {
+  it('接受 V2 岗位说明草稿并拒绝提前出现人才画像', () => {
+    const base = {
+      schema_version: '2',
+      stage: 'JOB_DESCRIPTION_DRAFT',
+      job_description: {
+        hiring_background: {
+          business_change: '业务从项目交付转向平台化。',
+          organization_gap: '缺少统一定义产品边界的岗位。',
+          hiring_conclusion: '招聘一名平台产品经理。',
+          no_hire_impact: '重复建设继续增加。',
+          evidence_refs: ['HC-001'],
+        },
+        job_purpose: {
+          statement: '把共性需求沉淀为标准产品能力。',
+          evidence_refs: ['F-001'],
+        },
+        key_accountabilities: [{
+          id: 'KRA-01',
+          name: '平台产品规划',
+          responsibility: '持续识别共性需求并定义产品边界。',
+          core_outputs: ['产品路线图'],
+          success_outcome_refs: ['O-01'],
+          evidence_refs: ['F-002'],
+        }],
+        success_criteria: [{
+          id: 'O-01', horizon: '3个月', title: '形成产品路线图',
+          definition: '完成现状诊断并明确优先级。', measures: ['路线图通过评审'],
+          status: '待确认', evidence_refs: ['F-003'],
+        }],
+        work_scenarios: [{
+          id: 'S-01', title: '共性需求抽象', frequency: '每周',
+          trigger: '多个客户提出相似需求', actions: '识别共性并定义边界',
+          output: '机会清单', challenge: '短期交付与长期复用冲突',
+          stakeholders: ['研发', '交付'], success_outcome_refs: ['O-01'], evidence_refs: ['F-004'],
+        }],
+        boundaries: {
+          owns: ['产品边界与路线图'], does_not_own: ['单客户项目交付'],
+          decision_rights: ['提出产品优先级取舍'], key_collaborations: ['研发', '交付'],
+          available_resources: ['客户反馈与项目复盘'], evidence_refs: ['F-005'],
+        },
+      },
+    }
+
+    expect(RoleProfileContentSchema.safeParse(base).success).toBe(true)
+    expect(RoleProfileContentSchema.safeParse({ ...base, talent_profile: {} }).success).toBe(false)
+  })
+
   it('岗位画像必须包含前端展示所需的完整判断链', () => {
     const result = RoleProfileContentSchema.safeParse({
       hiring_reason: {
