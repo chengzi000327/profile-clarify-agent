@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import { normalizeRoleProfileContent } from './profile-content.js';
+import { normalizeRoleProfileContent, roleProfileAction } from './profile-content.js';
 
 const validJobDescription = {
   hiring_background: {
@@ -62,14 +61,73 @@ const validJobDescription = {
   },
 };
 
-test('keeps the locked job-description action visibly disabled until talent-profile work exists', () => {
-  const appSource = readFileSync(new URL('./App.jsx', import.meta.url), 'utf8');
+const traceableTalentRequirement = {
+  id: 'Q-01',
+  name: '复杂项目抽象能力',
+  definition: '能从多个交付项目中识别共性并形成平台方案。',
+  maps_to: ['KRA-01'],
+  observable_evidence: ['主导过跨项目复盘并产出复用方案'],
+  evidence_refs: ['F-006'],
+  status: '推断',
+};
 
-  assert.match(
-    appSource,
-    /stage === 'JOB_DESCRIPTION_CONFIRMED'[\s\S]*kind: 'locked'[\s\S]*disabled: true/,
-  );
-  assert.match(appSource, /roleProfileAction\(latestArtifact\)\.disabled/);
+const validTalentDraftContent = {
+  schema_version: '2',
+  stage: 'TALENT_PROFILE_DRAFT',
+  job_description: validJobDescription,
+  talent_profile: {
+    target_talent_profile: {
+      core_definition: '能把复杂项目经验迁移为平台能力的人。',
+      transferable_backgrounds: ['平台产品', '复杂项目交付'],
+      fit_signals: ['能解释取舍和复用结果'],
+      non_target_and_misjudgments: ['只做单点需求收集的人'],
+      attraction_factors: ['可推动平台能力规模化'],
+      evidence_refs: ['F-001', 'F-006'],
+    },
+    qualifications: {
+      hard_qualifications: [],
+      necessary_experience: [],
+      role_conditions: [],
+      must_have: [traceableTalentRequirement],
+      preferred: [],
+      alternatives: [],
+    },
+    competency_model: {
+      knowledge: [],
+      skills: [{ ...traceableTalentRequirement, id: 'C-01', name: '平台规划技能' }],
+      behavioral_competencies: [],
+      values_and_work_style: [],
+      career_motivation: [],
+    },
+  },
+};
+
+test('normalizes staged talent profile in target, qualifications, and competency order', () => {
+  const result = normalizeRoleProfileContent(validTalentDraftContent);
+
+  assert.equal(result.internalStage, 'TALENT_PROFILE_DRAFT');
+  assert.deepEqual(Object.keys(result.talentProfile), ['target', 'qualifications', 'competencyModel']);
+  assert.equal(result.talentProfile.target.coreDefinition, '能把复杂项目经验迁移为平台能力的人。');
+  assert.deepEqual(result.talentProfile.qualifications.mustHave[0].mapsTo, ['KRA-01']);
+  assert.deepEqual(result.talentProfile.qualifications.mustHave[0].observableEvidence, ['主导过跨项目复盘并产出复用方案']);
+  assert.deepEqual(result.talentProfile.qualifications.mustHave[0].evidenceRefs, ['F-006']);
+  assert.equal(result.talentProfile.competencyModel.skills[0].status, '推断');
+  assert.equal(Object.hasOwn(result.talentProfile.qualifications.mustHave[0], 'assessment'), false);
+});
+
+test('offers talent-profile derivation from a confirmed job description', () => {
+  assert.deepEqual(roleProfileAction({
+    status: 'CONFIRMED',
+    content: { schema_version: '2', stage: 'JOB_DESCRIPTION_CONFIRMED' },
+  }), { kind: 'generate', label: '推导人才画像' });
+  assert.deepEqual(roleProfileAction({
+    status: 'DRAFT',
+    content: { schema_version: '2', stage: 'TALENT_PROFILE_DRAFT' },
+  }), { kind: 'confirm', label: '确认完整岗位画像' });
+  assert.deepEqual(roleProfileAction({
+    status: 'CONFIRMED',
+    content: { schema_version: '2', stage: 'TALENT_PROFILE_DRAFT' },
+  }), { kind: 'generate', label: '生成新版本' });
 });
 
 test('normalizes staged V2 job description without fabricating talent content', () => {

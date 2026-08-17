@@ -32,6 +32,70 @@ const boundaryLabels = {
   collaboration_and_resources: '协作资源',
 };
 
+const normalizeTalentRequirement = (item, index, prefix) => ({
+  id: toText(item?.id) || `${prefix}-${String(index + 1).padStart(2, '0')}`,
+  name: toText(item?.name) || '待补充人才要求',
+  definition: toText(item?.definition) || '待补充该人才要求的定义。',
+  mapsTo: textList(item?.maps_to),
+  observableEvidence: textList(item?.observable_evidence),
+  evidenceRefs: evidenceRefs(item?.evidence_refs),
+  status: toText(item?.status) || '待确认',
+});
+
+const normalizeTalentRequirementGroup = (value, prefix) => asArray(value)
+  .map((item, index) => normalizeTalentRequirement(item, index, prefix));
+
+const normalizeTalentProfile = (value) => {
+  const source = asObject(value);
+  const target = asObject(source.target_talent_profile);
+  const qualifications = asObject(source.qualifications);
+  const competencyModel = asObject(source.competency_model);
+  return {
+    target: {
+      coreDefinition: toText(target.core_definition),
+      transferableBackgrounds: textList(target.transferable_backgrounds),
+      fitSignals: textList(target.fit_signals),
+      nonTargets: textList(target.non_target_and_misjudgments),
+      attractionFactors: textList(target.attraction_factors),
+      evidenceRefs: evidenceRefs(target.evidence_refs),
+    },
+    qualifications: {
+      hardQualifications: normalizeTalentRequirementGroup(qualifications.hard_qualifications, 'HQ'),
+      necessaryExperience: normalizeTalentRequirementGroup(qualifications.necessary_experience, 'NE'),
+      roleConditions: normalizeTalentRequirementGroup(qualifications.role_conditions, 'RC'),
+      mustHave: normalizeTalentRequirementGroup(qualifications.must_have, 'MH'),
+      preferred: normalizeTalentRequirementGroup(qualifications.preferred, 'PF'),
+      alternatives: normalizeTalentRequirementGroup(qualifications.alternatives, 'AL'),
+    },
+    competencyModel: {
+      knowledge: normalizeTalentRequirementGroup(competencyModel.knowledge, 'KN'),
+      skills: normalizeTalentRequirementGroup(competencyModel.skills, 'SK'),
+      behavioralCompetencies: normalizeTalentRequirementGroup(competencyModel.behavioral_competencies, 'BC'),
+      valuesAndWorkStyle: normalizeTalentRequirementGroup(competencyModel.values_and_work_style, 'VW'),
+      careerMotivation: normalizeTalentRequirementGroup(competencyModel.career_motivation, 'CM'),
+    },
+  };
+};
+
+export function roleProfileAction(latest) {
+  if (!latest) return { kind: 'generate', label: '生成岗位说明' };
+  if (latest.content?.schema_version !== '2') {
+    return latest.status === 'DRAFT'
+      ? { kind: 'confirm', label: '确认画像依据' }
+      : { kind: 'generate', label: '生成新版本' };
+  }
+  if (latest.content.stage === 'JOB_DESCRIPTION_DRAFT') {
+    return { kind: 'confirm', label: '确认岗位说明' };
+  }
+  if (latest.content.stage === 'JOB_DESCRIPTION_CONFIRMED') {
+    return { kind: 'generate', label: '推导人才画像' };
+  }
+  if (latest.content.stage === 'TALENT_PROFILE_DRAFT' && latest.status === 'DRAFT') {
+    return { kind: 'confirm', label: '确认完整岗位画像' };
+  }
+  return { kind: 'generate', label: '生成新版本' };
+}
+
 export function normalizeRoleProfileContent(content = {}, hc = null) {
   const rawSource = content && typeof content === 'object' ? content : {};
   const isStagedV2 = rawSource.schema_version === '2' && Boolean(rawSource.job_description);
@@ -215,7 +279,7 @@ export function normalizeRoleProfileContent(content = {}, hc = null) {
     schemaVersion: isStagedV2 ? '2' : null,
     internalStage: isStagedV2 ? toText(rawSource.stage) : null,
     jobDescription,
-    talentProfile: isStagedV2 ? rawSource.talent_profile ?? null : null,
+    talentProfile: isStagedV2 && rawSource.talent_profile ? normalizeTalentProfile(rawSource.talent_profile) : null,
     mission: toText(source.mission) || toText(hiringReason.mission) || '当前版本未形成岗位使命，请生成新版本补齐。',
     recruitment,
     outcomes,

@@ -37,7 +37,7 @@ import {
 } from './data.js';
 import { api, ApiError } from './api/client.js';
 import { normalizeAssessmentContent } from './assessment-content.js';
-import { normalizeRoleProfileContent } from './profile-content.js';
+import { normalizeRoleProfileContent, roleProfileAction } from './profile-content.js';
 import { normalizePublicJDContent } from './public-jd-content.js';
 import LoginScreen from './components/LoginScreen.jsx';
 import { Composer, LiveAgentRun } from './components/AgentConversation.jsx';
@@ -94,25 +94,6 @@ const artifactPresentation = {
   PUBLIC_JD: { name: '对外 JD', draftAction: '确认并交给 HR 发布', generateAction: '生成对外 JD' },
   HR_RECRUITING_BRIEF: { name: '招聘画像', draftAction: '确认招聘画像', generateAction: '生成招聘画像' },
 };
-
-function roleProfileAction(latest) {
-  if (!latest) return { kind: 'generate', label: '生成岗位说明' };
-  if (latest.content?.schema_version !== '2') {
-    return latest.status === 'DRAFT'
-      ? { kind: 'confirm', label: '确认画像依据' }
-      : { kind: 'generate', label: '生成新版本' };
-  }
-  if (latest.content.stage === 'JOB_DESCRIPTION_DRAFT') {
-    return { kind: 'confirm', label: '确认岗位说明' };
-  }
-  if (latest.content.stage === 'JOB_DESCRIPTION_CONFIRMED') {
-    return { kind: 'locked', label: '岗位说明已锁定 · 人才画像待开放', disabled: true };
-  }
-  if (latest.content.stage === 'TALENT_PROFILE_DRAFT' && latest.status === 'DRAFT') {
-    return { kind: 'confirm', label: '确认完整岗位画像' };
-  }
-  return { kind: 'generate', label: '生成新版本' };
-}
 
 class ArtifactRenderBoundary extends React.Component {
   constructor(props) {
@@ -532,7 +513,6 @@ function App() {
     if (!activeRoleId || !roleDetail) return;
     const latest = roleDetail.state.latest_artifacts?.[type];
     const action = type === 'ROLE_PROFILE' ? roleProfileAction(latest) : null;
-    if (action?.disabled) return;
     try {
       if (action?.kind === 'confirm' || (!action && latest?.status === 'DRAFT')) {
         await api.confirmArtifact(
@@ -1341,8 +1321,6 @@ function ProfileView({
       : latestArtifact?.status === 'CONFIRMED'
         ? '生成新版本'
         : presentation.generateAction;
-  const roleProfileActionDisabled = artifactType === 'ROLE_PROFILE'
-    && roleProfileAction(latestArtifact).disabled;
   return (
     <section className="profile-surface redesigned-profile">
       <div className="profile-page profile-page-wide">
@@ -1358,7 +1336,7 @@ function ProfileView({
             <button className="quiet-button"><History size={15} />查看版本</button>
             <button
               className="primary-action"
-              disabled={agentStatus === 'running' || !canManageArtifact || roleProfileActionDisabled}
+              disabled={agentStatus === 'running' || !canManageArtifact}
               onClick={() => onArtifactAction?.(artifactType)}
             >
               {agentStatus === 'running' ? 'Agent 生成中…' : canManageArtifact ? connectedActionLabel : '只读查看'}<ChevronRight size={16} />
@@ -1606,6 +1584,41 @@ function ArtifactEvidenceRefs({ refs = [], onOpenEvidence }) {
   );
 }
 
+function TalentRequirementGroup({ title, items, detailKeyPrefix, onOpenEvidence, isDetailOpen, onDetailToggle }) {
+  if (!items.length) return null;
+  return (
+    <div className="generated-requirement-group">
+      <h4>{title}</h4>
+      <div className="generated-requirement-list">
+        {items.map((item, index) => {
+          const detailKey = `${detailKeyPrefix}:${item.id}`;
+          return (
+            <details
+              key={item.id}
+              open={isDetailOpen(detailKey, index === 0)}
+              onToggle={onDetailToggle(detailKey)}
+            >
+              <summary>
+                <span className="must">{item.status}</span>
+                <strong>{item.id} · {item.name}</strong>
+                {item.mapsTo.length > 0 && <em>{item.mapsTo.join(' · ')}</em>}
+                <ChevronDown size={15} />
+              </summary>
+              <div className="generated-requirement-detail">
+                <DefinitionItem label="要求定义" value={item.definition} />
+                <DefinitionItem label="关联岗位依据" value={item.mapsTo.join('；')} />
+                <DefinitionItem label="可观察证据" value={item.observableEvidence.join('；')} tone="positive" />
+                <DefinitionItem label="状态" value={item.status} />
+                <ArtifactEvidenceRefs refs={item.evidenceRefs} onOpenEvidence={onOpenEvidence} />
+              </div>
+            </details>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function GeneratedProfileBasis({ artifact, state, onOpenEvidence }) {
   const content = artifact?.content ?? {};
   const hc = state?.hc_context;
@@ -1627,9 +1640,13 @@ function GeneratedProfileBasis({ artifact, state, onOpenEvidence }) {
   })[hc?.job_basics?.recruitment_type] ?? '已审批编制'} ${hc?.job_basics?.headcount ?? 1} 人`;
   if (profile.schemaVersion === '2' && profile.jobDescription) {
     const jobDescription = profile.jobDescription;
-    const stageLabel = profile.internalStage === 'JOB_DESCRIPTION_CONFIRMED'
-      ? '岗位说明已锁定'
-      : '岗位说明待确认';
+    const hasTalentProfile = profile.talentProfile
+      && (profile.internalStage === 'TALENT_PROFILE_DRAFT' || artifact?.status === 'CONFIRMED');
+    const stageLabel = profile.internalStage === 'TALENT_PROFILE_DRAFT'
+      ? artifact?.status === 'CONFIRMED' ? '完整岗位画像已确认' : '岗位说明已锁定 · 人才画像待确认'
+      : profile.internalStage === 'JOB_DESCRIPTION_CONFIRMED'
+        ? '岗位说明已锁定'
+        : '岗位说明待确认';
     return (
       <article className="generated-artifact-document role-profile-artifact">
         <section className="generated-artifact-hero">
@@ -1732,6 +1749,34 @@ function GeneratedProfileBasis({ artifact, state, onOpenEvidence }) {
           </div>
           <ArtifactEvidenceRefs refs={jobDescription.boundaries.evidenceRefs} onOpenEvidence={onOpenEvidence} />
         </section>
+        {hasTalentProfile && <>
+          <section className="generated-section">
+            <header><span>07</span><div><h3>目标人才画像</h3><p>先明确目标人群、可迁移背景、匹配信号与不适配情形。</p></div></header>
+            <DefinitionItem label="一句话定义" value={profile.talentProfile.target.coreDefinition} />
+            <DefinitionItem label="可迁移背景" value={profile.talentProfile.target.transferableBackgrounds.join('；')} />
+            <DefinitionItem label="匹配信号" value={profile.talentProfile.target.fitSignals.join('；')} tone="positive" />
+            <DefinitionItem label="非目标与常见误判" value={profile.talentProfile.target.nonTargets.join('；')} />
+            <DefinitionItem label="吸引因素" value={profile.talentProfile.target.attractionFactors.join('；')} />
+            <ArtifactEvidenceRefs refs={profile.talentProfile.target.evidenceRefs} onOpenEvidence={onOpenEvidence} />
+          </section>
+          <section className="generated-section">
+            <header><span>08</span><div><h3>任职资格</h3><p>按资格、经验、岗位条件和可替代路径呈现可追溯要求。</p></div></header>
+            <TalentRequirementGroup title="硬性资格" items={profile.talentProfile.qualifications.hardQualifications} detailKeyPrefix="hard-qualification" onOpenEvidence={onOpenEvidence} isDetailOpen={isStagedDetailOpen} onDetailToggle={rememberStagedDetailToggle} />
+            <TalentRequirementGroup title="必要经验" items={profile.talentProfile.qualifications.necessaryExperience} detailKeyPrefix="necessary-experience" onOpenEvidence={onOpenEvidence} isDetailOpen={isStagedDetailOpen} onDetailToggle={rememberStagedDetailToggle} />
+            <TalentRequirementGroup title="岗位条件" items={profile.talentProfile.qualifications.roleConditions} detailKeyPrefix="role-condition" onOpenEvidence={onOpenEvidence} isDetailOpen={isStagedDetailOpen} onDetailToggle={rememberStagedDetailToggle} />
+            <TalentRequirementGroup title="必须具备" items={profile.talentProfile.qualifications.mustHave} detailKeyPrefix="must-have" onOpenEvidence={onOpenEvidence} isDetailOpen={isStagedDetailOpen} onDetailToggle={rememberStagedDetailToggle} />
+            <TalentRequirementGroup title="优先考虑" items={profile.talentProfile.qualifications.preferred} detailKeyPrefix="preferred" onOpenEvidence={onOpenEvidence} isDetailOpen={isStagedDetailOpen} onDetailToggle={rememberStagedDetailToggle} />
+            <TalentRequirementGroup title="可接受替代" items={profile.talentProfile.qualifications.alternatives} detailKeyPrefix="alternatives" onOpenEvidence={onOpenEvidence} isDetailOpen={isStagedDetailOpen} onDetailToggle={rememberStagedDetailToggle} />
+          </section>
+          <section className="generated-section">
+            <header><span>09</span><div><h3>岗位胜任力模型</h3><p>将岗位要求组织为知识、技能、行为与动机的可观察模型。</p></div></header>
+            <TalentRequirementGroup title="知识" items={profile.talentProfile.competencyModel.knowledge} detailKeyPrefix="knowledge" onOpenEvidence={onOpenEvidence} isDetailOpen={isStagedDetailOpen} onDetailToggle={rememberStagedDetailToggle} />
+            <TalentRequirementGroup title="技能" items={profile.talentProfile.competencyModel.skills} detailKeyPrefix="skills" onOpenEvidence={onOpenEvidence} isDetailOpen={isStagedDetailOpen} onDetailToggle={rememberStagedDetailToggle} />
+            <TalentRequirementGroup title="行为胜任力" items={profile.talentProfile.competencyModel.behavioralCompetencies} detailKeyPrefix="behavioral-competencies" onOpenEvidence={onOpenEvidence} isDetailOpen={isStagedDetailOpen} onDetailToggle={rememberStagedDetailToggle} />
+            <TalentRequirementGroup title="价值观与工作风格" items={profile.talentProfile.competencyModel.valuesAndWorkStyle} detailKeyPrefix="values-work-style" onOpenEvidence={onOpenEvidence} isDetailOpen={isStagedDetailOpen} onDetailToggle={rememberStagedDetailToggle} />
+            <TalentRequirementGroup title="职业动机" items={profile.talentProfile.competencyModel.careerMotivation} detailKeyPrefix="career-motivation" onOpenEvidence={onOpenEvidence} isDetailOpen={isStagedDetailOpen} onDetailToggle={rememberStagedDetailToggle} />
+          </section>
+        </>}
       </article>
     );
   }
