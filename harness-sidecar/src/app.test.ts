@@ -120,9 +120,19 @@ describe('Harness sidecar', () => {
   it('sends greetings and capability questions through the model prompt', () => {
     const prompt = buildTaskPrompt({ ...request, message: '你好，你可以做什么？' })
     expect(prompt).toContain('你好，你可以做什么？')
-    expect(prompt).toContain('不要套用固定模板')
+    expect(prompt).toContain('未指定输出格式时，结合上下文自然、简洁回复')
+    expect(prompt).toContain('指定了输出格式时，以用户的格式要求为准')
     expect(prompt).toContain('不要调用 read_role_state 或其他领域工具')
     expect(prompt).toContain('"kind":"CONVERSATION"')
+  })
+
+  it('gives explicit user output constraints priority inside task instructions', () => {
+    const prompt = buildTaskPrompt({ ...request, message: '只回复：可以。' })
+    const taskInstructions = prompt.match(/<task_instructions>\n([\s\S]*?)\n<\/task_instructions>/)?.[1]
+
+    expect(taskInstructions).toContain('必须严格遵守该输出约束')
+    expect(taskInstructions).toContain('不得补充岗位名称、当前状态、历史事实、下一步建议或寒暄')
+    expect(taskInstructions).toContain('“结合上下文自然回复”和“不要套用固定模板”不适用于此类请求')
   })
 
   it('keeps artifact content out of the initial model prompt and only exposes references', () => {

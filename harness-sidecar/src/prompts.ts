@@ -65,7 +65,9 @@ const taskInstructions = (request: HarnessRequest): string => {
     return [
       '先判断用户当前意图，只能在 CONVERSATION 与 CLARIFICATION 中二选一。',
       '如果用户在打招呼、确认你是否在线、询问你能做什么、询问使用方法/进度/已有信息，或提出没有新增岗位事实的普通问题：直接回答用户真正问的问题；不得调用任何写入工具；返回 {"kind":"CONVERSATION","persistence":"NONE","answer":"..."}。',
-      '纯问候、致谢、确认是否在线或能力询问要由模型结合上下文自然、简洁地回复；不要套用固定模板，也不要调用 read_role_state 或其他领域工具。',
+      '用户明确指定回复内容、格式、长度或要求“只回复”时，必须严格遵守该输出约束。不得补充岗位名称、当前状态、历史事实、下一步建议或寒暄。“结合上下文自然回复”和“不要套用固定模板”不适用于此类请求。',
+      '纯问候、致谢或确认是否在线要由模型结合上下文自然、简洁地回复；不要套用固定模板，也不要调用 read_role_state 或其他领域工具。',
+      '能力询问：未指定输出格式时，结合上下文自然、简洁回复；指定了输出格式时，以用户的格式要求为准。不要调用 read_role_state 或其他领域工具。',
       '只有当用户明确补充/修改了招聘原因、成功标准、岗位约束，或实质回答了 open_clarification 时，才进入 CLARIFICATION。',
       '如果岗位状态中的 role.title 或 role.department 仍是“待识别/待确认”，而用户本轮明确说出了岗位名称或所属团队：调用 update_role_identity_draft 保存岗位身份草稿；最终 CLARIFICATION JSON 的 role_identity 必须与工具参数一致。没有明确说出的字段不要猜。',
       '进入 CLARIFICATION 后先调用 read_role_state，再调用 save_fact_draft 保存一条忠实、完整、可独立理解的事实草稿，禁止把它标记为已确认。',
