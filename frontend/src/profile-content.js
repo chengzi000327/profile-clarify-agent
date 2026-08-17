@@ -2,9 +2,14 @@ const asArray = (value) => (Array.isArray(value) ? value : []);
 const asObject = (value) => (value && typeof value === 'object' && !Array.isArray(value) ? value : {});
 
 const toText = (value) => {
-  if (typeof value === 'string') return value;
-  if (value && typeof value === 'object' && typeof value.statement === 'string') {
-    return value.statement;
+  if (typeof value === 'string') return value.trim();
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (Array.isArray(value)) return value.map(toText).filter(Boolean).join('；');
+  if (value && typeof value === 'object') {
+    for (const key of ['statement', 'text', 'description', 'definition', 'result', 'title', 'name', 'value', 'summary', 'conclusion']) {
+      const text = toText(value[key]);
+      if (text) return text;
+    }
   }
   return '';
 };
@@ -39,13 +44,13 @@ export function normalizeRoleProfileContent(content = {}, hc = null) {
       : textList(item?.deliverables);
     const definition = item?.definition ?? item?.description ?? item?.result ?? item?.title ?? '待补充结果';
     return {
-      id: item?.id ?? `O-${String(index + 1).padStart(2, '0')}`,
-      horizon: item?.horizon ?? item?.id ?? `阶段 ${index + 1}`,
-      title: item?.title ?? item?.result ?? item?.description ?? '待补充结果',
-      result: item?.result ?? item?.description ?? item?.title ?? '待补充结果',
-      definition,
+      id: toText(item?.id) || `O-${String(index + 1).padStart(2, '0')}`,
+      horizon: toText(item?.horizon) || toText(item?.id) || `阶段 ${index + 1}`,
+      title: toText(item?.title ?? item?.result ?? item?.description) || '待补充结果',
+      result: toText(item?.result ?? item?.description ?? item?.title) || '待补充结果',
+      definition: toText(definition) || '待补充结果',
       measures,
-      status: item?.status ?? '待确认',
+      status: toText(item?.status) || '待确认',
       evidence: typeof item?.evidence === 'string' ? item.evidence : joinText(item?.deliverables),
       evidenceRefs: evidenceRefs(item?.evidence_refs ?? (typeof item?.evidence === 'string' ? [] : item?.evidence)),
     };
@@ -53,24 +58,24 @@ export function normalizeRoleProfileContent(content = {}, hc = null) {
 
   const responsibilities = asArray(source.responsibilities).length
     ? asArray(source.responsibilities).map(toText).filter(Boolean)
-    : work.map((item) => item?.description ?? item?.title).filter(Boolean);
+    : work.map((item) => toText(item?.description ?? item?.title)).filter(Boolean);
   const fallbackResponsibilities = asArray(hc?.initial_responsibilities);
 
   const legacyCapabilities = asArray(source.capabilities);
   const capabilities = (legacyCapabilities.length ? legacyCapabilities : asArray(source.requirements))
     .map((item, index) => ({
-      id: item?.id ?? `C-${String(index + 1).padStart(2, '0')}`,
-      name: item?.name ?? item?.title ?? '待补充能力',
-      level: item?.level ?? item?.priority ?? '待确认',
-      priority: item?.priority ?? (legacyCapabilities.length ? 'Must-have' : '待确认'),
-      rationale: item?.rationale ?? item?.why ?? '待补充该要求与岗位成功的关系。',
+      id: toText(item?.id) || `C-${String(index + 1).padStart(2, '0')}`,
+      name: toText(item?.name ?? item?.title) || '待补充能力',
+      level: toText(item?.level ?? item?.priority) || '待确认',
+      priority: toText(item?.priority) || (legacyCapabilities.length ? 'Must-have' : '待确认'),
+      rationale: toText(item?.rationale ?? item?.why) || '待补充该要求与岗位成功的关系。',
       mapping: textList(item?.maps_to).length ? textList(item?.maps_to) : textList(item?.mapping),
       strongEvidence: typeof item?.evidence === 'string'
         ? item.evidence
-        : joinText(item?.strong_evidence) || item?.strongEvidence || item?.rationale || '待补充可观察证据',
-      substitute: joinText(item?.substitute_evidence) || item?.substitute || '待补充可接受的替代经历。',
-      risk: joinText(item?.risk_signals) || item?.risk || '待补充风险信号。',
-      assessment: item?.assessment_method ?? item?.assessment ?? '待评估方案生成',
+        : joinText(item?.strong_evidence) || toText(item?.strongEvidence ?? item?.rationale) || '待补充可观察证据',
+      substitute: joinText(item?.substitute_evidence) || toText(item?.substitute) || '待补充可接受的替代经历。',
+      risk: joinText(item?.risk_signals) || toText(item?.risk) || '待补充风险信号。',
+      assessment: toText(item?.assessment_method ?? item?.assessment) || '待评估方案生成',
       evidence: typeof item?.evidence === 'string'
         ? item.evidence
         : joinText(item?.strong_evidence) || item?.rationale || '待补充可观察证据',
@@ -83,13 +88,13 @@ export function normalizeRoleProfileContent(content = {}, hc = null) {
       ? asArray(source.scenarios)
       : work.filter((item) => item?.trigger || item?.actions || item?.challenge || item?.stakeholders);
   const scenarios = scenarioSource.map((item, index) => ({
-    id: item?.id ?? `T-${String(index + 1).padStart(2, '0')}`,
-    title: item?.title ?? item?.name ?? `关键工作场景 ${index + 1}`,
-    frequency: item?.frequency ?? '频率待确认',
-    trigger: item?.trigger ?? item?.context ?? '触发情境待补充',
-    actions: toText(item?.actions) || joinText(item?.actions) || item?.description || '关键动作待补充',
+    id: toText(item?.id) || `T-${String(index + 1).padStart(2, '0')}`,
+    title: toText(item?.title ?? item?.name) || `关键工作场景 ${index + 1}`,
+    frequency: toText(item?.frequency) || '频率待确认',
+    trigger: toText(item?.trigger ?? item?.context) || '触发情境待补充',
+    actions: toText(item?.actions) || joinText(item?.actions) || toText(item?.description) || '关键动作待补充',
     output: toText(item?.output) || joinText(item?.outputs) || joinText(item?.deliverables) || '主要产出待补充',
-    challenge: item?.challenge ?? '核心挑战待补充',
+    challenge: toText(item?.challenge) || '核心挑战待补充',
     stakeholders: toText(item?.stakeholders) || joinText(item?.stakeholders) || '协作对象待补充',
     outcomeRefs: textList(item?.outcome_refs).length ? textList(item?.outcome_refs) : textList(item?.outcomes),
     evidenceRefs: evidenceRefs(item?.evidence_refs ?? item?.evidence),

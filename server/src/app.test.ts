@@ -166,8 +166,49 @@ class TestHarnessStub implements HarnessAdapter {
       GENERATE_HR_BRIEF: 'HR_RECRUITING_BRIEF',
     }
     const artifactType = artifactTypeByTask[request.task]
-    const content = artifactType === 'PUBLIC_JD'
+    const content = artifactType === 'ROLE_PROFILE'
       ? {
+          hiring_reason: {
+            conclusion: `补充一名${request.role_state.title}。`,
+            business_change: request.role_state.hc_context?.business_change ?? '业务发生变化。',
+            organization_gap: request.role_state.hc_context?.organization_gap ?? '组织存在能力缺口。',
+            no_hire_impact: '关键业务目标无法按期完成。',
+            evidence_refs: [request.role_state.hc_context?.request_id ?? 'HC-TEST'],
+          },
+          mission: `负责${request.role_state.title}岗位的关键业务结果。`,
+          success_outcomes: [{
+            id: 'O-01', horizon: '90 天', title: '完成现状诊断', definition: '形成岗位关键任务与推进计划。',
+            measures: ['输出诊断与计划'], status: '已确认', evidence_refs: [],
+          }],
+          work_scenarios: [{
+            id: 'T-01', title: '关键任务推进', frequency: '每周', trigger: '业务目标进入执行阶段',
+            actions: '识别问题并推动跨团队协作', output: '可验收结果', challenge: '协作链路复杂',
+            stakeholders: request.role_state.department, outcome_refs: ['O-01'], evidence_refs: [],
+          }],
+          requirements: [{
+            id: 'C-01', priority: 'Must-have', name: '结构化问题解决', level: '熟练', rationale: '支撑 O-01 与 T-01',
+            maps_to: ['O-01', 'T-01'], strong_evidence: ['能够说明问题、取舍和结果'], substitute_evidence: [],
+            risk_signals: ['只能描述过程'], assessment_method: '案例面试', evidence_refs: [],
+          }],
+          boundaries: {
+            owns: ['岗位关键目标与结果'], does_not_own: ['其他团队的专业决策'], decision_rights: '提出岗位范围内的优先级建议',
+            collaboration_and_resources: request.role_state.department, evidence_refs: [],
+          },
+        }
+      : artifactType === 'ASSESSMENT_SCORECARD'
+        ? {
+            dimensions: [{
+              id: 'A-01', name: '结构化问题解决', weight: 100, method: '案例面试', owner: '用人经理',
+              question: '请说明一次复杂问题的判断与推进过程。', evidence: '问题、取舍、行动和结果完整',
+              anchors: { 1: '只能描述过程', 3: '能够说明方案与结果', 5: '形成可复用的方法并验证结果' },
+            }],
+            decision_rule: {
+              status: '草稿', summary: '核心维度达到 3 分后进入综合校准', scoring: '按权重计算加权得分',
+              pass_thresholds: '核心维度不得低于 3 分', calibration: '面试官提交证据后统一校准',
+            },
+          }
+        : artifactType === 'PUBLIC_JD'
+          ? {
           title_and_basics: {
             title: request.role_state.title,
             location: '上海 / 可协商',
@@ -178,7 +219,7 @@ class TestHarnessStub implements HarnessAdapter {
           what_you_will_do: ['澄清目标并推动交付'],
           what_we_look_for: ['具备结构化分析和协作能力'],
         }
-      : { title: request.role_state.title, generated_for: artifactType }
+          : { title: request.role_state.title, generated_for: artifactType }
     await tool('save_artifact_draft', { artifact_type: artifactType, content }, { saved: true })
     const summary = artifactType === 'ROLE_PROFILE' ? '岗位画像草稿已生成。' : '产物草稿已生成。'
     return finish({ kind: 'ARTIFACT', artifact_type: artifactType, content, summary }, summary)

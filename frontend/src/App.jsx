@@ -36,7 +36,9 @@ import {
   versions,
 } from './data.js';
 import { api, ApiError } from './api/client.js';
+import { normalizeAssessmentContent } from './assessment-content.js';
 import { normalizeRoleProfileContent } from './profile-content.js';
+import { normalizePublicJDContent } from './public-jd-content.js';
 import LoginScreen from './components/LoginScreen.jsx';
 import { Composer, LiveAgentRun } from './components/AgentConversation.jsx';
 import AdminTraceConsole from './components/AdminTraceConsole.jsx';
@@ -92,6 +94,34 @@ const artifactPresentation = {
   PUBLIC_JD: { name: '对外 JD', draftAction: '确认并交给 HR 发布', generateAction: '生成对外 JD' },
   HR_RECRUITING_BRIEF: { name: '招聘画像', draftAction: '确认招聘画像', generateAction: '生成招聘画像' },
 };
+
+class ArtifactRenderBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { failed: false };
+  }
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  componentDidCatch(error) {
+    console.error('Artifact rendering failed', error);
+  }
+
+  render() {
+    if (this.state.failed) {
+      return (
+        <div className="artifact-render-error" role="alert">
+          <span><AlertTriangle size={22} /></span>
+          <strong>当前产物暂时无法展示</strong>
+          <p>这份历史产物的数据格式与当前页面不兼容。其他页签仍可继续使用，请为当前产物生成新版本。</p>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 const artifactStatusLabel = {
   DRAFT: '草稿待确认',
@@ -407,6 +437,12 @@ function App() {
       (event) => {
         setAgentEvents((current) => [...current, event]);
         if (event.type === 'agent.status') setAgentStatus(event.payload.status);
+        if (
+          event.type === 'artifact.updated'
+          && ['ROLE_PROFILE', 'ASSESSMENT_SCORECARD', 'PUBLIC_JD'].includes(event.payload.artifact_type)
+        ) {
+          refreshActiveRole(roleId).catch((error) => setRequestError(error.message));
+        }
         if (event.type === 'run.completed') {
           setAgentStatus('completed');
           Promise.all([refreshActiveRole(roleId), refreshConversation(roleId)])
@@ -1325,22 +1361,36 @@ function ProfileView({
         </nav>
 
         <div className="profile-content-frame">
-          {(!latestArtifact || latestArtifact.status === 'INVALIDATED') ? (
-            <ArtifactEmptyState
-              artifactType={artifactType}
-              invalidated={latestArtifact?.status === 'INVALIDATED'}
-              canManage={canManageArtifact}
-              onGenerate={() => onArtifactAction?.(artifactType)}
-              busy={agentStatus === 'running'}
-            />
-          ) : section === 'portrait' ? (
-            <RecruitingPortrait onOpenEvidence={onOpenEvidence} artifact={latestArtifact} roleDetail={roleDetail} />
-          ) : section === 'basis' ? (
-            <GeneratedProfileBasis artifact={latestArtifact} state={state} onOpenEvidence={onOpenEvidence} />
-          ) : section === 'assessment' ? (
-            <GeneratedAssessment artifact={latestArtifact} />
+          {section === 'portrait' ? (
+            (!latestArtifact || latestArtifact.status === 'INVALIDATED') ? (
+              <ArtifactEmptyState
+                artifactType={artifactType}
+                invalidated={latestArtifact?.status === 'INVALIDATED'}
+                canManage={canManageArtifact}
+                onGenerate={() => onArtifactAction?.(artifactType)}
+                busy={agentStatus === 'running'}
+              />
+            ) : (
+              <RecruitingPortrait onOpenEvidence={onOpenEvidence} artifact={latestArtifact} roleDetail={roleDetail} />
+            )
           ) : (
-            <JDPreview jd={latestArtifact} state={state} />
+            <ArtifactRenderBoundary key={`${artifactType}-${latestArtifact?.id ?? 'empty'}-${latestArtifact?.version ?? 0}`}>
+              {(!latestArtifact || latestArtifact.status === 'INVALIDATED') ? (
+                <ArtifactEmptyState
+                  artifactType={artifactType}
+                  invalidated={latestArtifact?.status === 'INVALIDATED'}
+                  canManage={canManageArtifact}
+                  onGenerate={() => onArtifactAction?.(artifactType)}
+                  busy={agentStatus === 'running'}
+                />
+              ) : section === 'basis' ? (
+                <GeneratedProfileBasis artifact={latestArtifact} state={state} onOpenEvidence={onOpenEvidence} />
+              ) : section === 'assessment' ? (
+                <GeneratedAssessment artifact={latestArtifact} />
+              ) : (
+                <JDPreview jd={latestArtifact} state={state} />
+              )}
+            </ArtifactRenderBoundary>
           )}
         </div>
       </div>
@@ -1644,28 +1694,34 @@ function GeneratedProfileBasis({ artifact, state, onOpenEvidence }) {
 }
 
 function GeneratedAssessment({ artifact }) {
-  const content = artifact?.content ?? {};
-  const dimensions = content.dimensions ?? [];
+  const { dimensions, decisionRule } = normalizeAssessmentContent(artifact?.content);
   return (
     <article className="generated-artifact-document assessment-artifact">
       <section className="generated-artifact-hero">
-        <span><ListChecks size={14} />招聘评估方案</span>
+        <div className="assessment-rule-heading">
+          <span><ListChecks size={14} />招聘评估方案</span>
+          {decisionRule.status && <em>{decisionRule.status}</em>}
+        </div>
         <h2>把岗位成功标准转成统一、可观察的面试判断</h2>
-        <p>{content.decision_rule ?? '当前版本尚未生成录用决策规则。'}</p>
+        {decisionRule.summary && <p>{decisionRule.summary}</p>}
+        {decisionRule.items.length > 0 && (
+          <div className="assessment-decision-rule-grid">
+            {decisionRule.items.map((item) => (
+              <div key={item.label}><small>{item.label}</small><strong>{item.value}</strong></div>
+            ))}
+          </div>
+        )}
       </section>
       <section className="generated-section">
         <div className="assessment-dimension-grid">
           {dimensions.map((dimension, index) => {
-            const anchors = Array.isArray(dimension.anchors)
-              ? dimension.anchors
-              : Object.entries(dimension.anchors ?? {}).map(([score, text]) => `${score} 分：${text}`);
             return (
               <div className="assessment-dimension-card" key={`${dimension.name}-${index}`}>
-                <header><span>{String(index + 1).padStart(2, '0')}</span><div><h3>{dimension.name}</h3><p>{dimension.weight ?? '—'}% · {dimension.method ?? '待确认'}</p></div></header>
+                <header><span>{dimension.id}</span><div><h3>{dimension.name}</h3><p>{dimension.weight === '—' ? '权重待确认' : `${dimension.weight}%`} · {dimension.method}</p></div></header>
                 {dimension.owner && <p><strong>评估人：</strong>{dimension.owner}</p>}
                 {dimension.question && <p><strong>核心问题：</strong>{dimension.question}</p>}
                 {dimension.evidence && <p><strong>必须听到：</strong>{dimension.evidence}</p>}
-                <div className="assessment-anchor-list">{anchors.map((anchor) => <span key={String(anchor)}>{anchor}</span>)}</div>
+                <div className="assessment-anchor-list">{dimension.anchors.map((anchor) => <span key={anchor}>{anchor}</span>)}</div>
               </div>
             );
           })}
@@ -1726,38 +1782,21 @@ function HiringReasonDecision({ onOpenEvidence }) {
 
 function JDPreview({ jd, state }) {
   const fallbackResponsibilities = [
-    '分析多个客户与业务场景，识别可复用的共性问题，定义清晰的产品边界与路线。',
-    '定义标准能力的核心用户、使用场景、MVP 范围和验证方式，推动方案落地。',
-    '协同销售、交付、解决方案与研发，对客户承诺、短期收入和长期产品价值做出可解释的取舍。',
-    '设计并跟踪产品采用、复用与交付效率指标，把客户验证结果转化为产品迭代决策。',
+    '当前历史版本没有可展示的岗位职责，请生成新版本补齐。',
   ];
 
   const fallbackCapabilities = [
     {
-      title: '复杂 B 端问题抽象与产品化',
-      description: '能够从多个客户或业务场景中识别共性，并说清产品选择与边界。',
-    },
-    {
-      title: '从机会判断到 MVP 验证的闭环能力',
-      description: '不只停留在方案或上线，能用真实用户和结果完成验证与复盘。',
-    },
-    {
-      title: '跨角色的复杂决策推动',
-      description: '能够在没有直接汇报关系的情况下，用事实、取舍和清晰责任推动共识。',
-    },
-    {
-      title: '用指标验证产品价值',
-      description: '能定义有意义的观察指标，理解数据限制，并让数据真正改变产品决策。',
+      id: 'missing-capability',
+      title: '当前历史版本没有可展示的人才要求',
+      description: '请生成新版本补齐。',
     },
   ];
-  const content = jd?.content;
-  const responsibilities = content?.what_you_will_do ?? fallbackResponsibilities;
-  const capabilities = content?.what_we_look_for?.map((item) => ({
-    title: item,
-    description: '',
-  })) ?? fallbackCapabilities;
-  const basics = content?.title_and_basics;
-  const hcBasics = state?.hc_context?.job_basics;
+  const normalized = normalizePublicJDContent(jd?.content, state, {
+    about: '当前历史版本没有可展示的岗位说明，请生成新版本补齐。',
+    responsibilities: fallbackResponsibilities,
+    capabilities: fallbackCapabilities,
+  });
 
   return (
     <div className="jd-preview-shell">
@@ -1767,20 +1806,20 @@ function JDPreview({ jd, state }) {
       </div>
       <article className="jd-document">
         <header>
-          <span>{state?.department ?? '团队待同步'} · {basics?.location ?? hcBasics?.locations?.join(' / ') ?? '地点待同步'}</span>
-          <h1>{basics?.title ?? state?.title ?? '岗位名称待同步'}</h1>
+          <span>{normalized.department} · {normalized.location}</span>
+          <h1>{normalized.title}</h1>
           <p>一起把复杂问题转化为真正可验证的业务结果。</p>
-          <div className="jd-facts"><span>{basics?.employment_type ?? hcBasics?.employment_type ?? '全职'}</span><span>{hcBasics?.level ?? '职级待同步'}</span><span>汇报给{basics?.reporting_line ?? hcBasics?.reporting_line ?? '待同步'}</span></div>
+          <div className="jd-facts"><span>{normalized.employmentType}</span><span>{normalized.level}</span><span>汇报给{normalized.reportingLine}</span></div>
         </header>
         <section className="jd-about-role">
           <h2>关于岗位</h2>
-          <p>{content?.about_the_role ?? '我们正在从项目交付走向标准产品。你会从多个客户场景中识别高价值共性需求，定义可复用的产品路线，并推动首个标准能力完成真实客户验证。这个岗位主导跨项目的产品化判断，不代替单个客户的项目交付。'}</p>
+          <p>{normalized.about}</p>
         </section>
         <section><h2>你会做什么</h2><ol className="jd-responsibility-list">
-          {responsibilities.map((item) => <li key={item}>{item}</li>)}
+          {normalized.responsibilities.map((item, index) => <li key={`${index}-${item}`}>{item}</li>)}
         </ol></section>
         <section><h2>我们希望你具备</h2><div className="jd-capability-list">
-          {capabilities.map((capability) => <div key={capability.title}><strong>{capability.title}</strong>{capability.description && <p>{capability.description}</p>}</div>)}
+          {normalized.capabilities.map((capability) => <div key={capability.id}><strong>{capability.title}</strong>{capability.description && <p>{capability.description}</p>}</div>)}
         </div></section>
         <footer className="jd-document-footer"><span>候选人版预览 · 仅包含可公开字段</span><strong>版本 v{jd?.version ?? '0.5'} · {jd?.status === 'CONFIRMED' ? '已确认' : '待发布'}</strong></footer>
       </article>

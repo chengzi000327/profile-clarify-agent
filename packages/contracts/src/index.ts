@@ -138,6 +138,111 @@ export const HcApprovalSchema = z.object({
 })
 export type HcApproval = z.infer<typeof HcApprovalSchema>
 
+const ArtifactTextSchema = z.string().trim().min(1).max(4_000)
+const ArtifactEvidenceRefsSchema = z.array(z.string().trim().min(1).max(120)).max(20).default([])
+
+export const RoleProfileContentSchema = z
+  .object({
+    hiring_reason: z
+      .object({
+        conclusion: ArtifactTextSchema,
+        business_change: ArtifactTextSchema,
+        organization_gap: ArtifactTextSchema,
+        no_hire_impact: ArtifactTextSchema,
+        evidence_refs: ArtifactEvidenceRefsSchema,
+      })
+      .strict(),
+    mission: ArtifactTextSchema,
+    success_outcomes: z.array(z
+      .object({
+        id: z.string().trim().min(1).max(40),
+        horizon: z.string().trim().min(1).max(80),
+        title: z.string().trim().min(1).max(200),
+        definition: ArtifactTextSchema,
+        measures: z.array(ArtifactTextSchema).min(1).max(8),
+        status: z.string().trim().min(1).max(80),
+        evidence_refs: ArtifactEvidenceRefsSchema,
+      })
+      .strict()).min(1).max(6),
+    work_scenarios: z.array(z
+      .object({
+        id: z.string().trim().min(1).max(40),
+        title: z.string().trim().min(1).max(200),
+        frequency: z.string().trim().min(1).max(120),
+        trigger: ArtifactTextSchema,
+        actions: ArtifactTextSchema,
+        output: ArtifactTextSchema,
+        challenge: ArtifactTextSchema,
+        stakeholders: ArtifactTextSchema,
+        outcome_refs: z.array(z.string().trim().min(1).max(40)).max(10).default([]),
+        evidence_refs: ArtifactEvidenceRefsSchema,
+      })
+      .strict()).min(1).max(8),
+    requirements: z.array(z
+      .object({
+        id: z.string().trim().min(1).max(40),
+        priority: z.enum(['Must-have', 'Preferred']),
+        name: z.string().trim().min(1).max(200),
+        level: z.string().trim().min(1).max(120),
+        rationale: ArtifactTextSchema,
+        maps_to: z.array(z.string().trim().min(1).max(40)).min(1).max(12),
+        strong_evidence: z.array(ArtifactTextSchema).min(1).max(8),
+        substitute_evidence: z.array(ArtifactTextSchema).max(8).default([]),
+        risk_signals: z.array(ArtifactTextSchema).max(8).default([]),
+        assessment_method: ArtifactTextSchema,
+        evidence_refs: ArtifactEvidenceRefsSchema,
+      })
+      .strict()).min(1).max(12),
+    boundaries: z
+      .object({
+        owns: z.array(ArtifactTextSchema).min(1).max(12),
+        does_not_own: z.array(ArtifactTextSchema).min(1).max(12),
+        decision_rights: ArtifactTextSchema,
+        collaboration_and_resources: ArtifactTextSchema,
+        evidence_refs: ArtifactEvidenceRefsSchema,
+      })
+      .strict(),
+  })
+  .strict()
+export type RoleProfileContent = z.infer<typeof RoleProfileContentSchema>
+
+export const AssessmentScorecardSchema = z
+  .object({
+    dimensions: z.array(z
+      .object({
+        id: z.string().trim().min(1).max(40),
+        name: z.string().trim().min(1).max(200),
+        weight: z.number().min(0).max(100),
+        method: ArtifactTextSchema,
+        owner: ArtifactTextSchema,
+        question: ArtifactTextSchema,
+        evidence: ArtifactTextSchema,
+        anchors: z
+          .object({
+            1: ArtifactTextSchema,
+            3: ArtifactTextSchema,
+            5: ArtifactTextSchema,
+          })
+          .strict(),
+      })
+      .strict()).min(1).max(12),
+    decision_rule: z
+      .object({
+        status: z.string().trim().min(1).max(120),
+        summary: ArtifactTextSchema,
+        scoring: ArtifactTextSchema,
+        pass_thresholds: ArtifactTextSchema,
+        calibration: ArtifactTextSchema,
+      })
+      .strict(),
+  })
+  .strict()
+  .refine(
+    (value) => Math.abs(value.dimensions.reduce((sum, item) => sum + item.weight, 0) - 100) < 0.001,
+    { message: '评估维度权重之和必须等于 100', path: ['dimensions'] },
+  )
+export type AssessmentScorecard = z.infer<typeof AssessmentScorecardSchema>
+
 export const PublicJDSchema = z
   .object({
     title_and_basics: JobHeaderSchema,
@@ -155,6 +260,15 @@ export const ArtifactTypeSchema = z.enum([
   'HR_RECRUITING_BRIEF',
 ])
 export type ArtifactType = z.infer<typeof ArtifactTypeSchema>
+
+export const generatedArtifactContentSchema = (
+  type: ArtifactType,
+): typeof RoleProfileContentSchema | typeof AssessmentScorecardSchema | typeof PublicJDSchema | null => {
+  if (type === 'ROLE_PROFILE') return RoleProfileContentSchema
+  if (type === 'ASSESSMENT_SCORECARD') return AssessmentScorecardSchema
+  if (type === 'PUBLIC_JD') return PublicJDSchema
+  return null
+}
 
 export const ArtifactStatusSchema = z.enum(['DRAFT', 'CONFIRMED', 'INVALIDATED'])
 export type ArtifactStatus = z.infer<typeof ArtifactStatusSchema>

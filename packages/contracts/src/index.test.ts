@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { ROLE_CLARIFIER_SYSTEM_PROMPT as SHARED_SYSTEM_PROMPT } from '@role-clarifier/agent-spec'
 import {
+  AssessmentScorecardSchema,
   FactCategorySchema,
   PublicJDSchema,
   ROLE_CLARIFIER_PROMPT_VERSION,
   ROLE_CLARIFIER_SYSTEM_PROMPT,
+  RoleProfileContentSchema,
   promptForTask,
 } from './index.js'
 
@@ -14,7 +16,7 @@ describe('共享 Agent 规范', () => {
   })
 
   it('按任务只组合核心规则和对应任务规则', () => {
-    expect(ROLE_CLARIFIER_PROMPT_VERSION).toBe('role-clarifier-v11-layered')
+    expect(ROLE_CLARIFIER_PROMPT_VERSION).toBe('role-clarifier-v12-artifact-contracts')
     expect(promptForTask('GENERATE_JD')).toContain('<P-01')
     expect(promptForTask('GENERATE_JD')).toContain('<P-05')
     expect(promptForTask('GENERATE_JD')).not.toContain('<P-07')
@@ -27,6 +29,68 @@ describe('共享 Agent 规范', () => {
       'SUCCESS_CRITERION',
       'CONSTRAINT',
     ])
+  })
+})
+
+describe('三类岗位产物契约', () => {
+  it('岗位画像必须包含前端展示所需的完整判断链', () => {
+    const result = RoleProfileContentSchema.safeParse({
+      hiring_reason: {
+        conclusion: '补充一名客户端工程师。',
+        business_change: '跨端业务规模增长。',
+        organization_gap: '缺少客户端架构负责人。',
+        no_hire_impact: '稳定性问题持续扩大。',
+        evidence_refs: ['HC-001'],
+      },
+      mission: '建设稳定、可复用的客户端平台。',
+      success_outcomes: [{
+        id: 'O-01', horizon: '90 天', title: '完成架构诊断', definition: '形成改造路线图。',
+        measures: ['输出诊断报告'], status: '已确认', evidence_refs: ['E-01'],
+      }],
+      work_scenarios: [{
+        id: 'T-01', title: '稳定性治理', frequency: '每周', trigger: '线上异常增加',
+        actions: '定位根因并推动治理', output: '治理方案', challenge: '跨端链路复杂',
+        stakeholders: '客户端与服务端团队', outcome_refs: ['O-01'], evidence_refs: ['E-02'],
+      }],
+      requirements: [{
+        id: 'C-01', priority: 'Must-have', name: '稳定性治理', level: '高级', rationale: '支撑 O-01',
+        maps_to: ['O-01', 'T-01'], strong_evidence: ['建立过监控治理体系'], substitute_evidence: [],
+        risk_signals: ['只能描述单点修复'], assessment_method: '案例面试', evidence_refs: ['E-03'],
+      }],
+      boundaries: {
+        owns: ['客户端架构与稳定性'], does_not_own: ['服务端业务逻辑'], decision_rights: '提出架构取舍',
+        collaboration_and_resources: '客户端、服务端与测试团队', evidence_refs: ['E-04'],
+      },
+    })
+    expect(result.success).toBe(true)
+  })
+
+  it('评估方案拒绝对象文本和不等于 100 的权重', () => {
+    const result = AssessmentScorecardSchema.safeParse({
+      dimensions: [{
+        id: 'A-01', name: '稳定性治理', weight: 60, method: '案例面试', owner: '用人经理',
+        question: '如何治理线上稳定性？', evidence: '能解释指标与结果', anchors: { 1: '只描述修复', 3: '能形成方案', 5: '形成治理闭环' },
+      }],
+      decision_rule: {
+        status: '草稿', summary: '核心维度不得低于 3 分', scoring: '加权平均',
+        pass_thresholds: '总分不低于 3.5', calibration: '面试后统一校准',
+      },
+    })
+    expect(result.success).toBe(false)
+  })
+
+  it('评估方案接受可直接渲染的 100 权重结构', () => {
+    const result = AssessmentScorecardSchema.safeParse({
+      dimensions: [{
+        id: 'A-01', name: '稳定性治理', weight: 100, method: '案例面试', owner: '用人经理',
+        question: '如何治理线上稳定性？', evidence: '能解释指标与结果', anchors: { 1: '只描述修复', 3: '能形成方案', 5: '形成治理闭环' },
+      }],
+      decision_rule: {
+        status: '草稿', summary: '核心维度不得低于 3 分', scoring: '加权平均',
+        pass_thresholds: '总分不低于 3.5', calibration: '面试后统一校准',
+      },
+    })
+    expect(result.success).toBe(true)
   })
 })
 

@@ -74,3 +74,17 @@ test('keeps the deep profile decision and evidence chain', () => {
   assert.equal(result.capabilities[0].risk, '只汇总需求');
   assert.equal(result.boundaryGroups.decisionRights, '提出优先级取舍');
 });
+
+test('never returns nested objects as React text children for historical profiles', () => {
+  const result = normalizeRoleProfileContent({
+    mission: { statement: '建设稳定的客户端平台。' },
+    success_outcomes: [{ horizon: { value: '90 天' }, definition: { statement: '完成架构诊断。' }, measures: [{ statement: '输出诊断报告' }] }],
+    requirements: [{ name: { text: '稳定性治理' }, rationale: { description: '支撑线上质量' }, strong_evidence: [{ statement: '建立监控体系' }] }],
+  });
+
+  assert.equal(typeof result.mission, 'string');
+  assert.equal(typeof result.outcomes[0].definition, 'string');
+  assert.equal(typeof result.outcomes[0].measures[0], 'string');
+  assert.equal(typeof result.capabilities[0].name, 'string');
+  assert.equal(typeof result.capabilities[0].rationale, 'string');
+});

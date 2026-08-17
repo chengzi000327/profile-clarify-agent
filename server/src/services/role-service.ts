@@ -3,7 +3,7 @@ import {
   ARTIFACT_VISIBILITY,
   CandidateEvidenceSchema,
   type ConversationMessage,
-  PublicJDSchema,
+  generatedArtifactContentSchema,
   type ActorContext,
   type ArtifactEnvelope,
   type ArtifactType,
@@ -460,7 +460,23 @@ export class RoleService {
   ): Promise<ArtifactEnvelope<T>> {
     const aggregate = await this.requireAggregate(roleSessionId, actor)
     assertArtifactAccess(actor, type)
-    if (type === 'PUBLIC_JD') PublicJDSchema.parse(content)
+    const contentSchema = generatedArtifactContentSchema(type)
+    let validatedContent = content
+    if (contentSchema) {
+      const validation = contentSchema.safeParse(content)
+      if (!validation.success) {
+        const issueSummary = validation.error.issues
+          .slice(0, 5)
+          .map((issue) => `${issue.path.join('.') || 'content'}：${issue.message}`)
+          .join('；')
+        throw new DomainError(
+          'ARTIFACT_CONTENT_INVALID',
+          `${artifactNames[type]}结构不符合前端展示契约：${issueSummary}`,
+          422,
+        )
+      }
+      validatedContent = validation.data as T
+    }
     const version =
       Math.max(
         0,
@@ -475,7 +491,7 @@ export class RoleService {
       roleSessionId,
       type,
       version,
-      content,
+      content: validatedContent,
       createdBy: actor.user_id,
       basedOnHash: previous?.content_hash ?? null,
     })
