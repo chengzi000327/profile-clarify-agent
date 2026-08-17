@@ -10,7 +10,7 @@ export const createMockHcContext = (input: {
   assignedHrUserId?: string | null
   department?: string
 }): HcContext => ({
-  request_id: 'HC-2026-001',
+  request_id: 'HC-2026-EP-001',
   status: 'APPROVED',
   approved_at: now,
   business_change: '企业服务业务正从单客户定制交付转向标准产品经营，需要建立跨项目的产品化责任主体。',

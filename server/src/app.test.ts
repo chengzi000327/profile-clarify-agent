@@ -476,7 +476,7 @@ describe('Role Clarifier API', () => {
     expect(payload.artifacts.some((item: { type: string }) => item.type === 'HR_RECRUITING_BRIEF')).toBe(false)
     expect(payload.state.latest_artifacts.HR_RECRUITING_BRIEF).toBeUndefined()
     expect(payload.state.hc_context).toMatchObject({
-      request_id: 'HC-2026-001',
+      request_id: 'HC-2026-EP-001',
       status: 'APPROVED',
       assigned_hr_user_id: 'hr-demo',
       job_basics: {

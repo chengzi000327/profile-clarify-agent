@@ -100,7 +100,7 @@ describe('read_role_state task projection', () => {
       stage: 'JD_DRAFT',
       hc_status: 'APPROVED',
       hc_context: expect.objectContaining({
-        request_id: 'HC-2026-001',
+        request_id: 'HC-2026-EP-001',
         job_basics: expect.objectContaining({
           level: '3-2 至 4-1',
           reporting_line: '产品负责人',

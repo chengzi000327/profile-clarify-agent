@@ -150,6 +150,9 @@ function App() {
   const [activeRoleId, setActiveRoleId] = useState(null);
   const [newConversationMode, setNewConversationMode] = useState(false);
   const [roleDetail, setRoleDetail] = useState(null);
+  const [roleDetailLoading, setRoleDetailLoading] = useState(false);
+  const [roleDetailError, setRoleDetailError] = useState('');
+  const [roleDetailReloadKey, setRoleDetailReloadKey] = useState(0);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [activeView, setActiveView] = useState('conversation');
   const [evidenceId, setEvidenceId] = useState(null);
@@ -163,6 +166,7 @@ function App() {
   const [requestError, setRequestError] = useState('');
   const [adminTestRole, setAdminTestRole] = useState('MANAGER');
   const streamStopRef = useRef(null);
+  const activeRoleIdRef = useRef(activeRoleId);
   const effectiveActorRole = actor?.role === 'ADMIN' ? adminTestRole : actor?.role;
   const viewerRole = effectiveActorRole === 'HR' ? 'hr' : 'manager';
   const canCreateRole = effectiveActorRole === 'MANAGER';
@@ -182,6 +186,10 @@ function App() {
     [roleSessions, activeRoleId, newConversationMode],
   );
   const evidence = evidenceId ? evidenceById[evidenceId] : null;
+
+  useEffect(() => {
+    activeRoleIdRef.current = activeRoleId;
+  }, [activeRoleId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -205,8 +213,16 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!actor || !activeRoleId) return;
+    if (!actor || !activeRoleId) {
+      setRoleDetail(null);
+      setRoleDetailLoading(false);
+      setRoleDetailError('');
+      return;
+    }
     let cancelled = false;
+    setRoleDetail(null);
+    setRoleDetailLoading(true);
+    setRoleDetailError('');
     Promise.all([
       api.getRoleSession(activeRoleId),
       api.getMessages(activeRoleId),
@@ -219,12 +235,17 @@ function App() {
         }
       })
       .catch((error) => {
-        if (!cancelled) setRequestError(error.message);
+        if (!cancelled) {
+          setRoleDetailError(error.message || '岗位详情加载失败');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setRoleDetailLoading(false);
       });
     return () => {
       cancelled = true;
     };
-  }, [actor, activeRoleId]);
+  }, [actor, activeRoleId, roleDetailReloadKey]);
 
   async function loadRoleSessions(cancelled = false, preferredRoleId = null) {
     const result = await api.listRoleSessions();
@@ -307,14 +328,16 @@ function App() {
     if (!roleId) return;
     const [detail] = await Promise.all([
       api.getRoleSession(roleId),
-      loadRoleSessions(false, roleId),
+      loadRoleSessions(false),
     ]);
+    if (activeRoleIdRef.current !== roleId) return;
     setRoleDetail(detail);
   }
 
   async function refreshConversation(roleId = activeRoleId) {
     if (!roleId) return;
     const conversation = await api.getMessages(roleId);
+    if (activeRoleIdRef.current !== roleId) return;
     setMessages(conversation.items);
     setClarificationPolicy(conversation.policy);
   }
@@ -616,6 +639,9 @@ function App() {
             actualActorRole={actor.role}
             onOpenEvidence={setEvidenceId}
             roleDetail={roleDetail}
+            loading={roleDetailLoading}
+            error={roleDetailError}
+            onRetry={() => setRoleDetailReloadKey((value) => value + 1)}
             onArtifactAction={handleArtifactAction}
             agentStatus={agentStatus}
           />
@@ -1144,18 +1170,47 @@ function ArtifactEmptyState({ artifactType, invalidated, canManage, onGenerate, 
   );
 }
 
-function ProfileView({ viewerRole, actualActorRole, onOpenEvidence, roleDetail, onArtifactAction, agentStatus }) {
+function ProfileView({
+  viewerRole,
+  actualActorRole,
+  onOpenEvidence,
+  roleDetail,
+  loading,
+  error,
+  onRetry,
+  onArtifactAction,
+  agentStatus,
+}) {
   const [section, setSection] = useState(viewerRole === 'hr' ? 'portrait' : 'basis');
   const [expandedScenario, setExpandedScenario] = useState('T-01');
   const [expandedRequirement, setExpandedRequirement] = useState('C-01');
   const [expandedScore, setExpandedScore] = useState('A-01');
   const state = roleDetail?.state;
+  if (loading) {
+    return (
+      <section className="profile-surface redesigned-profile profile-loading-state" aria-live="polite">
+        <ClarifierMark size={38} plate />
+        <strong>正在加载岗位画像</strong>
+        <p>正在同步岗位详情、画像产物与审批状态，请稍候。</p>
+      </section>
+    );
+  }
+  if (error) {
+    return (
+      <section className="profile-surface redesigned-profile profile-loading-state" role="alert">
+        <AlertTriangle size={38} />
+        <strong>岗位画像加载失败</strong>
+        <p>{error}</p>
+        <button className="primary-action" type="button" onClick={onRetry}>重新加载</button>
+      </section>
+    );
+  }
   if (!state) {
     return (
       <section className="profile-surface redesigned-profile profile-loading-state" aria-live="polite">
         <ClarifierMark size={38} plate />
-        <strong>正在加载岗位画像…</strong>
-        <span>正在读取当前岗位的 HC 信息、画像产物和版本状态。</span>
+        <strong>暂无岗位画像</strong>
+        <span>当前岗位还没有可展示的画像详情，请先在岗位澄清对话中补充信息。</span>
       </section>
     );
   }
