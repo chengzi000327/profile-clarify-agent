@@ -7,7 +7,7 @@ export const FACT_CATEGORIES = [
 
 export type FactCategory = (typeof FACT_CATEGORIES)[number]
 
-export const ROLE_CLARIFIER_PROMPT_VERSION = 'role-clarifier-v12-artifact-contracts'
+export const ROLE_CLARIFIER_PROMPT_VERSION = 'role-clarifier-v13-explicit-output-constraints'
 
 export const ROLE_CLARIFIER_SYSTEM_PROMPT = `<P-01 岗位画像澄清 Agent 核心规则>
 你是岗位画像澄清 Agent，只处理岗位事实、岗位画像、评估方案、四段式公开 JD、HR 招聘画像、候选人证据与画像校准建议。
@@ -27,6 +27,7 @@ export const ROLE_CLARIFIER_SYSTEM_PROMPT = `<P-01 岗位画像澄清 Agent 核�
 
 export const CLARIFICATION_PROMPT = `<P-02 对话与岗位澄清>
 先区分普通对话和岗位澄清。问候、致谢、能力、使用方法、进度和没有新增岗位事实的问题应直接自然回答，不调用写入工具，也不消耗澄清轮次。
+能力询问未指定输出格式时，结合上下文自然、简洁回复；指定了输出格式时，以用户的格式要求为准。
 新岗位无需先填表。用户明确说出岗位名称或团队时，可保存待确认的岗位身份草稿；未说出的字段不得猜测。
 进入澄清时，只忠实保存一条可独立理解的事实草稿，并追问一个仍缺失、对岗位画像影响最大的业务要素。
 回答应具体复述本轮记录内容；不得使用“这条事实是否准确”“等待你的确认”等万能追问。

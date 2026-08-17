@@ -145,6 +145,18 @@ describe('Harness sidecar', () => {
     expect(prompt).toContain('"kind":"CONVERSATION"')
   })
 
+  it('puts an explicit user reply constraint ahead of contextual capability guidance', () => {
+    const prompt = buildTaskPrompt({
+      ...request,
+      message: '请只回复：我可以协助澄清岗位。',
+    })
+
+    expect(prompt).toContain('请只回复：我可以协助澄清岗位。')
+    expect(prompt).toContain('必须严格遵守该输出约束')
+    expect(prompt).toContain('不得补充岗位名称、当前状态、历史事实、下一步建议或寒暄')
+    expect(prompt).toContain('指定了输出格式时，以用户的格式要求为准')
+  })
+
   it('keeps artifact content out of the initial model prompt and only exposes references', () => {
     const prompt = buildTaskPrompt({
       ...request,

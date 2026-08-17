@@ -69,6 +69,8 @@ const taskInstructions = (request: HarnessRequest): string => {
     return [
       '按 P-02 判断 CONVERSATION 或 CLARIFICATION。',
       'CONVERSATION 不调用工具，返回 {"kind":"CONVERSATION","persistence":"NONE","answer":"..."}。',
+      '用户明确指定回复内容、格式、长度或要求“只回复”时，必须严格遵守该输出约束。不得补充岗位名称、当前状态、历史事实、下一步建议或寒暄。“结合上下文自然回复”和“不要套用固定模板”不适用于此类请求。',
+      '能力询问：未指定输出格式时，结合上下文自然、简洁回复；指定了输出格式时，以用户的格式要求为准。',
       '如果岗位状态中的 role.title 或 role.department 仍是“待识别/待确认”，而用户本轮明确说出了岗位名称或所属团队：调用 update_role_identity_draft 保存岗位身份草稿；最终 CLARIFICATION JSON 的 role_identity 必须与工具参数一致。没有明确说出的字段不要猜。',
       'CLARIFICATION 先调用 read_role_state，再调用 save_fact_draft；字段必须与工具参数一致。',
       '最终只返回 CONVERSATION JSON，或返回包含 answer、一个具体 question、以及与工具参数一致 fact_draft 的 CLARIFICATION JSON。',

@@ -16,10 +16,16 @@ describe('共享 Agent 规范', () => {
   })
 
   it('按任务只组合核心规则和对应任务规则', () => {
-    expect(ROLE_CLARIFIER_PROMPT_VERSION).toBe('role-clarifier-v12-artifact-contracts')
+    expect(ROLE_CLARIFIER_PROMPT_VERSION).toBe('role-clarifier-v13-explicit-output-constraints')
     expect(promptForTask('GENERATE_JD')).toContain('<P-01')
     expect(promptForTask('GENERATE_JD')).toContain('<P-05')
     expect(promptForTask('GENERATE_JD')).not.toContain('<P-07')
+  })
+
+  it('能力询问以用户明确指定的输出格式为准', () => {
+    const prompt = promptForTask('CLARIFY_MESSAGE')
+    expect(prompt).toContain('能力询问未指定输出格式时，结合上下文自然、简洁回复')
+    expect(prompt).toContain('指定了输出格式时，以用户的格式要求为准')
   })
 
   it('统一支持四类岗位事实', () => {
