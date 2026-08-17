@@ -7,6 +7,7 @@ import {
   ROLE_CLARIFIER_PROMPT_VERSION,
   ROLE_CLARIFIER_SYSTEM_PROMPT,
   RoleProfileContentSchema,
+  TalentProfileDraftInputSchema,
   promptForTask,
 } from './index.js'
 
@@ -186,6 +187,99 @@ describe('三类岗位产物契约', () => {
       },
     })
     expect(result.success).toBe(true)
+  })
+})
+
+describe('人才画像增量契约', () => {
+  const traceableRequirement = {
+    id: 'REQ-01',
+    name: '复杂需求抽象',
+    definition: '识别共性并定义边界。',
+    maps_to: ['KRA-01', 'O-01', 'S-01'],
+    observable_evidence: ['说明输入、取舍、产出和复用结果'],
+    evidence_refs: ['F-002'],
+    status: '推断',
+  }
+
+  const validTalentProfileDraft = {
+    talent_profile: {
+      target_talent_profile: {
+        core_definition: '能把复杂项目经验迁移为平台化产品能力的人。',
+        transferable_backgrounds: ['平台产品', '复杂解决方案产品化'],
+        fit_signals: ['能说明抽象、取舍和复用结果'],
+        non_target_and_misjudgments: ['只有单项目跟单经验不等于平台产品经验'],
+        attraction_factors: ['从项目交付转向平台产品建设'],
+        evidence_refs: ['KRA-01', 'O-01'],
+      },
+      qualifications: {
+        hard_qualifications: [],
+        necessary_experience: [],
+        role_conditions: [],
+        must_have: [traceableRequirement],
+        preferred: [],
+        alternatives: [],
+      },
+      competency_model: {
+        knowledge: [],
+        skills: [traceableRequirement],
+        behavioral_competencies: [],
+        values_and_work_style: [],
+        career_motivation: [],
+      },
+    },
+  }
+
+  it('接受只包含人才画像增量的第二阶段模型输出', () => {
+    const result = TalentProfileDraftInputSchema.safeParse(validTalentProfileDraft)
+    expect(result.success).toBe(true)
+    if (result.success) {
+      expect(Object.keys(result.data.talent_profile)).toEqual([
+        'target_talent_profile',
+        'qualifications',
+        'competency_model',
+      ])
+    }
+  })
+
+  it('拒绝缺失可观察证据、岗位映射、证据引用或合法状态的人才条目', () => {
+    for (const requirement of [
+      { ...traceableRequirement, maps_to: [] },
+      { ...traceableRequirement, observable_evidence: [] },
+      { ...traceableRequirement, evidence_refs: [] },
+      { ...traceableRequirement, status: '已发布' },
+    ]) {
+      expect(TalentProfileDraftInputSchema.safeParse({
+        ...validTalentProfileDraft,
+        talent_profile: {
+          ...validTalentProfileDraft.talent_profile,
+          qualifications: {
+            ...validTalentProfileDraft.talent_profile.qualifications,
+            must_have: [requirement],
+          },
+        },
+      }).success).toBe(false)
+    }
+  })
+
+  it('拒绝夹带岗位说明的第二阶段模型输出', () => {
+    expect(TalentProfileDraftInputSchema.safeParse({
+      ...validTalentProfileDraft,
+      job_description: {},
+    }).success).toBe(false)
+  })
+
+  it('岗位画像 Prompt 给出三块人才画像及可追溯条目的输出契约', () => {
+    const prompt = promptForTask('GENERATE_ROLE_PROFILE')
+    const talentPrompt = prompt.slice(prompt.indexOf('当 task_context.role_profile_mode 为 TALENT_PROFILE'))
+    expect(talentPrompt).toContain('target_talent_profile')
+    expect(talentPrompt).toContain('qualifications')
+    expect(talentPrompt).toContain('competency_model')
+    expect(talentPrompt).toContain('maps_to')
+    expect(talentPrompt).toContain('observable_evidence')
+    expect(talentPrompt).toContain('evidence_refs')
+    expect(talentPrompt).toContain('status')
+    expect(talentPrompt.indexOf('target_talent_profile')).toBeLessThan(talentPrompt.indexOf('qualifications'))
+    expect(talentPrompt.indexOf('qualifications')).toBeLessThan(talentPrompt.indexOf('competency_model'))
   })
 })
 

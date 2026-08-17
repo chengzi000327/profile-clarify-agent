@@ -88,7 +88,35 @@ success_criteria 必须至少分别包含一项 3个月、6个月、12个月成�
 export const ROLE_PROFILE_TALENT_PROFILE_PROMPT = `当 task_context.role_profile_mode 为 TALENT_PROFILE：
 只读取 task_context.locked_job_description.content。
 第二阶段不得输出 job_description，不得重新解释或改写岗位说明。
-只输出 { talent_profile }，由服务端合并已锁定岗位说明。`
+只输出 { talent_profile }，由服务端合并已锁定岗位说明。talent_profile 必须按以下顺序完整包含三个语义区块：
+{
+  talent_profile: {
+    target_talent_profile: {
+      core_definition: string,
+      transferable_backgrounds: string[],
+      fit_signals: string[],
+      non_target_and_misjudgments: string[],
+      attraction_factors: string[],
+      evidence_refs: string[]
+    },
+    qualifications: {
+      hard_qualifications: TraceableRequirement[],
+      necessary_experience: TraceableRequirement[],
+      role_conditions: TraceableRequirement[],
+      must_have: TraceableRequirement[],
+      preferred: TraceableRequirement[],
+      alternatives: TraceableRequirement[]
+    },
+    competency_model: {
+      knowledge: TraceableRequirement[],
+      skills: TraceableRequirement[],
+      behavioral_competencies: TraceableRequirement[],
+      values_and_work_style: TraceableRequirement[],
+      career_motivation: TraceableRequirement[]
+    }
+  }
+}
+每个 TraceableRequirement 必须包含 id、name、definition、maps_to、observable_evidence、evidence_refs、status；maps_to、observable_evidence、evidence_refs 均至少一项，status 只能为“已确认”“待确认”“推断”或“冲突”。`
 
 export const ROLE_PROFILE_GENERATION_PROMPT = `<P-03 岗位画像生成>
 根据 task_context.role_profile_mode 路由到对应阶段：

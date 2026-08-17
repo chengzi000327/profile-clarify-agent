@@ -280,6 +280,60 @@ export const JobDescriptionDraftInputSchema = z.object({
 }).strict()
 export type JobDescriptionDraftInput = z.infer<typeof JobDescriptionDraftInputSchema>
 
+export const TalentProfileItemStatusSchema = z.enum(['已确认', '待确认', '推断', '冲突'])
+export type TalentProfileItemStatus = z.infer<typeof TalentProfileItemStatusSchema>
+
+const TraceableTalentRequirementSchema = z.object({
+  id: ArtifactIdSchema,
+  name: z.string().trim().min(1).max(200),
+  definition: ArtifactTextSchema,
+  maps_to: z.array(ArtifactIdSchema).min(1).max(12),
+  observable_evidence: z.array(ArtifactTextSchema).min(1).max(8),
+  evidence_refs: z.array(z.string().trim().min(1).max(120)).min(1).max(20),
+  status: TalentProfileItemStatusSchema,
+}).strict()
+
+export const TargetTalentProfileSchema = z.object({
+  core_definition: ArtifactTextSchema,
+  transferable_backgrounds: z.array(ArtifactTextSchema).max(12),
+  fit_signals: z.array(ArtifactTextSchema).max(12),
+  non_target_and_misjudgments: z.array(ArtifactTextSchema).max(12),
+  attraction_factors: z.array(ArtifactTextSchema).max(12),
+  evidence_refs: ArtifactEvidenceRefsSchema,
+}).strict()
+export type TargetTalentProfile = z.infer<typeof TargetTalentProfileSchema>
+
+export const QualificationsSchema = z.object({
+  hard_qualifications: z.array(TraceableTalentRequirementSchema).max(12),
+  necessary_experience: z.array(TraceableTalentRequirementSchema).max(12),
+  role_conditions: z.array(TraceableTalentRequirementSchema).max(12),
+  must_have: z.array(TraceableTalentRequirementSchema).max(12),
+  preferred: z.array(TraceableTalentRequirementSchema).max(12),
+  alternatives: z.array(TraceableTalentRequirementSchema).max(12),
+}).strict()
+export type Qualifications = z.infer<typeof QualificationsSchema>
+
+export const CompetencyModelSchema = z.object({
+  knowledge: z.array(TraceableTalentRequirementSchema).max(12),
+  skills: z.array(TraceableTalentRequirementSchema).max(12),
+  behavioral_competencies: z.array(TraceableTalentRequirementSchema).max(12),
+  values_and_work_style: z.array(TraceableTalentRequirementSchema).max(12),
+  career_motivation: z.array(TraceableTalentRequirementSchema).max(12),
+}).strict()
+export type CompetencyModel = z.infer<typeof CompetencyModelSchema>
+
+export const TalentProfileSchema = z.object({
+  target_talent_profile: TargetTalentProfileSchema,
+  qualifications: QualificationsSchema,
+  competency_model: CompetencyModelSchema,
+}).strict()
+export type TalentProfile = z.infer<typeof TalentProfileSchema>
+
+export const TalentProfileDraftInputSchema = z.object({
+  talent_profile: TalentProfileSchema,
+}).strict()
+export type TalentProfileDraftInput = z.infer<typeof TalentProfileDraftInputSchema>
+
 export const JobDescriptionConfirmationSchema = z.object({
   source_artifact_id: z.string().uuid(),
   section_hash: z.string().min(16),
@@ -303,8 +357,18 @@ export const RoleProfileJobDescriptionContentSchema = z.discriminatedUnion('stag
 ])
 export type RoleProfileJobDescriptionContent = z.infer<typeof RoleProfileJobDescriptionContentSchema>
 
+export const RoleProfileTalentDraftContentSchema = LegacyRoleProfileContentSchema.extend({
+  schema_version: z.literal('2'),
+  stage: z.literal('TALENT_PROFILE_DRAFT'),
+  job_description: JobDescriptionSchema,
+  job_description_confirmation: JobDescriptionConfirmationSchema,
+  talent_profile: TalentProfileSchema,
+}).strict()
+export type RoleProfileTalentDraftContent = z.infer<typeof RoleProfileTalentDraftContentSchema>
+
 export const RoleProfileContentSchema = z.union([
   RoleProfileJobDescriptionContentSchema,
+  RoleProfileTalentDraftContentSchema,
   LegacyRoleProfileContentSchema,
 ])
 export type RoleProfileContent = z.infer<typeof RoleProfileContentSchema>
