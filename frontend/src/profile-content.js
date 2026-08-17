@@ -33,7 +33,29 @@ const boundaryLabels = {
 };
 
 export function normalizeRoleProfileContent(content = {}, hc = null) {
-  const source = content && typeof content === 'object' ? content : {};
+  const rawSource = content && typeof content === 'object' ? content : {};
+  const isStagedV2 = rawSource.schema_version === '2' && Boolean(rawSource.job_description);
+  const rawJobDescription = asObject(rawSource.job_description);
+  const source = isStagedV2
+    ? {
+        ...rawSource,
+        mission: rawJobDescription.job_purpose?.statement,
+        hiring_reason: rawJobDescription.hiring_background,
+        success_outcomes: rawJobDescription.success_criteria,
+        work_scenarios: asArray(rawJobDescription.work_scenarios).map((item) => ({
+          ...asObject(item),
+          outcome_refs: item?.success_outcome_refs,
+        })),
+        responsibilities: asArray(rawJobDescription.key_accountabilities).map((item) => item?.responsibility),
+        boundaries: {
+          ...asObject(rawJobDescription.boundaries),
+          collaboration_and_resources: [
+            ...asArray(rawJobDescription.boundaries?.key_collaborations),
+            ...asArray(rawJobDescription.boundaries?.available_resources),
+          ],
+        },
+      }
+    : rawSource;
   const work = asArray(source.work);
   const legacyOutcomes = asArray(source.success_outcomes).length
     ? asArray(source.success_outcomes)
@@ -132,7 +154,68 @@ export function normalizeRoleProfileContent(content = {}, hc = null) {
     evidenceRefs: evidenceRefs(hiringReason.evidence_refs ?? hiringReason.evidence ?? source.evidence_refs),
   };
 
+  const jobDescription = isStagedV2 ? {
+    hiringBackground: {
+      businessChange: toText(rawJobDescription.hiring_background?.business_change),
+      organizationGap: toText(rawJobDescription.hiring_background?.organization_gap),
+      hiringConclusion: toText(rawJobDescription.hiring_background?.hiring_conclusion),
+      noHireImpact: toText(rawJobDescription.hiring_background?.no_hire_impact),
+      evidenceRefs: evidenceRefs(rawJobDescription.hiring_background?.evidence_refs),
+    },
+    jobPurpose: {
+      statement: toText(rawJobDescription.job_purpose?.statement),
+      evidenceRefs: evidenceRefs(rawJobDescription.job_purpose?.evidence_refs),
+    },
+    accountabilities: asArray(rawJobDescription.key_accountabilities).map((item, index) => ({
+      id: toText(item?.id) || `KRA-${String(index + 1).padStart(2, '0')}`,
+      name: toText(item?.name) || '待补充责任领域',
+      responsibility: toText(item?.responsibility) || '待补充持续承担的责任',
+      coreOutputs: textList(item?.core_outputs),
+      successOutcomeRefs: textList(item?.success_outcome_refs),
+      evidenceRefs: evidenceRefs(item?.evidence_refs),
+    })),
+    successCriteria: asArray(rawJobDescription.success_criteria).map((item, index) => ({
+      id: toText(item?.id) || `O-${String(index + 1).padStart(2, '0')}`,
+      horizon: toText(item?.horizon) || `阶段 ${index + 1}`,
+      title: toText(item?.title) || '待补充成功结果',
+      definition: toText(item?.definition) || '待补充结果定义',
+      measures: textList(item?.measures),
+      status: toText(item?.status) || '待确认',
+      evidenceRefs: evidenceRefs(item?.evidence_refs),
+    })),
+    workScenarios: asArray(rawJobDescription.work_scenarios).map((item, index) => ({
+      id: toText(item?.id) || `S-${String(index + 1).padStart(2, '0')}`,
+      title: toText(item?.title) || `关键工作场景 ${index + 1}`,
+      frequency: toText(item?.frequency) || '频率待确认',
+      trigger: toText(item?.trigger) || '触发情境待补充',
+      actions: toText(item?.actions) || joinText(item?.actions) || '关键动作待补充',
+      output: toText(item?.output) || joinText(item?.outputs) || '主要产出待补充',
+      challenge: toText(item?.challenge) || '核心挑战待补充',
+      stakeholders: textList(item?.stakeholders),
+      successOutcomeRefs: textList(item?.success_outcome_refs),
+      evidenceRefs: evidenceRefs(item?.evidence_refs),
+    })),
+    boundaries: {
+      owns: textList(rawJobDescription.boundaries?.owns),
+      doesNotOwn: textList(rawJobDescription.boundaries?.does_not_own),
+      decisionRights: textList(rawJobDescription.boundaries?.decision_rights),
+      keyCollaborations: textList(rawJobDescription.boundaries?.key_collaborations),
+      availableResources: textList(rawJobDescription.boundaries?.available_resources),
+      evidenceRefs: evidenceRefs(rawJobDescription.boundaries?.evidence_refs),
+    },
+    confirmation: {
+      sourceArtifactId: toText(rawSource.job_description_confirmation?.source_artifact_id),
+      sectionHash: toText(rawSource.job_description_confirmation?.section_hash),
+      confirmedBy: toText(rawSource.job_description_confirmation?.confirmed_by),
+      confirmedAt: toText(rawSource.job_description_confirmation?.confirmed_at),
+    },
+  } : null;
+
   return {
+    schemaVersion: isStagedV2 ? '2' : null,
+    internalStage: isStagedV2 ? toText(rawSource.stage) : null,
+    jobDescription,
+    talentProfile: isStagedV2 ? rawSource.talent_profile ?? null : null,
     mission: toText(source.mission) || toText(hiringReason.mission) || '当前版本未形成岗位使命，请生成新版本补齐。',
     recruitment,
     outcomes,

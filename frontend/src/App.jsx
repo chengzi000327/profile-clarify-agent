@@ -95,6 +95,25 @@ const artifactPresentation = {
   HR_RECRUITING_BRIEF: { name: '招聘画像', draftAction: '确认招聘画像', generateAction: '生成招聘画像' },
 };
 
+function roleProfileAction(latest) {
+  if (!latest) return { kind: 'generate', label: '生成岗位说明' };
+  if (latest.content?.schema_version !== '2') {
+    return latest.status === 'DRAFT'
+      ? { kind: 'confirm', label: '确认画像依据' }
+      : { kind: 'generate', label: '生成新版本' };
+  }
+  if (latest.content.stage === 'JOB_DESCRIPTION_DRAFT') {
+    return { kind: 'confirm', label: '确认岗位说明' };
+  }
+  if (latest.content.stage === 'JOB_DESCRIPTION_CONFIRMED') {
+    return { kind: 'generate', label: '推导人才画像' };
+  }
+  if (latest.content.stage === 'TALENT_PROFILE_DRAFT' && latest.status === 'DRAFT') {
+    return { kind: 'confirm', label: '确认完整岗位画像' };
+  }
+  return { kind: 'generate', label: '生成新版本' };
+}
+
 class ArtifactRenderBoundary extends React.Component {
   constructor(props) {
     super(props);
@@ -512,8 +531,9 @@ function App() {
   async function handleArtifactAction(type) {
     if (!activeRoleId || !roleDetail) return;
     const latest = roleDetail.state.latest_artifacts?.[type];
+    const action = type === 'ROLE_PROFILE' ? roleProfileAction(latest) : null;
     try {
-      if (latest?.status === 'DRAFT') {
+      if (action?.kind === 'confirm' || (!action && latest?.status === 'DRAFT')) {
         await api.confirmArtifact(
           activeRoleId,
           latest.id,
@@ -1310,11 +1330,13 @@ function ProfileView({
   const latestArtifact = roleDetail?.state?.latest_artifacts?.[artifactType];
   const presentation = artifactPresentation[artifactType];
   const canManageArtifact = section === 'portrait' ? viewerRole === 'hr' : viewerRole === 'manager';
-  const connectedActionLabel = latestArtifact?.status === 'DRAFT'
-    ? presentation.draftAction
-    : latestArtifact?.status === 'CONFIRMED'
-      ? '生成新版本'
-      : presentation.generateAction;
+  const connectedActionLabel = artifactType === 'ROLE_PROFILE'
+    ? roleProfileAction(latestArtifact).label
+    : latestArtifact?.status === 'DRAFT'
+      ? presentation.draftAction
+      : latestArtifact?.status === 'CONFIRMED'
+        ? '生成新版本'
+        : presentation.generateAction;
   return (
     <section className="profile-surface redesigned-profile">
       <div className="profile-page profile-page-wide">
@@ -1591,6 +1613,102 @@ function GeneratedProfileBasis({ artifact, state, onOpenEvidence }) {
     ORGANIZATION_ADJUSTMENT: '组织调整',
     OTHER: '其他补充',
   })[hc?.job_basics?.recruitment_type] ?? '已审批编制'} ${hc?.job_basics?.headcount ?? 1} 人`;
+  if (profile.schemaVersion === '2' && profile.jobDescription) {
+    const jobDescription = profile.jobDescription;
+    const stageLabel = profile.internalStage === 'JOB_DESCRIPTION_CONFIRMED'
+      ? '岗位说明已锁定'
+      : '岗位说明待确认';
+    return (
+      <article className="generated-artifact-document role-profile-artifact">
+        <section className="generated-artifact-hero">
+          <span><Target size={14} />{stageLabel}</span>
+          <h2>岗位说明</h2>
+          <p>以下内容基于已审批 HC 基本信息生成；HC 基本信息继续在页面顶部只读展示。</p>
+        </section>
+        <section className="generated-section hiring-reason-section">
+          <header><span>01</span><div><h3>招聘背景</h3><p>说明本次招聘对应的业务变化、组织缺口与不招聘影响。</p></div></header>
+          <div className="generated-decision-chain">
+            <div><small>业务变化</small><strong>{jobDescription.hiringBackground.businessChange}</strong></div>
+            <ChevronRight size={14} />
+            <div><small>组织缺口</small><strong>{jobDescription.hiringBackground.organizationGap}</strong></div>
+            <ChevronRight size={14} />
+            <div className="conclusion"><small>招聘结论</small><strong>{jobDescription.hiringBackground.hiringConclusion}</strong></div>
+          </div>
+          {jobDescription.hiringBackground.noHireImpact && <p><strong>不招聘的影响：</strong>{jobDescription.hiringBackground.noHireImpact}</p>}
+          <ArtifactEvidenceRefs refs={jobDescription.hiringBackground.evidenceRefs} onOpenEvidence={onOpenEvidence} />
+        </section>
+        <section className="generated-section">
+          <header><span>02</span><div><h3>岗位设置目的</h3><p>岗位为何存在，以及持续为组织创造的价值。</p></div></header>
+          <p>{jobDescription.jobPurpose.statement}</p>
+          <ArtifactEvidenceRefs refs={jobDescription.jobPurpose.evidenceRefs} onOpenEvidence={onOpenEvidence} />
+        </section>
+        <section className="generated-section">
+          <header><span>03</span><div><h3>关键责任领域</h3><p>持续承担的主要责任、核心产出及其关联成功结果。</p></div></header>
+          <div className="generated-requirement-list">
+            {jobDescription.accountabilities.map((item, index) => (
+              <details key={item.id} defaultOpen={index === 0}>
+                <summary><span className="must">{item.id}</span><strong>{item.name}</strong><ChevronDown size={15} /></summary>
+                <div className="generated-requirement-detail">
+                  <DefinitionItem label="持续承担的责任" value={item.responsibility} />
+                  <DefinitionItem label="核心产出" value={item.coreOutputs.join('；')} />
+                  <DefinitionItem label="关联成功结果" value={item.successOutcomeRefs.join('；')} />
+                  <ArtifactEvidenceRefs refs={item.evidenceRefs} onOpenEvidence={onOpenEvidence} />
+                </div>
+              </details>
+            ))}
+          </div>
+        </section>
+        <section className="generated-section">
+          <header><span>04</span><div><h3>关键绩效结果与成功标准</h3><p>按 3 / 6 / 12 个月明确结果定义、衡量方式与确认状态。</p></div></header>
+          <div className="generated-outcome-list">
+            {jobDescription.successCriteria.map((outcome) => (
+              <div className="generated-outcome-row" key={outcome.id}>
+                <div className="generated-outcome-time"><small>{outcome.id}</small><strong>{outcome.horizon}</strong></div>
+                <div className="generated-outcome-main">
+                  <div><h4>{outcome.title}</h4><span>{outcome.status}</span></div>
+                  <p>{outcome.definition}</p>
+                  {outcome.measures.length > 0 && <div>{outcome.measures.map((measure) => <em key={measure}>{measure}</em>)}</div>}
+                </div>
+                <ArtifactEvidenceRefs refs={outcome.evidenceRefs} onOpenEvidence={onOpenEvidence} />
+              </div>
+            ))}
+          </div>
+        </section>
+        <section className="generated-section">
+          <header><span>05</span><div><h3>关键工作场景与挑战</h3><p>描述岗位成功所面对的真实工作情境、挑战与协作关系。</p></div></header>
+          <div className="generated-scenario-list">
+            {jobDescription.workScenarios.map((scenario, index) => (
+              <details key={scenario.id} defaultOpen={index === 0}>
+                <summary>
+                  <span>{scenario.id}</span><strong>{scenario.title}</strong><small>{scenario.frequency}</small>
+                  {scenario.successOutcomeRefs.length > 0 && <em>{scenario.successOutcomeRefs.join(' · ')}</em>}
+                  <ChevronDown size={15} />
+                </summary>
+                <div className="generated-scenario-detail">
+                  <DefinitionItem label="触发情境" value={scenario.trigger} />
+                  <DefinitionItem label="关键动作" value={scenario.actions} />
+                  <DefinitionItem label="主要产出" value={scenario.output} />
+                  <DefinitionItem label="核心挑战" value={scenario.challenge} />
+                  <DefinitionItem label="协作对象" value={scenario.stakeholders.join('；')} />
+                  <ArtifactEvidenceRefs refs={scenario.evidenceRefs} onOpenEvidence={onOpenEvidence} />
+                </div>
+              </details>
+            ))}
+          </div>
+        </section>
+        <section className="generated-section boundary-generated-section">
+          <header><span>06</span><div><h3>权责边界</h3><p>明确负责、不负责、决策权限、关键协作关系和可调用资源。</p></div></header>
+          <div className="generated-boundary-grid">
+            <div><h4><Check size={13} />需要负责</h4>{jobDescription.boundaries.owns.map((item) => <p key={item}>{item}</p>)}</div>
+            <div><h4><X size={13} />不直接负责</h4>{jobDescription.boundaries.doesNotOwn.map((item) => <p key={item}>{item}</p>)}</div>
+            <div><h4>决策权限</h4><p>{jobDescription.boundaries.decisionRights.join('；')}</p></div>
+            <div><h4>关键协作与资源</h4><p>{[...jobDescription.boundaries.keyCollaborations, ...jobDescription.boundaries.availableResources].join('；')}</p></div>
+          </div>
+          <ArtifactEvidenceRefs refs={jobDescription.boundaries.evidenceRefs} onOpenEvidence={onOpenEvidence} />
+        </section>
+      </article>
+    );
+  }
   return (
     <article className="generated-artifact-document role-profile-artifact">
       <section className="generated-artifact-hero">
