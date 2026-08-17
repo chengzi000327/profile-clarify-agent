@@ -1611,7 +1611,8 @@ function GeneratedProfileBasis({ artifact, state, onOpenEvidence }) {
   const [stagedDetailOpen, setStagedDetailOpen] = useState({});
   const isStagedDetailOpen = (key, initiallyOpen) => stagedDetailOpen[key] ?? initiallyOpen;
   const rememberStagedDetailToggle = (key) => (event) => {
-    setStagedDetailOpen((current) => ({ ...current, [key]: event.currentTarget.open }));
+    const isOpen = event.currentTarget.open;
+    setStagedDetailOpen((current) => ({ ...current, [key]: isOpen }));
   };
   const approvedFact = `${({
     NEW_HEADCOUNT: '新增正式编制',
