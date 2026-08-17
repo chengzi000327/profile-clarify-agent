@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   Clock3,
   Filter,
+  MessageSquare,
   RefreshCw,
   Search,
   Settings2,
@@ -188,7 +189,7 @@ export default function AdminTraceConsole() {
         <div>
           <span className="trace-kicker"><ShieldCheck size={14} />企业管理员最高权限</span>
           <h1>Agent Trace 控制台</h1>
-          <p>查看企业内全部岗位的完整执行轨迹、模型路由、工具入参与返回、模型输入输出和运行指标。</p>
+          <p>查看同一企业内所有账号的岗位会话原文，以及每一轮 Agent 的完整执行轨迹、模型输入输出和工具调用。</p>
         </div>
         <div className="trace-policy-card">
           <span><Settings2 size={14} />企业澄清策略</span>
@@ -209,7 +210,7 @@ export default function AdminTraceConsole() {
 
       <div className="trace-console-grid">
         <aside className="trace-run-list">
-          <div className="trace-list-heading"><strong>运行记录</strong><span>{filteredRuns.length}</span></div>
+          <div className="trace-list-heading"><strong>企业全部会话运行</strong><span>{filteredRuns.length}</span></div>
           {loading && <div className="trace-empty">正在读取运行记录…</div>}
           {!loading && filteredRuns.length === 0 && <div className="trace-empty">暂无符合条件的运行记录</div>}
           {filteredRuns.map((item) => (
@@ -236,6 +237,30 @@ export default function AdminTraceConsole() {
                 <div><span>工具调用</span><strong>{trace.run.tool_count}</strong><small><Wrench size={11} />最多10个内部步骤</small></div>
               </div>
               <div className="trace-privacy-note"><ShieldCheck size={14} /><span>完整 Trace 已开启：上下文按 System Prompt、当前输入、短期会话记忆、长期岗位记忆与任务状态分层，并保留实际模型请求、最终输出和工具调用。API Key、Cookie、内部令牌及模型未提供的隐藏思维链不采集。</span></div>
+              <section className="trace-conversation-history">
+                <header>
+                  <div><MessageSquare size={14} /><strong>企业会话记录</strong><span>{trace.conversation?.role_title}</span></div>
+                  <small>{trace.conversation?.messages?.length ?? 0} 条 · 当前运行已标记</small>
+                </header>
+                <div className="trace-conversation-messages">
+                  {(trace.conversation?.messages ?? []).length === 0 ? (
+                    <div className="trace-conversation-empty">当前岗位还没有已保存的会话消息</div>
+                  ) : trace.conversation.messages.map((message) => {
+                    const sender = message.sender_type === 'AGENT'
+                      ? '画像澄清 Agent'
+                      : message.sender_type === 'SYSTEM'
+                        ? '系统'
+                        : `${message.sender_name} · ${roleLabel[message.sender_role] ?? '成员'}`;
+                    return (
+                      <article className={`${message.sender_type.toLowerCase()} ${message.run_id === trace.run.id ? 'current-run' : ''}`} key={message.id}>
+                        <header><strong>{sender}</strong><time>{formatTime(message.created_at)}</time></header>
+                        <p>{message.content}</p>
+                        {message.run_id === trace.run.id && <em>当前运行</em>}
+                      </article>
+                    );
+                  })}
+                </div>
+              </section>
               <div className="trace-timeline">
                 {trace.events.map((event) => (
                   <div className={`trace-event ${event.type.includes('failed') ? 'failed' : ''}`} key={event.id}>

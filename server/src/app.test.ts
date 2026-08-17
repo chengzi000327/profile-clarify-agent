@@ -630,6 +630,15 @@ describe('Role Clarifier API', () => {
       await new Promise((resolve) => setTimeout(resolve, 10))
     }
     expect(trace.run.status).toBe('COMPLETED')
+    expect(trace.conversation).toMatchObject({
+      role_session_id: DEMO_ROLE_SESSION_ID,
+      role_title: '企业产品经理',
+    })
+    expect(
+      trace.conversation.messages.some(
+        (message: { content: string }) => message.content.includes('半年内要建立'),
+      ),
+    ).toBe(true)
     expect(trace.events.map((event: { type: string }) => event.type)).toContain('question.ready')
     expect(trace.visibility).toEqual({
       mode: 'FULL_ADMIN',
@@ -655,6 +664,20 @@ describe('Role Clarifier API', () => {
     expect(trace.events.map((event: { type: string }) => event.type)).toContain('model.response')
     expect(trace.events.find((event: { type: string }) => event.type === 'tool.started').payload)
       .toHaveProperty('arguments')
+
+    const enterpriseRuns = await app.inject({
+      method: 'GET',
+      url: '/api/v1/admin/agent-runs',
+      headers: { cookie: adminCookie },
+    })
+    expect(enterpriseRuns.statusCode).toBe(200)
+    expect(enterpriseRuns.json().items).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        run: expect.objectContaining({ id: runId }),
+        actor_display_name: '用人经理 · 陈曦',
+        actor_role: 'MANAGER',
+      }),
+    ]))
 
     const messages = await app.inject({
       method: 'GET',

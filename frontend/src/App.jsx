@@ -361,28 +361,6 @@ function App() {
     }
   }
 
-  async function sendIntakeMessage(content) {
-    setRequestError('');
-    setAgentStatus('running');
-    try {
-      const result = await api.startIntake(content, testRoleParam);
-      const roleId = result.role.state.id;
-      setNewConversationMode(false);
-      setActiveRoleId(roleId);
-      setRoleDetail(result.role);
-      setMessages([result.message]);
-      setActiveView('conversation');
-      connectRun(result, roleId);
-      Promise.all([
-        loadRoleSessions(false, roleId),
-        refreshConversation(roleId),
-      ]).catch((error) => setRequestError(error.message));
-    } catch (error) {
-      setAgentStatus('failed');
-      setRequestError(error.message);
-    }
-  }
-
   async function extendClarification(reason) {
     if (!activeRoleId) return;
     try {
@@ -429,12 +407,9 @@ function App() {
         displayActor={conversationActor}
         activeView={activeView}
         roleSessions={roleSessions}
-        agentEvents={agentEvents}
-        agentStatus={agentStatus}
         requestError={requestError}
         onDismissError={() => setRequestError('')}
         onChooseRole={chooseRole}
-        onSend={sendIntakeMessage}
         onOpenConversation={() => setActiveView('conversation')}
         onOpenTrace={() => setActiveView('admin-trace')}
         onStartNew={startNewConversation}
@@ -470,7 +445,7 @@ function App() {
 
         <button className="new-project-button" onClick={startNewConversation} disabled={!canCreateRole}>
           <Plus size={17} />
-          {!sidebarCollapsed && <span>{canCreateRole ? '开始新岗位对话' : 'HR 查看获批岗位'}</span>}
+          {!sidebarCollapsed && <span>{canCreateRole ? '选择已审批 HC' : 'HR 查看获批岗位'}</span>}
         </button>
 
         {actor.role === 'ADMIN' && !sidebarCollapsed && (
@@ -632,12 +607,9 @@ function EmptyWorkspace({
   displayActor,
   activeView,
   roleSessions,
-  agentEvents,
-  agentStatus,
   requestError,
   onDismissError,
   onChooseRole,
-  onSend,
   onOpenConversation,
   onOpenTrace,
   onStartNew,
@@ -660,7 +632,7 @@ function EmptyWorkspace({
           </div>
         </div>
         <button className="new-project-button" onClick={onStartNew} disabled={!canCreateRole}>
-          <Plus size={17} /><span>{canCreateRole ? '开始新岗位对话' : 'HR 查看获批岗位'}</span>
+          <Plus size={17} /><span>{canCreateRole ? '选择已审批 HC' : 'HR 查看获批岗位'}</span>
         </button>
         {actor.role === 'ADMIN' && (
           <AdminTestRoleSwitch value={adminTestRole} onChange={onAdminTestRoleChange} />
@@ -676,7 +648,7 @@ function EmptyWorkspace({
           {roleSessions.length === 0 ? (
             <div className="empty-session-list">
               <span className="session-icon"><MessageSquare size={15} /></span>
-              <span><strong>还没有岗位会话</strong><small>直接在右侧和 Agent 聊聊</small></span>
+              <span><strong>暂无已分配岗位</strong><small>等待 HC 审批与分配</small></span>
             </div>
           ) : roleSessions.map((role) => (
             <button className="role-session-row" key={role.id} onClick={() => onChooseRole(role.id)}>
@@ -718,15 +690,15 @@ function EmptyWorkspace({
         <header className="workspace-header">
           <div className="title-stack">
             <div className="title-line">
-              <strong>{canCreateRole ? '新岗位对话' : '已审批岗位'}</strong>
-              <span className="role-stage-badge empty">{canCreateRole ? '等待识别' : '暂无岗位'}</span>
+              <strong>{canCreateRole ? '选择已审批 HC' : '已审批岗位'}</strong>
+              <span className="role-stage-badge empty">{canCreateRole ? 'HC 已同步' : '暂无岗位'}</span>
             </div>
             <div className="preset-line">
               <span className="preset-badge"><ClarifierMark size={16} />画像澄清 Agent</span>
               <span className="phase-dot" />
-              <span>{canCreateRole ? '直接描述招聘需求' : '仅展示 HC 已审批岗位'}</span>
+              <span>{canCreateRole ? '岗位从 HC 审批进入' : '仅展示 HC 已审批岗位'}</span>
               <span className="phase-dot" />
-              <span>未生成画像</span>
+              <span>{canCreateRole ? '不在此新建招聘需求' : '等待岗位分配'}</span>
             </div>
           </div>
           <div className="header-actions">
@@ -778,41 +750,55 @@ function EmptyWorkspace({
             </div>
           </section>
         ) : (
-          <section className="conversation-surface real-conversation empty-conversation">
+          <section className="conversation-surface real-conversation empty-conversation hc-intake-workspace">
             <div className="conversation-scroll">
               <div className="transcript">
                 <div className="session-intro">
                   <ClarifierMark size={40} plate />
                   <div>
-                    <h1>先聊聊你为什么想招人</h1>
-                    <p>不用先创建岗位或填写表单。直接描述业务问题，Agent 会在对话中识别岗位、补齐事实并逐步建立岗位画像。</p>
+                    <h1>从已审批 HC 开始岗位画像澄清</h1>
+                    <p>这里不重新申请编制，也不凭一句话新建岗位。选择已经通过审批并分配给你的 HC，系统会自动带入招聘原因和岗位基本信息。</p>
                   </div>
                 </div>
 
                 <div className="conversation-policy-strip empty-policy-strip">
-                  <span><CircleDot size={13} />岗位建立 <strong>从第一句话开始</strong></span>
-                  <span>岗位名称、团队和成功标准会在对话中逐步补全</span>
+                  <span><CheckCircle2 size={13} />招聘前置判断 <strong>HC 审批已完成</strong></span>
+                  <span>审批原因与基本信息是 Agent 输入，不由 Agent 凭空生成</span>
                 </div>
 
-                <div className="message message-agent empty-onboarding-message">
+                <div className="message message-agent empty-onboarding-message hc-intake-message">
                   <span className="agent-avatar"><ClarifierMark size={25} /></span>
                   <div className="message-body">
                     <div className="message-label">画像澄清 Agent</div>
-                    <p>你好，{displayActor.display_name}。我们不用从一张表单开始。</p>
-                    <p>你可以直接说：“最近业务遇到了什么问题，所以想招什么样的人？”我会边聊边帮你建立岗位。</p>
-                    <div className="empty-chat-starters">
-                      <span><Sparkles size={14} />你可以这样开始</span>
-                      <button type="button" onClick={() => onSend('我们有一个新的业务目标，但还不确定应该招聘什么岗位，你先帮我梳理一下。')}>有业务目标，但岗位还没想清楚</button>
-                      <button type="button" onClick={() => onSend('我想招聘一位企业产品经理，请从招聘原因开始帮我澄清。')}>已经知道想招什么岗位</button>
+                    <p>你好，{displayActor.display_name}。以下是当前分配给你的已审批 HC。</p>
+                    <p>选择岗位后，我会基于 HC 中已确认的事实继续澄清成功标准、岗位画像、评估方案和对外 JD。</p>
+                    <div className="hc-approved-role-list">
+                      {roleSessions.length === 0 ? (
+                        <div className="hc-approved-empty">
+                          <AlertTriangle size={15} />当前没有分配给你的已审批 HC，请联系 HR 或企业管理员确认 HC 负责人。
+                        </div>
+                      ) : roleSessions.map((role) => {
+                        const hc = role.apiState?.hc_context;
+                        const basics = hc?.job_basics;
+                        return (
+                          <button type="button" key={role.id} onClick={() => onChooseRole(role.id)}>
+                            <span className="hc-approved-role-main">
+                              <span><strong>{role.name}</strong><em><CheckCircle2 size={11} />HC 已审批</em></span>
+                              <small>{role.team} · {recruitmentTypeLabel[basics?.recruitment_type] ?? '招聘类型待同步'} · {basics?.headcount ?? 0} 人</small>
+                              <p>{hc?.approved_reason ?? '招聘原因已在 HC 中确认，进入岗位后可查看完整内容。'}</p>
+                            </span>
+                            <span className="hc-approved-role-action">
+                              <small>{hc?.request_id ?? 'HC 编号待同步'}</small>
+                              <strong>进入岗位澄清<ChevronRight size={14} /></strong>
+                            </span>
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
                 </div>
-                {(agentStatus === 'running' || agentStatus === 'reconnecting') && (
-                  <LiveAgentRun events={agentEvents} status={agentStatus} />
-                )}
               </div>
             </div>
-            <Composer onSend={onSend} pending={agentStatus === 'running' || agentStatus === 'reconnecting'} />
           </section>
         )}
       </main>

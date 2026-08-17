@@ -255,8 +255,11 @@ export const buildApp = async (
     if (view.state.tenant_id !== actor.tenant_id) {
       throw new DomainError('AGENT_RUN_NOT_FOUND', 'Agent Run 不存在', 404)
     }
-    const events = await store.listRunEvents(runId)
-    const runActor = await store.getUser(record.run.actor_user_id)
+    const [events, conversationMessages, runActor] = await Promise.all([
+      store.listRunEvents(runId),
+      store.listConversationMessages(record.run.role_session_id),
+      store.getUser(record.run.actor_user_id),
+    ])
     await store.appendTraceAccessAudit({
       id: randomUUID(),
       tenant_id: actor.tenant_id,
@@ -270,6 +273,11 @@ export const buildApp = async (
       run: record.run,
       actual_actor_role: runActor?.role ?? null,
       events,
+      conversation: {
+        role_session_id: view.state.id,
+        role_title: view.state.title,
+        messages: conversationMessages,
+      },
       visibility: {
         mode: 'FULL_ADMIN',
         raw_user_message_logged: true,
