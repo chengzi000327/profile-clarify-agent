@@ -223,7 +223,7 @@ describe('人才画像增量契约', () => {
       },
       competency_model: {
         knowledge: [],
-        skills: [traceableRequirement],
+        skills: [{ ...traceableRequirement, id: 'COMP-01' }],
         behavioral_competencies: [],
         values_and_work_style: [],
         career_motivation: [],
@@ -365,7 +365,7 @@ describe('人才画像增量契约', () => {
     },
   }
 
-  it('接受只包含人才画像增量的第二阶段模型输出', () => {
+  it('接受 requirement ID 全局唯一的人才画像增量输出', () => {
     const result = TalentProfileDraftInputSchema.safeParse(validTalentProfileDraft)
     expect(result.success).toBe(true)
     if (result.success) {
@@ -395,6 +395,30 @@ describe('人才画像增量契约', () => {
 
   it('接受分布在不同分组的 13 项人才要求输入', () => {
     expect(TalentProfileDraftInputSchema.safeParse(thirteenTalentProfileDraft).success).toBe(true)
+  })
+
+  it('拒绝同一分组内重复的 requirement ID', () => {
+    expect(TalentProfileDraftInputSchema.safeParse({
+      talent_profile: {
+        ...validTalentProfileDraft.talent_profile,
+        qualifications: {
+          ...validTalentProfileDraft.talent_profile.qualifications,
+          must_have: [traceableRequirement, { ...traceableRequirement }],
+        },
+      },
+    }).success).toBe(false)
+  })
+
+  it('拒绝跨任职资格与胜任力分组重复的 requirement ID', () => {
+    expect(TalentProfileDraftInputSchema.safeParse({
+      talent_profile: {
+        ...validTalentProfileDraft.talent_profile,
+        competency_model: {
+          ...validTalentProfileDraft.talent_profile.competency_model,
+          skills: [{ ...traceableRequirement }],
+        },
+      },
+    }).success).toBe(false)
   })
 
   it('拒绝缺失可观察证据、岗位映射、证据引用或合法状态的人才条目', () => {
@@ -475,6 +499,7 @@ describe('人才画像增量契约', () => {
     expect(talentPrompt).toContain('evidence_refs')
     expect(talentPrompt).toContain('status')
     expect(talentPrompt).toContain('11 个分组合计至少包含 1 项 TraceableRequirement')
+    expect(talentPrompt).toContain('11 个分组内及跨分组的 id 必须全局唯一')
     expect(talentPrompt.indexOf('target_talent_profile')).toBeLessThan(talentPrompt.indexOf('qualifications'))
     expect(talentPrompt.indexOf('qualifications')).toBeLessThan(talentPrompt.indexOf('competency_model'))
   })

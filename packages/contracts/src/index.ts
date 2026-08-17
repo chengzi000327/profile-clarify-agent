@@ -327,14 +327,22 @@ export const TalentProfileSchema = z.object({
   qualifications: QualificationsSchema,
   competency_model: CompetencyModelSchema,
 }).strict().superRefine((profile, context) => {
-  const requirementCount = [
+  const requirementGroups = [
     ...Object.values(profile.qualifications),
     ...Object.values(profile.competency_model),
-  ].reduce((total, requirements) => total + requirements.length, 0)
+  ]
+  const requirementCount = requirementGroups.reduce((total, requirements) => total + requirements.length, 0)
   if (requirementCount === 0) {
     context.addIssue({
       code: z.ZodIssueCode.custom,
       message: '任职资格和胜任力模型必须合计至少包含一项人才要求',
+    })
+  }
+  const requirementIds = requirementGroups.flatMap((requirements) => requirements.map(({ id }) => id))
+  if (new Set(requirementIds).size !== requirementIds.length) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: '人才要求 id 在任职资格和胜任力模型的 11 个分组内必须全局唯一',
     })
   }
 })

@@ -117,7 +117,7 @@ export const ROLE_PROFILE_TALENT_PROFILE_PROMPT = `当 task_context.role_profile
   }
 }
 每个 TraceableRequirement 必须包含 id、name、definition、maps_to、observable_evidence、evidence_refs、status；maps_to、observable_evidence、evidence_refs 均至少一项，status 只能为“已确认”“待确认”“推断”或“冲突”。
-任职资格和胜任力模型的 11 个分组合计至少包含 1 项 TraceableRequirement。`
+任职资格和胜任力模型的 11 个分组合计至少包含 1 项 TraceableRequirement，11 个分组内及跨分组的 id 必须全局唯一。`
 
 export const ROLE_PROFILE_GENERATION_PROMPT = `<P-03 岗位画像生成>
 根据 task_context.role_profile_mode 路由到对应阶段：
