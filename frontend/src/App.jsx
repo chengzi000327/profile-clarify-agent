@@ -1236,6 +1236,9 @@ function roleBasicInfo(state, viewerRole) {
 
 function ArtifactEmptyState({ artifactType, invalidated, canManage, onGenerate, busy }) {
   const presentation = artifactPresentation[artifactType];
+  const actionLabel = artifactType === 'ROLE_PROFILE'
+    ? roleProfileAction(null).label
+    : presentation.generateAction;
   const prerequisite = {
     ROLE_PROFILE: 'HC 已审批后即可生成；Agent 会基于招聘原因、成功标准和已确认事实形成草稿。',
     ASSESSMENT_SCORECARD: '先形成岗位画像，再把成功标准转成可执行的面试维度和判断锚点。',
@@ -1249,7 +1252,7 @@ function ArtifactEmptyState({ artifactType, invalidated, canManage, onGenerate, 
       <p>{invalidated ? '上游产物已发生变化，请生成新版本以保持内容一致。' : prerequisite}</p>
       {canManage ? (
         <button className="primary-action" type="button" onClick={onGenerate} disabled={busy}>
-          {busy ? 'Agent 生成中…' : presentation.generateAction}<ChevronRight size={15} />
+          {busy ? 'Agent 生成中…' : actionLabel}<ChevronRight size={15} />
         </button>
       ) : (
         <small>当前身份可查看该产物，但需要由{artifactType === 'HR_RECRUITING_BRIEF' ? ' HR' : '用人经理'}生成和确认。</small>
