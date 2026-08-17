@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { normalizeRoleProfileContent, roleProfileAction } from './profile-content.js';
+import {
+  normalizeRoleProfileContent,
+  roleProfileAction,
+  roleProfileRequirementInstanceKey,
+} from './profile-content.js';
 
 const validJobDescription = {
   hiring_background: {
@@ -128,6 +132,15 @@ test('offers talent-profile derivation from a confirmed job description', () => 
     status: 'CONFIRMED',
     content: { schema_version: '2', stage: 'TALENT_PROFILE_DRAFT' },
   }), { kind: 'generate', label: '生成新版本' });
+});
+
+test('creates stable distinct requirement instance keys for duplicate ids in one group', () => {
+  const duplicateRequirement = { id: 'Q-01' };
+  const first = roleProfileRequirementInstanceKey('must-have', duplicateRequirement, 0);
+  const second = roleProfileRequirementInstanceKey('must-have', duplicateRequirement, 1);
+
+  assert.notEqual(first, second);
+  assert.equal(first, roleProfileRequirementInstanceKey('must-have', duplicateRequirement, 0));
 });
 
 test('normalizes staged V2 job description without fabricating talent content', () => {

@@ -45,6 +45,9 @@ const normalizeTalentRequirement = (item, index, prefix) => ({
 const normalizeTalentRequirementGroup = (value, prefix) => asArray(value)
   .map((item, index) => normalizeTalentRequirement(item, index, prefix));
 
+export const roleProfileRequirementInstanceKey = (prefix, item, index) =>
+  `${prefix}:${toText(item?.id) || 'requirement'}:${index}`;
+
 const normalizeTalentProfile = (value) => {
   const source = asObject(value);
   const target = asObject(source.target_talent_profile);

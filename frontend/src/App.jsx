@@ -37,7 +37,11 @@ import {
 } from './data.js';
 import { api, ApiError } from './api/client.js';
 import { normalizeAssessmentContent } from './assessment-content.js';
-import { normalizeRoleProfileContent, roleProfileAction } from './profile-content.js';
+import {
+  normalizeRoleProfileContent,
+  roleProfileAction,
+  roleProfileRequirementInstanceKey,
+} from './profile-content.js';
 import { normalizePublicJDContent } from './public-jd-content.js';
 import LoginScreen from './components/LoginScreen.jsx';
 import { Composer, LiveAgentRun } from './components/AgentConversation.jsx';
@@ -1591,12 +1595,12 @@ function TalentRequirementGroup({ title, items, detailKeyPrefix, onOpenEvidence,
       <h4>{title}</h4>
       <div className="generated-requirement-list">
         {items.map((item, index) => {
-          const detailKey = `${detailKeyPrefix}:${item.id}`;
+          const instanceKey = roleProfileRequirementInstanceKey(detailKeyPrefix, item, index);
           return (
             <details
-              key={item.id}
-              open={isDetailOpen(detailKey, index === 0)}
-              onToggle={onDetailToggle(detailKey)}
+              key={instanceKey}
+              open={isDetailOpen(instanceKey, index === 0)}
+              onToggle={onDetailToggle(instanceKey)}
             >
               <summary>
                 <span className="must">{item.status}</span>
