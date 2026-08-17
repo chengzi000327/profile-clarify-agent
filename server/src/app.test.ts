@@ -593,6 +593,27 @@ describe('Role Clarifier API', () => {
     expect(lockedConfirmation.confirmed_by).toBe('manager-demo')
   })
 
+  it('预置岗位画像三阶段时间线确定且按创建、锁定、生成、确认单调推进', async () => {
+    const roleProfilesOf = (aggregate: ReturnType<typeof createDemoAggregate>) => aggregate.artifacts
+      .filter((artifact) => artifact.type === 'ROLE_PROFILE')
+      .sort((left, right) => left.version - right.version)
+    const first = roleProfilesOf(createDemoAggregate())
+    const [sourceDraft, lockedDescription, finalProfile] = first
+    const lockConfirmedAt = (lockedDescription!.content as {
+      job_description_confirmation: { confirmed_at: string }
+    }).job_description_confirmation.confirmed_at
+
+    expect(Date.parse(sourceDraft!.created_at)).toBeLessThanOrEqual(Date.parse(lockedDescription!.created_at))
+    expect(Date.parse(lockedDescription!.created_at)).toBeLessThanOrEqual(Date.parse(lockConfirmedAt))
+    expect(Date.parse(lockConfirmedAt)).toBeLessThanOrEqual(Date.parse(finalProfile!.created_at))
+    expect(Date.parse(finalProfile!.created_at)).toBeLessThanOrEqual(Date.parse(finalProfile!.confirmed_at!))
+
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    const second = roleProfilesOf(createDemoAggregate())
+    expect(second.map(({ created_at, confirmed_at }) => ({ created_at, confirmed_at })))
+      .toEqual(first.map(({ created_at, confirmed_at }) => ({ created_at, confirmed_at })))
+  })
+
   const lockJobDescription = async () => {
     const draft = await roleService.saveArtifactDraft(
       DEMO_ROLE_SESSION_ID,

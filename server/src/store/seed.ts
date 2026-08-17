@@ -537,36 +537,48 @@ const hrBrief = {
 }
 
 export const createDemoAggregate = (): RoleAggregate => {
-  const sourceRoleProfile = createArtifactEnvelope({
-    roleSessionId: DEMO_ROLE_SESSION_ID,
-    type: 'ROLE_PROFILE',
-    version: 1,
-    content: {
-      schema_version: '2',
-      stage: 'JOB_DESCRIPTION_DRAFT',
-      job_description: structuredClone(lockedJobDescription),
-    },
-    createdBy: 'manager-demo',
-  })
+  const roleProfileTimeline = {
+    source_created_at: '2026-08-17T08:55:00.000Z',
+    job_description_confirmed_at: '2026-08-17T09:00:00.000Z',
+    talent_profile_created_at: '2026-08-17T09:04:00.000Z',
+    talent_profile_confirmed_at: '2026-08-17T09:05:00.000Z',
+  } as const
+  const sourceRoleProfile: ArtifactEnvelope = {
+    ...createArtifactEnvelope({
+      roleSessionId: DEMO_ROLE_SESSION_ID,
+      type: 'ROLE_PROFILE',
+      version: 1,
+      content: {
+        schema_version: '2',
+        stage: 'JOB_DESCRIPTION_DRAFT',
+        job_description: structuredClone(lockedJobDescription),
+      },
+      createdBy: 'manager-demo',
+    }),
+    created_at: roleProfileTimeline.source_created_at,
+  }
   const jobDescriptionConfirmation = {
     source_artifact_id: sourceRoleProfile.id,
     section_hash: contentHash(lockedJobDescription),
     confirmed_by: 'manager-demo',
-    confirmed_at: '2026-08-17T09:00:00.000Z',
+    confirmed_at: roleProfileTimeline.job_description_confirmed_at,
   }
-  const lockedRoleProfile = createArtifactEnvelope({
-    roleSessionId: DEMO_ROLE_SESSION_ID,
-    type: 'ROLE_PROFILE',
-    version: 2,
-    content: {
-      schema_version: '2',
-      stage: 'JOB_DESCRIPTION_CONFIRMED',
-      job_description: structuredClone(lockedJobDescription),
-      job_description_confirmation: structuredClone(jobDescriptionConfirmation),
-    },
-    createdBy: 'manager-demo',
-    basedOnHash: sourceRoleProfile.content_hash,
-  })
+  const lockedRoleProfile: ArtifactEnvelope = {
+    ...createArtifactEnvelope({
+      roleSessionId: DEMO_ROLE_SESSION_ID,
+      type: 'ROLE_PROFILE',
+      version: 2,
+      content: {
+        schema_version: '2',
+        stage: 'JOB_DESCRIPTION_CONFIRMED',
+        job_description: structuredClone(lockedJobDescription),
+        job_description_confirmation: structuredClone(jobDescriptionConfirmation),
+      },
+      createdBy: 'manager-demo',
+      basedOnHash: sourceRoleProfile.content_hash,
+    }),
+    created_at: roleProfileTimeline.job_description_confirmed_at,
+  }
   const finalRoleProfileContent = structuredClone(buildRoleProfile(jobDescriptionConfirmation))
   const finalRoleProfile: ArtifactEnvelope = {
     ...createArtifactEnvelope({
@@ -578,8 +590,9 @@ export const createDemoAggregate = (): RoleAggregate => {
       basedOnHash: lockedRoleProfile.content_hash,
       status: 'CONFIRMED',
     }),
+    created_at: roleProfileTimeline.talent_profile_created_at,
     confirmed_by: 'manager-demo',
-    confirmed_at: '2026-08-17T09:05:00.000Z',
+    confirmed_at: roleProfileTimeline.talent_profile_confirmed_at,
   }
   const artifacts: ArtifactEnvelope[] = [
     sourceRoleProfile,
