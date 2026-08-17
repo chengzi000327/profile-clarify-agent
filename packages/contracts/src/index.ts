@@ -117,6 +117,39 @@ export const PublicJDSchema = z
   .strict()
 export type PublicJD = z.infer<typeof PublicJDSchema>
 
+export const AssessmentDecisionRuleSchema = z.union([
+  z.string().min(1),
+  z.object({
+    status: z.string().min(1).optional(),
+    scoring: z.string().min(1),
+    pass_thresholds: z.string().min(1),
+    calibration: z.string().min(1),
+    summary: z.string().min(1).optional(),
+    conclusion: z.string().min(1).optional(),
+  }).passthrough(),
+])
+
+export const AssessmentScorecardSchema = z.object({
+  dimensions: z.array(z.object({
+    name: z.string().min(1),
+    weight: z.number().min(0).max(100),
+    method: z.string().min(1),
+    owner: z.string().min(1).optional(),
+    question: z.string().min(1).optional(),
+    evidence: z.string().min(1).optional(),
+    anchors: z.union([
+      z.array(z.string().min(1)).min(1),
+      z.object({
+        1: z.string().min(1),
+        3: z.string().min(1),
+        5: z.string().min(1),
+      }).passthrough(),
+    ]),
+  }).passthrough()).min(1),
+  decision_rule: AssessmentDecisionRuleSchema,
+}).passthrough()
+export type AssessmentScorecard = z.infer<typeof AssessmentScorecardSchema>
+
 export const ArtifactTypeSchema = z.enum([
   'ROLE_PROFILE',
   'ASSESSMENT_SCORECARD',

@@ -178,6 +178,24 @@ class TestHarnessStub implements HarnessAdapter {
           what_you_will_do: ['澄清目标并推动交付'],
           what_we_look_for: ['具备结构化分析和协作能力'],
         }
+      : artifactType === 'ASSESSMENT_SCORECARD'
+        ? {
+            dimensions: [{
+              name: '业务判断',
+              weight: 100,
+              method: '结构化案例面试',
+              owner: '用人经理',
+              question: '请说明一次关键业务取舍。',
+              evidence: '能够说明约束、取舍和结果。',
+              anchors: { 1: '无法说明取舍', 3: '能完成基本判断', 5: '能验证复杂取舍' },
+            }],
+            decision_rule: {
+              status: '待确认',
+              scoring: '各维度按 1-5 分评分',
+              pass_thresholds: '加权总分不低于 3.5',
+              calibration: '由 HR 和用人经理校准',
+            },
+          }
       : { title: request.role_state.title, generated_for: artifactType }
     await tool('save_artifact_draft', { artifact_type: artifactType, content }, { saved: true })
     const summary = artifactType === 'ROLE_PROFILE' ? '岗位画像草稿已生成。' : '产物草稿已生成。'
@@ -514,6 +532,59 @@ describe('Role Clarifier API', () => {
       ),
     ).toBe(true)
     expect(allowed.json().state.hc_context.job_basics.salary_range).toBe('35K-50K·15薪')
+  })
+
+  it('结构化评估方案可以生成并保存为前端可消费的数据', async () => {
+    const managerCookie = await login(app, 'manager-demo')
+    const response = await app.inject({
+      method: 'POST',
+      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/artifacts/ASSESSMENT_SCORECARD/generate`,
+      headers: { cookie: managerCookie },
+    })
+    expect(response.statusCode, response.body).toBe(202)
+
+    const runId = response.json().run_id
+    let completedRun
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      const run = await app.inject({
+        method: 'GET',
+        url: `/api/v1/agent-runs/${runId}`,
+        headers: { cookie: managerCookie },
+      })
+      completedRun = run.json().run
+      if (completedRun.status === 'COMPLETED' || completedRun.status === 'FAILED') break
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    let failureDetail: unknown = completedRun
+    if (completedRun?.status === 'FAILED') {
+      const adminCookie = await login(app, 'admin-demo')
+      const trace = await app.inject({
+        method: 'GET',
+        url: `/api/v1/admin/agent-runs/${runId}/trace`,
+        headers: { cookie: adminCookie },
+      })
+      failureDetail = trace.json().events.find((event: { type: string }) => event.type === 'run.failed')
+    }
+    expect(completedRun?.status, JSON.stringify(failureDetail)).toBe('COMPLETED')
+
+    const role = await app.inject({
+      method: 'GET',
+      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}`,
+      headers: { cookie: managerCookie },
+    })
+    expect(role.statusCode).toBe(200)
+    expect(role.json().state.latest_artifacts.ASSESSMENT_SCORECARD.content).toMatchObject({
+      dimensions: [expect.objectContaining({
+        name: '业务判断',
+        anchors: { 1: '无法说明取舍', 3: '能完成基本判断', 5: '能验证复杂取舍' },
+      })],
+      decision_rule: {
+        status: '待确认',
+        scoring: '各维度按 1-5 分评分',
+        pass_thresholds: '加权总分不低于 3.5',
+        calibration: '由 HR 和用人经理校准',
+      },
+    })
   })
 
   it('HC Mock 指定负责 HR 后自动把 HR 加入同一岗位会话', async () => {

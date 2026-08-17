@@ -93,7 +93,7 @@ const taskInstructions = (request: HarnessRequest): string => {
   const contentContract = artifactType === 'ROLE_PROFILE'
     ? 'ROLE_PROFILE content 必须包含 hiring_reason、mission、success_outcomes[{horizon,result,evidence}]、responsibilities[]、capabilities[{name,level,evidence}]、boundaries[]。'
     : artifactType === 'ASSESSMENT_SCORECARD'
-      ? 'ASSESSMENT_SCORECARD content 必须包含 dimensions[{name,weight,method,owner,question,evidence,anchors}] 和 decision_rule；anchors 至少包含 1、3、5 分判断锚点。'
+      ? 'ASSESSMENT_SCORECARD content 必须包含 dimensions[{name,weight,method,owner,question,evidence,anchors}] 和 decision_rule{status,scoring,pass_thresholds,calibration}；anchors 必须是包含 1、3、5 分文本判断锚点的对象。除 decision_rule 与 anchors 外不得继续嵌套对象，所有叶子字段必须是字符串或数字。'
       : artifactType === 'HR_RECRUITING_BRIEF'
         ? 'HR_RECRUITING_BRIEF content 必须包含 candidate_definition、sourcing{target_types,titles,keywords,query,non_target}、resume_screening{decision,core_signals,rules}、phone_screen[{question,listen_for,risk}]；不得包含候选人个人信息。'
         : 'PUBLIC_JD content 必须严格只有 title_and_basics、about_the_role、what_you_will_do、what_we_look_for 四个顶层字段。'

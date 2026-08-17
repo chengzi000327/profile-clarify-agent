@@ -40,6 +40,7 @@ import { api, ApiError } from './api/client.js';
 import LoginScreen from './components/LoginScreen.jsx';
 import { Composer, LiveAgentRun } from './components/AgentConversation.jsx';
 import AdminTraceConsole from './components/AdminTraceConsole.jsx';
+import { normalizeAssessmentContent } from './assessment-content.js';
 
 const sourceIcons = {
   org: Users,
@@ -1543,28 +1544,34 @@ function GeneratedProfileBasis({ artifact, state }) {
 }
 
 function GeneratedAssessment({ artifact }) {
-  const content = artifact?.content ?? {};
-  const dimensions = content.dimensions ?? [];
+  const { dimensions, decisionRule } = normalizeAssessmentContent(artifact?.content);
   return (
     <article className="generated-artifact-document assessment-artifact">
       <section className="generated-artifact-hero">
-        <span><ListChecks size={14} />招聘评估方案</span>
+        <div className="assessment-rule-heading">
+          <span><ListChecks size={14} />招聘评估方案</span>
+          {decisionRule.status && <em>{decisionRule.status}</em>}
+        </div>
         <h2>把岗位成功标准转成统一、可观察的面试判断</h2>
-        <p>{content.decision_rule ?? '当前版本尚未生成录用决策规则。'}</p>
+        {decisionRule.summary && <p>{decisionRule.summary}</p>}
+        {decisionRule.items.length > 0 && (
+          <div className="assessment-decision-rule-grid">
+            {decisionRule.items.map((item) => (
+              <div key={item.label}><small>{item.label}</small><strong>{item.value}</strong></div>
+            ))}
+          </div>
+        )}
       </section>
       <section className="generated-section">
         <div className="assessment-dimension-grid">
           {dimensions.map((dimension, index) => {
-            const anchors = Array.isArray(dimension.anchors)
-              ? dimension.anchors
-              : Object.entries(dimension.anchors ?? {}).map(([score, text]) => `${score} 分：${text}`);
             return (
               <div className="assessment-dimension-card" key={`${dimension.name}-${index}`}>
-                <header><span>{String(index + 1).padStart(2, '0')}</span><div><h3>{dimension.name}</h3><p>{dimension.weight ?? '—'}% · {dimension.method ?? '待确认'}</p></div></header>
+                <header><span>{String(index + 1).padStart(2, '0')}</span><div><h3>{dimension.name}</h3><p>{dimension.weight === '—' ? '权重待确认' : `${dimension.weight}%`} · {dimension.method}</p></div></header>
                 {dimension.owner && <p><strong>评估人：</strong>{dimension.owner}</p>}
                 {dimension.question && <p><strong>核心问题：</strong>{dimension.question}</p>}
                 {dimension.evidence && <p><strong>必须听到：</strong>{dimension.evidence}</p>}
-                <div className="assessment-anchor-list">{anchors.map((anchor) => <span key={String(anchor)}>{anchor}</span>)}</div>
+                <div className="assessment-anchor-list">{dimension.anchors.map((anchor) => <span key={anchor}>{anchor}</span>)}</div>
               </div>
             );
           })}

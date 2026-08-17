@@ -1949,6 +1949,58 @@ textarea:focus-visible {
   font-weight: 650;
 }
 
+.assessment-rule-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.assessment-rule-heading > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #155eef;
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.assessment-rule-heading > em {
+  padding: 3px 7px;
+  border-radius: 999px;
+  color: #8b5a19;
+  background: #fff3d6;
+  font-size: 8px;
+  font-style: normal;
+}
+
+.assessment-decision-rule-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 9px;
+  margin-top: 16px;
+}
+
+.assessment-decision-rule-grid > div {
+  padding: 11px 12px;
+  border: 1px solid #dfe5f1;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.assessment-decision-rule-grid small {
+  display: block;
+  margin-bottom: 5px;
+  color: #7a8491;
+  font-size: 8px;
+}
+
+.assessment-decision-rule-grid strong {
+  color: #3e4856;
+  font-size: 9px;
+  font-weight: 550;
+  line-height: 16px;
+}
+
 .generated-artifact-hero h2 {
   max-width: 950px;
   margin: 10px 0 0;

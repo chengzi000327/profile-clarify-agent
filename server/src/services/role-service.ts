@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import {
   ARTIFACT_VISIBILITY,
+  AssessmentScorecardSchema,
   CandidateEvidenceSchema,
   PublicJDSchema,
   type ActorContext,
@@ -333,7 +334,11 @@ export class RoleService {
   ): Promise<ArtifactEnvelope<T>> {
     const aggregate = await this.requireAggregate(roleSessionId, actor)
     assertArtifactAccess(actor, type)
-    if (type === 'PUBLIC_JD') PublicJDSchema.parse(content)
+    let validatedContent: unknown = content
+    if (type === 'PUBLIC_JD') validatedContent = PublicJDSchema.parse(content)
+    if (type === 'ASSESSMENT_SCORECARD') {
+      validatedContent = AssessmentScorecardSchema.parse(content)
+    }
     const version =
       Math.max(
         0,
@@ -348,7 +353,7 @@ export class RoleService {
       roleSessionId,
       type,
       version,
-      content,
+      content: validatedContent as T,
       createdBy: actor.user_id,
       basedOnHash: previous?.content_hash ?? null,
     })
