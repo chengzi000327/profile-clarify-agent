@@ -8,7 +8,7 @@
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1",
     "typecheck": "vite build",
-    "test": "node --test src/assessment-content.test.js && vite build"
+    "test": "node --test src/assessment-content.test.js src/role-profile-content.test.js && vite build"
   },
   "dependencies": {
     "@fontsource/ibm-plex-sans": "^5.2.7",

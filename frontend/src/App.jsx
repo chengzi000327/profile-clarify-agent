@@ -41,6 +41,7 @@ import LoginScreen from './components/LoginScreen.jsx';
 import { Composer, LiveAgentRun } from './components/AgentConversation.jsx';
 import AdminTraceConsole from './components/AdminTraceConsole.jsx';
 import { normalizeAssessmentContent } from './assessment-content.js';
+import { normalizeRoleProfileContent } from './role-profile-content.js';
 
 const sourceIcons = {
   org: Users,
@@ -1502,42 +1503,42 @@ function ActionSectionHeading({ number, title, description }) {
 }
 
 function GeneratedProfileBasis({ artifact, state }) {
-  const content = artifact?.content ?? {};
-  const hc = state?.hc_context;
-  const outcomes = content.success_outcomes ?? content.outcomes ?? [];
-  const responsibilities = content.responsibilities ?? hc?.initial_responsibilities ?? [];
-  const capabilities = content.capabilities ?? [];
-  const boundaries = content.boundaries ?? [];
+  const { mission, hiringReason, outcomes, work, requirements, boundaryGroups } = normalizeRoleProfileContent(
+    artifact?.content,
+    state?.hc_context,
+  );
   return (
     <article className="generated-artifact-document role-profile-artifact">
       <section className="generated-artifact-hero">
         <span><Target size={14} />岗位使命</span>
-        <h2>{content.mission ?? '当前版本未形成岗位使命，请生成新版本补齐。'}</h2>
+        <h2>{mission}</h2>
+        {hiringReason.noHireImpact && <p><strong>若未及时招聘：</strong>{hiringReason.noHireImpact}</p>}
       </section>
       <section className="generated-section hiring-reason-section">
         <header><span>01</span><div><h3>为什么新增这个编制</h3><p>来自 HC 审批和用人经理澄清，不重新审批 HC。</p></div></header>
         <div className="generated-reason-grid">
-          <div><small>业务变化</small><strong>{hc?.business_change ?? '待同步'}</strong></div>
-          <div><small>组织缺口</small><strong>{hc?.organization_gap ?? '待同步'}</strong></div>
-          <div><small>招聘结论</small><strong>{content.hiring_reason ?? hc?.approved_reason ?? '待同步'}</strong></div>
+          <div><small>业务变化</small><strong>{hiringReason.businessChange}</strong></div>
+          <div><small>组织缺口</small><strong>{hiringReason.organizationGap}</strong></div>
+          <div><small>招聘结论</small><strong>{hiringReason.conclusion}</strong></div>
         </div>
       </section>
       <section className="generated-section">
         <header><span>02</span><div><h3>成功标准</h3><p>HR 可以据此判断候选人是否能在岗位上产生结果。</p></div></header>
         <div className="generated-outcome-grid">
           {outcomes.map((outcome, index) => (
-            <div key={`${outcome.horizon}-${index}`}><small>{outcome.horizon ?? `阶段 ${index + 1}`}</small><strong>{outcome.result ?? outcome.title}</strong>{outcome.evidence && <p>{outcome.evidence}</p>}</div>
+            <div key={outcome.id}><small>{outcome.horizon}</small><strong>{outcome.title}</strong>{outcome.detail && <p>{outcome.detail}</p>}{outcome.measures.length > 0 && <p>衡量：{outcome.measures.join('；')}</p>}</div>
           ))}
           {outcomes.length === 0 && <p className="generated-empty-copy">当前版本没有成功标准。</p>}
         </div>
       </section>
       <section className="generated-section split-generated-section">
-        <div><header><span>03</span><div><h3>核心职责</h3><p>候选人入职后真正承担的工作。</p></div></header><ol>{responsibilities.map((item) => <li key={item}>{item}</li>)}</ol></div>
-        <div><header><span>04</span><div><h3>人才规格</h3><p>用可观察证据表达能力要求。</p></div></header><div className="generated-capability-list">{capabilities.map((item) => <div key={item.name}><strong>{item.name}<em>{item.level}</em></strong><p>{item.evidence}</p></div>)}</div></div>
+        <div><header><span>03</span><div><h3>关键工作场景</h3><p>候选人入职后真正承担的工作。</p></div></header><ol>{work.map((item) => <li key={item.id}><strong>{item.title}</strong>{item.detail && <p>{item.detail}</p>}{item.outputs.length > 0 && <small>产出：{item.outputs.join('；')}</small>}</li>)}</ol>{work.length === 0 && <p className="generated-empty-copy">当前版本没有关键工作场景。</p>}</div>
+        <div><header><span>04</span><div><h3>人才规格</h3><p>用可观察证据表达能力要求。</p></div></header><div className="generated-capability-list">{requirements.map((item) => <div key={item.id}><strong>{item.name}{(item.priority || item.level) && <em>{item.priority || item.level}</em>}</strong>{item.level && item.priority && <small>{item.level}</small>}{item.evidence.length > 0 && <p>{item.evidence.join('；')}</p>}</div>)}</div>{requirements.length === 0 && <p className="generated-empty-copy">当前版本没有人才规格。</p>}</div>
       </section>
       <section className="generated-section boundary-generated-section">
         <header><span>05</span><div><h3>岗位边界</h3><p>明确负责、不负责以及关键决策权。</p></div></header>
-        <ul>{boundaries.map((item) => <li key={item}><ShieldCheck size={12} />{item}</li>)}</ul>
+        <div className="generated-boundary-groups">{boundaryGroups.map((group) => <div key={group.label}><strong>{group.label}</strong><ul>{group.items.map((item, index) => <li key={`${group.label}-${index}`}><ShieldCheck size={12} />{item}</li>)}</ul></div>)}</div>
+        {boundaryGroups.length === 0 && <p className="generated-empty-copy">当前版本没有岗位边界。</p>}
       </section>
     </article>
   );

@@ -2152,6 +2152,26 @@ textarea:focus-visible {
   list-style: none;
 }
 
+.generated-boundary-groups {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.generated-boundary-groups > div {
+  padding: 16px;
+  border: 1px solid #e5eaf2;
+  border-radius: 12px;
+  background: #fbfcff;
+}
+
+.generated-boundary-groups > div > strong {
+  display: block;
+  margin-bottom: 10px;
+  color: #526073;
+  font-size: 12px;
+}
+
 .boundary-generated-section li {
   display: flex;
   align-items: flex-start;
