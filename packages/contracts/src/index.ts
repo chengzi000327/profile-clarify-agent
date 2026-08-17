@@ -357,7 +357,7 @@ export const RoleProfileJobDescriptionContentSchema = z.discriminatedUnion('stag
 ])
 export type RoleProfileJobDescriptionContent = z.infer<typeof RoleProfileJobDescriptionContentSchema>
 
-export const RoleProfileTalentDraftContentSchema = z.object({
+export const RoleProfileTalentDraftContentSchema = LegacyRoleProfileContentSchema.extend({
   schema_version: z.literal('2'),
   stage: z.literal('TALENT_PROFILE_DRAFT'),
   job_description: JobDescriptionSchema,

@@ -289,6 +289,48 @@ describe('人才画像增量契约', () => {
       confirmed_at: '2026-08-18T00:00:00.000Z',
     },
     talent_profile: validTalentProfileDraft.talent_profile,
+    hiring_reason: {
+      conclusion: '招聘一名平台产品经理。',
+      business_change: '业务从项目交付转向平台化。',
+      organization_gap: '缺少统一定义产品边界的岗位。',
+      no_hire_impact: '重复建设继续增加。',
+      evidence_refs: ['HC-001'],
+    },
+    mission: '把共性需求沉淀为标准产品能力。',
+    success_outcomes: [
+      {
+        id: 'O-01', horizon: '3个月', title: '形成产品路线图',
+        definition: '完成现状诊断并明确优先级。', measures: ['路线图通过评审'],
+        status: '待确认', evidence_refs: ['F-003'],
+      },
+      {
+        id: 'O-02', horizon: '6个月', title: '验证平台能力',
+        definition: '完成重点场景验证并形成复盘。', measures: ['重点场景完成验收'],
+        status: '待确认', evidence_refs: ['F-003'],
+      },
+      {
+        id: 'O-03', horizon: '12个月', title: '形成规模化复用',
+        definition: '平台能力在多个业务场景稳定复用。', measures: ['复用范围达到年度目标'],
+        status: '待确认', evidence_refs: ['F-003'],
+      },
+    ],
+    work_scenarios: [{
+      id: 'S-01', title: '共性需求抽象', frequency: '每周',
+      trigger: '多个客户提出相似需求', actions: '识别共性并定义边界',
+      output: '机会清单', challenge: '短期交付与长期复用冲突',
+      stakeholders: '研发、交付', outcome_refs: ['O-01'], evidence_refs: ['F-004'],
+    }],
+    requirements: [{
+      id: 'REQ-01', priority: 'Must-have', name: '复杂需求抽象', level: '识别共性并定义边界。',
+      rationale: '对应岗位依据：KRA-01、O-01、S-01', maps_to: ['KRA-01', 'O-01', 'S-01'],
+      strong_evidence: ['说明输入、取舍、产出和复用结果'], substitute_evidence: [], risk_signals: [],
+      assessment_method: '围绕可观察证据进行结构化追问', evidence_refs: ['F-002'],
+    }],
+    boundaries: {
+      owns: ['产品边界与路线图'], does_not_own: ['单客户项目交付'],
+      decision_rights: '提出产品优先级取舍', collaboration_and_resources: '研发、交付及客户反馈与项目复盘',
+      evidence_refs: ['F-005'],
+    },
   }
 
   it('接受只包含人才画像增量的第二阶段模型输出', () => {
@@ -330,14 +372,16 @@ describe('人才画像增量契约', () => {
     }).success).toBe(false)
   })
 
-  it('接受独立的 V2 人才画像草稿，不要求 legacy 投影字段', () => {
+  it('接受带服务端确定性 legacy 投影的 V2 人才画像草稿', () => {
     expect(RoleProfileTalentDraftContentSchema.safeParse(validTalentDraftContent).success).toBe(true)
   })
 
-  it('拒绝 V2 人才画像草稿中的额外或篡改结构', () => {
+  it('拒绝缺失 legacy 投影、额外字段或篡改锁定岗位说明的 V2 人才画像草稿', () => {
+    const { requirements: _requirements, ...missingLegacyProjection } = validTalentDraftContent
+    expect(RoleProfileTalentDraftContentSchema.safeParse(missingLegacyProjection).success).toBe(false)
     expect(RoleProfileTalentDraftContentSchema.safeParse({
       ...validTalentDraftContent,
-      legacy_requirements: [],
+      unexpected_field: [],
     }).success).toBe(false)
     expect(RoleProfileTalentDraftContentSchema.safeParse({
       ...validTalentDraftContent,
