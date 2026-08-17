@@ -4,6 +4,8 @@ import {
   CandidateEvidenceSchema,
   JobDescriptionDraftInputSchema,
   RoleProfileJobDescriptionContentSchema,
+  RoleProfileTalentDraftContentSchema,
+  TalentProfileDraftInputSchema,
   type ConversationMessage,
   generatedArtifactContentSchema,
   type ActorContext,
@@ -12,6 +14,9 @@ import {
   type CandidateEvidence,
   type FactCategory,
   type HcApproval,
+  type RoleProfileJobDescriptionContent,
+  type RoleProfileTalentDraftContent,
+  type TalentProfileDraftInput,
   type RoleState,
 } from '@role-clarifier/contracts'
 import {
@@ -53,6 +58,99 @@ const artifactNames: Record<ArtifactType, string> = {
   ASSESSMENT_SCORECARD: '评估方案',
   PUBLIC_JD: '对外 JD',
   HR_RECRUITING_BRIEF: '招聘画像',
+}
+
+export type RoleProfileJobDescriptionConfirmedContent = Extract<
+  RoleProfileJobDescriptionContent,
+  { stage: 'JOB_DESCRIPTION_CONFIRMED' }
+>
+
+type RoleProfileTalentDraftBase = Pick<
+  RoleProfileTalentDraftContent,
+  'schema_version' | 'stage' | 'job_description' | 'job_description_confirmation' | 'talent_profile'
+>
+
+const flattenTalentRequirements = (content: RoleProfileTalentDraftBase) => {
+  const { qualifications, competency_model: competencyModel } = content.talent_profile
+  const groups = [
+    ['hard_qualifications', qualifications.hard_qualifications],
+    ['necessary_experience', qualifications.necessary_experience],
+    ['role_conditions', qualifications.role_conditions],
+    ['must_have', qualifications.must_have],
+    ['preferred', qualifications.preferred],
+    ['alternatives', qualifications.alternatives],
+    ['knowledge', competencyModel.knowledge],
+    ['skills', competencyModel.skills],
+    ['behavioral_competencies', competencyModel.behavioral_competencies],
+    ['values_and_work_style', competencyModel.values_and_work_style],
+    ['career_motivation', competencyModel.career_motivation],
+  ] as const
+
+  return groups.flatMap(([sourceGroup, items]) => items.map((item) => ({
+    id: item.id,
+    priority: sourceGroup === 'preferred' ? 'Preferred' as const : 'Must-have' as const,
+    name: item.name,
+    level: item.definition,
+    rationale: `对应岗位依据：${item.maps_to.join('、')}`,
+    maps_to: item.maps_to,
+    strong_evidence: item.observable_evidence,
+    substitute_evidence: sourceGroup === 'alternatives' ? item.observable_evidence : [],
+    risk_signals: [],
+    assessment_method: '围绕可观察证据进行结构化追问',
+    evidence_refs: item.evidence_refs,
+  })))
+}
+
+export const buildLegacyRoleProfileProjection = (content: RoleProfileTalentDraftBase) => ({
+  hiring_reason: {
+    conclusion: content.job_description.hiring_background.hiring_conclusion,
+    business_change: content.job_description.hiring_background.business_change,
+    organization_gap: content.job_description.hiring_background.organization_gap,
+    no_hire_impact: content.job_description.hiring_background.no_hire_impact,
+    evidence_refs: content.job_description.hiring_background.evidence_refs,
+  },
+  mission: content.job_description.job_purpose.statement,
+  success_outcomes: content.job_description.success_criteria,
+  work_scenarios: content.job_description.work_scenarios.map((scenario) => ({
+    id: scenario.id,
+    title: scenario.title,
+    frequency: scenario.frequency,
+    trigger: scenario.trigger,
+    actions: scenario.actions,
+    output: scenario.output,
+    challenge: scenario.challenge,
+    stakeholders: scenario.stakeholders.join('、'),
+    outcome_refs: scenario.success_outcome_refs,
+    evidence_refs: scenario.evidence_refs,
+  })),
+  boundaries: {
+    owns: content.job_description.boundaries.owns,
+    does_not_own: content.job_description.boundaries.does_not_own,
+    decision_rights: content.job_description.boundaries.decision_rights.join('、'),
+    collaboration_and_resources: [
+      `协作：${content.job_description.boundaries.key_collaborations.join('、')}`,
+      `资源：${content.job_description.boundaries.available_resources.join('、')}`,
+    ].join('；'),
+    evidence_refs: content.job_description.boundaries.evidence_refs,
+  },
+  requirements: flattenTalentRequirements(content),
+})
+
+export const mergeLockedRoleProfileContent = (
+  locked: RoleProfileJobDescriptionConfirmedContent,
+  input: TalentProfileDraftInput,
+): RoleProfileTalentDraftContent => {
+  if (contentHash(locked.job_description) !== locked.job_description_confirmation.section_hash) {
+    throw new DomainError('JOB_DESCRIPTION_LOCK_INVALID', '岗位说明锁定校验失败', 409)
+  }
+  const base = {
+    schema_version: '2' as const,
+    stage: 'TALENT_PROFILE_DRAFT' as const,
+    job_description: locked.job_description,
+    job_description_confirmation: locked.job_description_confirmation,
+    talent_profile: input.talent_profile,
+  }
+  return { ...base, ...buildLegacyRoleProfileProjection(base) }
 }
 
 export interface RoleView {
@@ -444,14 +542,18 @@ export class RoleService {
       throw new DomainError('FORBIDDEN', '该产物需要由用人经理生成', 403)
     }
     if (artifactType === 'ROLE_PROFILE') {
+      const latestRoleProfile = aggregate.state.latest_artifacts.ROLE_PROFILE
       const staged = RoleProfileJobDescriptionContentSchema.safeParse(
-        aggregate.state.latest_artifacts.ROLE_PROFILE?.content,
+        latestRoleProfile?.content,
+      )
+      const talentDraft = RoleProfileTalentDraftContentSchema.safeParse(
+        latestRoleProfile?.content,
       )
       if (staged.success && staged.data.stage === 'JOB_DESCRIPTION_DRAFT') {
         throw new DomainError('JOB_DESCRIPTION_CONFIRMATION_REQUIRED', '请先确认岗位说明，再继续生成岗位画像', 409)
       }
-      if (staged.success && staged.data.stage === 'JOB_DESCRIPTION_CONFIRMED') {
-        throw new DomainError('JOB_DESCRIPTION_LOCKED', '岗位说明已锁定，人才画像阶段暂未开放', 409)
+      if (talentDraft.success && latestRoleProfile?.status === 'DRAFT') {
+        throw new DomainError('TALENT_PROFILE_CONFIRMATION_REQUIRED', '请先确认完整人才画像，再继续生成', 409)
       }
     }
     const missing = artifactDependencies[artifactType].filter(
@@ -476,29 +578,62 @@ export class RoleService {
     assertArtifactAccess(actor, type)
     let validatedContent = content
     if (type === 'ROLE_PROFILE') {
+      const latestRoleProfile = aggregate.state.latest_artifacts.ROLE_PROFILE
       const latestStaged = RoleProfileJobDescriptionContentSchema.safeParse(
-        aggregate.state.latest_artifacts.ROLE_PROFILE?.content,
+        latestRoleProfile?.content,
       )
+      const latestTalentDraft = RoleProfileTalentDraftContentSchema.safeParse(
+        latestRoleProfile?.content,
+      )
+      if (latestTalentDraft.success && latestRoleProfile?.status === 'DRAFT') {
+        throw new DomainError('TALENT_PROFILE_CONFIRMATION_REQUIRED', '请先确认完整人才画像，再继续生成', 409)
+      }
       if (latestStaged.success && latestStaged.data.stage === 'JOB_DESCRIPTION_CONFIRMED') {
-        throw new DomainError('JOB_DESCRIPTION_LOCKED', '岗位说明已锁定，人才画像阶段暂未开放', 409)
+        const validation = TalentProfileDraftInputSchema.safeParse(content)
+        if (!validation.success) {
+          const issueSummary = validation.error.issues
+            .slice(0, 5)
+            .map((issue) => `${issue.path.join('.') || 'content'}：${issue.message}`)
+            .join('；')
+          throw new DomainError(
+            'ARTIFACT_CONTENT_INVALID',
+            `${artifactNames[type]}结构不符合前端展示契约：${issueSummary}`,
+            422,
+          )
+        }
+        const merged = mergeLockedRoleProfileContent(latestStaged.data, validation.data)
+        const mergedValidation = RoleProfileTalentDraftContentSchema.safeParse(merged)
+        if (!mergedValidation.success) {
+          const issueSummary = mergedValidation.error.issues
+            .slice(0, 5)
+            .map((issue) => `${issue.path.join('.') || 'content'}：${issue.message}`)
+            .join('；')
+          throw new DomainError(
+            'ARTIFACT_CONTENT_INVALID',
+            `${artifactNames[type]}结构不符合前端展示契约：${issueSummary}`,
+            422,
+          )
+        }
+        validatedContent = mergedValidation.data as T
+      } else {
+        const validation = JobDescriptionDraftInputSchema.safeParse(content)
+        if (!validation.success) {
+          const issueSummary = validation.error.issues
+            .slice(0, 5)
+            .map((issue) => `${issue.path.join('.') || 'content'}：${issue.message}`)
+            .join('；')
+          throw new DomainError(
+            'ARTIFACT_CONTENT_INVALID',
+            `${artifactNames[type]}结构不符合前端展示契约：${issueSummary}`,
+            422,
+          )
+        }
+        validatedContent = {
+          schema_version: '2',
+          stage: 'JOB_DESCRIPTION_DRAFT',
+          job_description: validation.data.job_description,
+        } as T
       }
-      const validation = JobDescriptionDraftInputSchema.safeParse(content)
-      if (!validation.success) {
-        const issueSummary = validation.error.issues
-          .slice(0, 5)
-          .map((issue) => `${issue.path.join('.') || 'content'}：${issue.message}`)
-          .join('；')
-        throw new DomainError(
-          'ARTIFACT_CONTENT_INVALID',
-          `${artifactNames[type]}结构不符合前端展示契约：${issueSummary}`,
-          422,
-        )
-      }
-      validatedContent = {
-        schema_version: '2',
-        stage: 'JOB_DESCRIPTION_DRAFT',
-        job_description: validation.data.job_description,
-      } as T
     } else {
       const contentSchema = generatedArtifactContentSchema(type)
       if (contentSchema) {

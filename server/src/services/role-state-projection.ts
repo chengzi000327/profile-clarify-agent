@@ -99,7 +99,7 @@ export interface RoleStateProjection {
     department: string
     stage: RoleState['stage']
     hc_status: RoleState['hc_status']
-    hc_context: RoleState['hc_context']
+    hc_context?: RoleState['hc_context']
   }
   facts: ProjectedFact[]
   conflicts: ProjectedConflict[]
@@ -243,7 +243,7 @@ export const projectRoleStateForTask = (
       department: state.department,
       stage: state.stage,
       hc_status: state.hc_status,
-      hc_context: state.hc_context,
+      ...(!isTalentProfileGeneration ? { hc_context: state.hc_context } : {}),
     },
     facts: isTalentProfileGeneration ? [] : selectFacts(state, task),
     conflicts: !isTalentProfileGeneration && ['CLARIFY_MESSAGE', 'GENERATE_ROLE_PROFILE'].includes(task)

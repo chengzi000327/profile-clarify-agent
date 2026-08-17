@@ -2,8 +2,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { FastifyInstance } from 'fastify'
 import {
   ROLE_CLARIFIER_SYSTEM_PROMPT,
+  RoleProfileContentSchema,
   type ArtifactType,
   type CandidateEvidence,
+  type RoleProfileJobDescriptionContent,
+  type RoleProfileTalentDraftContent,
 } from '@role-clarifier/contracts'
 import { contentHash } from '@role-clarifier/domain'
 import { buildApp, visibleAgentEvent } from './app.js'
@@ -81,6 +84,72 @@ const validJobDescription = {
     key_collaborations: ['研发', '交付'],
     available_resources: ['客户反馈与项目复盘'],
     evidence_refs: ['HC-2026-EP-001'],
+  },
+} as const
+
+const validTalentProfile = {
+  target_talent_profile: {
+    core_definition: '能在复杂企业场景中平衡业务价值与产品长期复用的产品负责人。',
+    transferable_backgrounds: ['企业服务产品规划经历'],
+    fit_signals: ['能说明需求优先级取舍依据'],
+    non_target_and_misjudgments: ['只负责单一客户项目交付的候选人'],
+    attraction_factors: ['参与平台能力从零到一建设'],
+    evidence_refs: ['HC-2026-EP-001'],
+  },
+  qualifications: {
+    hard_qualifications: [],
+    necessary_experience: [{
+      id: 'Q-EXP-01',
+      name: '企业服务产品规划经历',
+      definition: '具备企业服务产品规划和路线图推进经验。',
+      maps_to: ['KRA-01'],
+      observable_evidence: ['能复盘一次从需求抽象到路线图评审的过程。'],
+      evidence_refs: ['HC-2026-EP-001'],
+      status: '推断',
+    }],
+    role_conditions: [],
+    must_have: [{
+      id: 'Q-MUST-01',
+      name: '跨团队协同',
+      definition: '能够推动研发与交付围绕共同优先级协作。',
+      maps_to: ['O-01'],
+      observable_evidence: ['能说明一次跨团队目标对齐和推进结果。'],
+      evidence_refs: ['HC-2026-EP-001'],
+      status: '推断',
+    }],
+    preferred: [{
+      id: 'Q-PREF-01',
+      name: '平台化经验',
+      definition: '有将重复交付沉淀为平台能力的经验。',
+      maps_to: ['O-03'],
+      observable_evidence: ['能展示平台能力在多个场景复用的结果。'],
+      evidence_refs: ['HC-2026-EP-001'],
+      status: '推断',
+    }],
+    alternatives: [{
+      id: 'Q-ALT-01',
+      name: '可迁移的复杂协同经验',
+      definition: '具备在复杂协同环境中推进共识和落地的经验。',
+      maps_to: ['S-01'],
+      observable_evidence: ['能说明在冲突目标下的取舍和结果。'],
+      evidence_refs: ['HC-2026-EP-001'],
+      status: '推断',
+    }],
+  },
+  competency_model: {
+    knowledge: [],
+    skills: [{
+      id: 'C-SKILL-01',
+      name: '结构化需求判断',
+      definition: '能将客户诉求转化为可验证的产品优先级。',
+      maps_to: ['S-01'],
+      observable_evidence: ['能说明取舍框架和最终决策。'],
+      evidence_refs: ['HC-2026-EP-001'],
+      status: '推断',
+    }],
+    behavioral_competencies: [],
+    values_and_work_style: [],
+    career_motivation: [],
   },
 } as const
 
@@ -244,7 +313,7 @@ class TestHarnessStub implements HarnessAdapter {
     const content = artifactType === 'ROLE_PROFILE'
       ? roleProfileMode === 'JOB_DESCRIPTION'
         ? { job_description: validJobDescription }
-        : { talent_profile: { core_talent_definition: '第二阶段测试占位内容' } }
+        : { talent_profile: validTalentProfile }
       : artifactType === 'ASSESSMENT_SCORECARD'
         ? {
             dimensions: [{
@@ -794,51 +863,150 @@ describe('Role Clarifier API', () => {
     })
   })
 
-  it('岗位说明锁定后拒绝再次启动 ROLE_PROFILE 生成且保持锁定版本不变', async () => {
+  it('岗位说明锁定后允许生成一次人才画像，并在草稿存在时阻止重复生成', async () => {
     const managerCookie = await login(app, 'manager-demo')
-    const { locked, afterLock } = await lockJobDescription()
+    const { locked } = await lockJobDescription()
 
     await expect(roleService.assertArtifactGenerationAllowed(
       DEMO_ROLE_SESSION_ID,
       managerActor,
       'MANAGER',
       'ROLE_PROFILE',
-    )).rejects.toMatchObject({ code: 'JOB_DESCRIPTION_LOCKED' })
+    )).resolves.toBeUndefined()
     const generated = await app.inject({
       method: 'POST',
       url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/artifacts/ROLE_PROFILE/generate`,
       headers: { cookie: managerCookie },
     })
-    expect(generated.statusCode).toBe(409)
-    expect(generated.json().error.code).toBe('JOB_DESCRIPTION_LOCKED')
+    expect(generated.statusCode, generated.body).toBe(202)
 
-    const unchanged = await roleService.get(DEMO_ROLE_SESSION_ID, managerActor)
-    expect(unchanged.state).toEqual(afterLock.state)
-    expect(unchanged.artifacts).toEqual(afterLock.artifacts)
-    expect(unchanged.state.latest_artifacts.ROLE_PROFILE).toMatchObject({
-      id: locked.id,
-      content_hash: locked.content_hash,
-      content: { stage: 'JOB_DESCRIPTION_CONFIRMED' },
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      const status = await app.inject({
+        method: 'GET',
+        url: `/api/v1/agent-runs/${generated.json().run_id}`,
+        headers: { cookie: managerCookie },
+      })
+      if (status.json().run.status === 'COMPLETED') break
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+
+    const talentDraft = await roleService.get(DEMO_ROLE_SESSION_ID, managerActor)
+    expect(talentDraft.state.latest_artifacts.ROLE_PROFILE?.id).not.toBe(locked.id)
+    expect(talentDraft.state.latest_artifacts.ROLE_PROFILE).toMatchObject({
+      status: 'DRAFT',
+      content: { stage: 'TALENT_PROFILE_DRAFT', talent_profile: validTalentProfile },
     })
+    await expect(roleService.assertArtifactGenerationAllowed(
+      DEMO_ROLE_SESSION_ID,
+      managerActor,
+      'MANAGER',
+      'ROLE_PROFILE',
+    )).rejects.toMatchObject({ code: 'TALENT_PROFILE_CONFIRMATION_REQUIRED' })
   })
 
-  it('岗位说明锁定后拒绝直接保存 ROLE_PROFILE 草稿且保持锁定版本不变', async () => {
-    const { locked, afterLock } = await lockJobDescription()
+  it('锁定岗位说明后只接受人才增量，服务端复制锁定内容并确定性投影兼容字段', async () => {
+    const { locked } = await lockJobDescription()
+    const lockedContent = locked.content as Extract<
+      RoleProfileJobDescriptionContent,
+      { stage: 'JOB_DESCRIPTION_CONFIRMED' }
+    >
 
     await expect(roleService.saveArtifactDraft(
       DEMO_ROLE_SESSION_ID,
       managerActor,
       'ROLE_PROFILE',
-      { job_description: validJobDescription },
-    )).rejects.toMatchObject({ code: 'JOB_DESCRIPTION_LOCKED' })
+      { job_description: validJobDescription, talent_profile: validTalentProfile },
+    )).rejects.toMatchObject({ code: 'ARTIFACT_CONTENT_INVALID' })
+    await expect(roleService.saveArtifactDraft(
+      DEMO_ROLE_SESSION_ID,
+      managerActor,
+      'ROLE_PROFILE',
+      { talent_profile: validTalentProfile, mission: '模型不能覆写已锁定岗位使命' },
+    )).rejects.toMatchObject({ code: 'ARTIFACT_CONTENT_INVALID' })
 
-    const unchanged = await roleService.get(DEMO_ROLE_SESSION_ID, managerActor)
-    expect(unchanged.state).toEqual(afterLock.state)
-    expect(unchanged.artifacts).toEqual(afterLock.artifacts)
-    expect(unchanged.state.latest_artifacts.ROLE_PROFILE).toMatchObject({
-      id: locked.id,
-      content_hash: locked.content_hash,
-      content: { stage: 'JOB_DESCRIPTION_CONFIRMED' },
+    const talentDraft = await roleService.saveArtifactDraft(
+      DEMO_ROLE_SESSION_ID,
+      managerActor,
+      'ROLE_PROFILE',
+      { talent_profile: validTalentProfile },
+    )
+    const talentContent = talentDraft.content as unknown as RoleProfileTalentDraftContent
+
+    expect(talentContent).toMatchObject({
+      schema_version: '2',
+      stage: 'TALENT_PROFILE_DRAFT',
+      job_description: lockedContent.job_description,
+      job_description_confirmation: lockedContent.job_description_confirmation,
+      talent_profile: validTalentProfile,
+      hiring_reason: {
+        conclusion: lockedContent.job_description.hiring_background.hiring_conclusion,
+        business_change: lockedContent.job_description.hiring_background.business_change,
+        organization_gap: lockedContent.job_description.hiring_background.organization_gap,
+        no_hire_impact: lockedContent.job_description.hiring_background.no_hire_impact,
+        evidence_refs: lockedContent.job_description.hiring_background.evidence_refs,
+      },
+      mission: lockedContent.job_description.job_purpose.statement,
+      success_outcomes: lockedContent.job_description.success_criteria,
+      work_scenarios: [{
+        id: 'S-01',
+        title: '共性需求抽象',
+        frequency: '每周',
+        trigger: '多个客户提出相似需求。',
+        actions: '识别共性并定义产品边界。',
+        output: '产品机会与优先级清单。',
+        challenge: '平衡短期交付诉求与长期复用价值。',
+        stakeholders: '研发、交付',
+        outcome_refs: ['O-01'],
+        evidence_refs: ['HC-2026-EP-001'],
+      }],
+      boundaries: {
+        owns: lockedContent.job_description.boundaries.owns,
+        does_not_own: lockedContent.job_description.boundaries.does_not_own,
+        decision_rights: lockedContent.job_description.boundaries.decision_rights.join('、'),
+        collaboration_and_resources: '协作：研发、交付；资源：客户反馈与项目复盘',
+        evidence_refs: lockedContent.job_description.boundaries.evidence_refs,
+      },
+    })
+    expect(contentHash(talentContent.job_description)).toBe(lockedContent.job_description_confirmation.section_hash)
+    expect(talentContent.requirements).toEqual([
+      expect.objectContaining({ id: 'Q-EXP-01', priority: 'Must-have', substitute_evidence: [] }),
+      expect.objectContaining({ id: 'Q-MUST-01', priority: 'Must-have', substitute_evidence: [] }),
+      expect.objectContaining({ id: 'Q-PREF-01', priority: 'Preferred', substitute_evidence: [] }),
+      expect.objectContaining({ id: 'Q-ALT-01', priority: 'Must-have', substitute_evidence: ['能说明在冲突目标下的取舍和结果。'] }),
+      expect.objectContaining({ id: 'C-SKILL-01', priority: 'Must-have', substitute_evidence: [] }),
+    ])
+    expect(RoleProfileContentSchema.safeParse(talentContent).success).toBe(true)
+    await expect(roleService.saveArtifactDraft(
+      DEMO_ROLE_SESSION_ID,
+      managerActor,
+      'ROLE_PROFILE',
+      { talent_profile: validTalentProfile },
+    )).rejects.toMatchObject({ code: 'TALENT_PROFILE_CONFIRMATION_REQUIRED' })
+  })
+
+  it('人才画像草稿经现有通用确认后进入 PROFILE_CONFIRMED', async () => {
+    await lockJobDescription()
+    const talentDraft = await roleService.saveArtifactDraft(
+      DEMO_ROLE_SESSION_ID,
+      managerActor,
+      'ROLE_PROFILE',
+      { talent_profile: validTalentProfile },
+    )
+    const beforeConfirm = await roleService.get(DEMO_ROLE_SESSION_ID, managerActor)
+
+    const confirmed = await roleService.confirmArtifact(
+      DEMO_ROLE_SESSION_ID,
+      talentDraft.id,
+      managerActor,
+      talentDraft.content_hash,
+      beforeConfirm.state.revision,
+    )
+
+    expect(confirmed).toMatchObject({ id: talentDraft.id, status: 'CONFIRMED' })
+    const afterConfirm = await roleService.get(DEMO_ROLE_SESSION_ID, managerActor)
+    expect(afterConfirm.state).toMatchObject({
+      stage: 'PROFILE_CONFIRMED',
+      latest_artifacts: { ROLE_PROFILE: { id: talentDraft.id, status: 'CONFIRMED' } },
     })
   })
 

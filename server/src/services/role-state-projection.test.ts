@@ -292,6 +292,8 @@ describe('read_role_state task projection', () => {
     expect(result.facts).toEqual([])
     expect(result.conflicts).toEqual([])
     expect(result.task_context.artifacts).toEqual([])
+    expect(result.role).not.toHaveProperty('hc_context')
+    expect(JSON.stringify(result)).not.toContain('年度新增编制预算内')
     expect(JSON.stringify(result)).not.toContain('talent_profile')
   })
 
