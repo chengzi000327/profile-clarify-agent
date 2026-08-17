@@ -1,47 +1,43 @@
 import React, { useState } from 'react';
 import { Activity, BriefcaseBusiness, ShieldCheck, Users } from 'lucide-react';
 
-const demoAccounts = [
+const roles = [
   {
-    accountId: 'manager-demo',
-    role: 'MANAGER',
-    displayName: '用人经理 · 陈曦',
-    description: '查看已审批 HC，澄清岗位画像并确认正式产物',
+    value: 'MANAGER',
+    label: '用人经理',
+    description: '创建岗位、澄清成功标准并确认正式产物',
     icon: BriefcaseBusiness,
   },
   {
-    accountId: 'hr-demo',
-    role: 'HR',
-    displayName: 'HR · 林夏',
-    description: '进入同一岗位会话，生成招聘画像并推进招聘协作',
+    value: 'HR',
+    label: 'HR',
+    description: '协作澄清、管理招聘画像、候选人证据与校准',
     icon: Users,
   },
   {
-    accountId: 'admin-demo',
-    role: 'ADMIN',
-    displayName: '企业管理员 · 周宁',
-    description: '查看企业全部岗位、会话记录与完整 Agent Trace',
+    value: 'ADMIN',
+    label: '企业管理员',
+    description: '企业空间最高权限，并可查看完整 Agent Trace',
     icon: Activity,
   },
 ];
 
 export default function LoginScreen({ onLogin }) {
-  const [selectedAccountId, setSelectedAccountId] = useState('manager-demo');
+  const [role, setRole] = useState('MANAGER');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
-  const selectedAccount = demoAccounts.find((item) => item.accountId === selectedAccountId)
-    ?? demoAccounts[0];
 
   async function login(event) {
     event.preventDefault();
+    const form = new FormData(event.currentTarget);
     setPending(true);
     setError('');
     try {
       await onLogin({
-        workspace_id: 'legacy-demo',
-        account_id: selectedAccount.accountId,
-        display_name: selectedAccount.displayName,
-        role: selectedAccount.role,
+        workspace_id: form.get('workspaceId')?.toString().trim(),
+        account_id: form.get('accountId')?.toString().trim(),
+        display_name: form.get('displayName')?.toString().trim(),
+        role,
       });
     } catch (loginError) {
       setError(loginError.message);
@@ -55,34 +51,40 @@ export default function LoginScreen({ onLogin }) {
         <div className="login-mark"><ShieldCheck size={24} /></div>
         <span className="login-kicker">ROLE CLARIFIER MVP</span>
         <h1>进入岗位画像澄清 Agent</h1>
-        <p>选择同一模拟企业中的固定账号，直接验证 HC、岗位协作、权限与企业级 Trace。</p>
+        <p>先选择你本次使用的真实角色。账号与岗位数据绑定：同一账号会恢复历史内容，新账号会进入空工作台。</p>
 
-        <div className="login-organization">
-          <span><ShieldCheck size={14} />当前企业</span>
-          <strong>云岚科技</strong>
-          <small>三个账号共享同一企业数据；岗位来自 HC 审批，管理员可查看全企业会话和 Trace。</small>
+        <div className="login-fields">
+          <label>
+            <span>企业空间 ID</span>
+            <input name="workspaceId" defaultValue="demo-company" autoComplete="organization" required minLength={3} maxLength={64} />
+            <small>同一企业空间内，企业管理员可查看组织级岗位与 Trace。</small>
+          </label>
+          <label>
+            <span>账号</span>
+            <input name="accountId" placeholder="例如 zhangsan 或工作邮箱" autoComplete="username" required minLength={3} maxLength={80} />
+          </label>
+          <label>
+            <span>你的姓名</span>
+            <input name="displayName" placeholder="例如 张三" autoComplete="name" required maxLength={40} />
+          </label>
         </div>
 
         <fieldset className="login-role-fieldset">
-          <legend>选择测试账号</legend>
+          <legend>选择角色</legend>
           <div className="login-options">
-            {demoAccounts.map((item) => {
+            {roles.map((item) => {
               const Icon = item.icon;
               return (
                 <button
-                  className={selectedAccountId === item.accountId ? 'selected' : ''}
-                  key={item.accountId}
+                  className={role === item.value ? 'selected' : ''}
+                  key={item.value}
                   type="button"
-                  aria-pressed={selectedAccountId === item.accountId}
-                  onClick={() => setSelectedAccountId(item.accountId)}
+                  aria-pressed={role === item.value}
+                  onClick={() => setRole(item.value)}
                 >
                   <span><Icon size={18} /></span>
-                  <div>
-                    <strong>{item.displayName}</strong>
-                    <small>{item.description}</small>
-                    <code>{item.accountId}</code>
-                  </div>
-                  <em>{selectedAccountId === item.accountId ? '已选择' : '选择'}</em>
+                  <div><strong>{item.label}</strong><small>{item.description}</small></div>
+                  <em>{role === item.value ? '已选择' : '选择'}</em>
                 </button>
               );
             })}
@@ -91,9 +93,9 @@ export default function LoginScreen({ onLogin }) {
 
         {error && <div className="login-error">{error}</div>}
         <button className="login-submit" disabled={pending} type="submit">
-          {pending ? '正在进入…' : `以${selectedAccount.displayName}身份进入`}
+          {pending ? '正在进入…' : '进入工作台'}
         </button>
-        <small className="login-footnote">固定演示账号无需密码，不会创建新的企业或用户。</small>
+        <small className="login-footnote">Demo 环境不设密码，请勿填写真实密码或敏感身份信息。</small>
       </form>
     </main>
   );
