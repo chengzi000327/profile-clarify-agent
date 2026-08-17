@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto'
 import {
   ARTIFACT_VISIBILITY,
   CandidateEvidenceSchema,
+  JobDescriptionDraftInputSchema,
+  RoleProfileJobDescriptionContentSchema,
   type ConversationMessage,
   generatedArtifactContentSchema,
   type ActorContext,
@@ -16,6 +18,7 @@ import {
   DomainError,
   assertArtifactAccess,
   assertRevision,
+  contentHash,
   confirmArtifact,
   createArtifactEnvelope,
   detectPII,
@@ -440,6 +443,14 @@ export class RoleService {
     if (artifactType !== 'HR_RECRUITING_BRIEF' && !['MANAGER', 'ADMIN'].includes(effectiveRole)) {
       throw new DomainError('FORBIDDEN', '该产物需要由用人经理生成', 403)
     }
+    if (artifactType === 'ROLE_PROFILE') {
+      const staged = RoleProfileJobDescriptionContentSchema.safeParse(
+        aggregate.state.latest_artifacts.ROLE_PROFILE?.content,
+      )
+      if (staged.success && staged.data.stage === 'JOB_DESCRIPTION_DRAFT') {
+        throw new DomainError('JOB_DESCRIPTION_CONFIRMATION_REQUIRED', '请先确认岗位说明，再继续生成岗位画像', 409)
+      }
+    }
     const missing = artifactDependencies[artifactType].filter(
       (dependency) => aggregate.state.latest_artifacts[dependency]?.status !== 'CONFIRMED',
     )
@@ -460,10 +471,9 @@ export class RoleService {
   ): Promise<ArtifactEnvelope<T>> {
     const aggregate = await this.requireAggregate(roleSessionId, actor)
     assertArtifactAccess(actor, type)
-    const contentSchema = generatedArtifactContentSchema(type)
     let validatedContent = content
-    if (contentSchema) {
-      const validation = contentSchema.safeParse(content)
+    if (type === 'ROLE_PROFILE') {
+      const validation = JobDescriptionDraftInputSchema.safeParse(content)
       if (!validation.success) {
         const issueSummary = validation.error.issues
           .slice(0, 5)
@@ -475,7 +485,28 @@ export class RoleService {
           422,
         )
       }
-      validatedContent = validation.data as T
+      validatedContent = {
+        schema_version: '2',
+        stage: 'JOB_DESCRIPTION_DRAFT',
+        job_description: validation.data.job_description,
+      } as T
+    } else {
+      const contentSchema = generatedArtifactContentSchema(type)
+      if (contentSchema) {
+        const validation = contentSchema.safeParse(content)
+        if (!validation.success) {
+          const issueSummary = validation.error.issues
+            .slice(0, 5)
+            .map((issue) => `${issue.path.join('.') || 'content'}：${issue.message}`)
+            .join('；')
+          throw new DomainError(
+            'ARTIFACT_CONTENT_INVALID',
+            `${artifactNames[type]}结构不符合前端展示契约：${issueSummary}`,
+            422,
+          )
+        }
+        validatedContent = validation.data as T
+      }
     }
     const version =
       Math.max(
@@ -557,6 +588,68 @@ export class RoleService {
     }
     if (artifact.type !== 'HR_RECRUITING_BRIEF' && !['MANAGER', 'ADMIN'].includes(effectiveRole)) {
       throw new DomainError('FORBIDDEN', '该产物需要用人经理确认', 403)
+    }
+    if (artifact.type === 'ROLE_PROFILE') {
+      const staged = RoleProfileJobDescriptionContentSchema.safeParse(artifact.content)
+      if (staged.success && staged.data.stage === 'JOB_DESCRIPTION_DRAFT') {
+        if (aggregate.state.latest_artifacts.ROLE_PROFILE?.id !== artifact.id) {
+          throw new DomainError('ARTIFACT_VERSION_STALE', '岗位说明已生成新版本，请确认最新版本', 409)
+        }
+        if (artifact.content_hash !== submittedHash) {
+          throw new DomainError('CONTENT_HASH_MISMATCH', '产物已发生变化，请查看最新版本后再确认', 409)
+        }
+        if (artifact.status !== 'DRAFT') {
+          throw new DomainError('ARTIFACT_NOT_CONFIRMABLE', '仅草稿可以确认', 409)
+        }
+        const locked = createArtifactEnvelope({
+          roleSessionId,
+          type: 'ROLE_PROFILE',
+          version: Math.max(
+            0,
+            ...aggregate.artifacts
+              .filter((item) => item.type === 'ROLE_PROFILE')
+              .map((item) => item.version),
+          ) + 1,
+          content: {
+            schema_version: '2',
+            stage: 'JOB_DESCRIPTION_CONFIRMED',
+            job_description: staged.data.job_description,
+            job_description_confirmation: {
+              source_artifact_id: artifact.id,
+              section_hash: contentHash(staged.data.job_description),
+              confirmed_by: actor.user_id,
+              confirmed_at: nowIso(),
+            },
+          },
+          createdBy: actor.user_id,
+          basedOnHash: artifact.content_hash,
+        })
+        await this.store.insertArtifact(locked)
+        const state: RoleState = {
+          ...aggregate.state,
+          stage: 'PROFILE_DRAFT',
+          revision: aggregate.state.revision + 1,
+          latest_artifacts: {
+            ...aggregate.state.latest_artifacts,
+            ROLE_PROFILE: {
+              id: locked.id,
+              version: locked.version,
+              status: locked.status,
+              content_hash: locked.content_hash,
+              content: locked.content,
+            },
+          },
+          updated_at: nowIso(),
+        }
+        await this.persistState(state, aggregate.state.revision)
+        await this.audit(actor, roleSessionId, 'CONFIRM_ARTIFACT', artifact.type, artifact.id, {
+          content_hash: submittedHash,
+          version: artifact.version,
+          effective_actor_role: effectiveRole,
+          confirmation_scope: 'JOB_DESCRIPTION',
+        })
+        return locked
+      }
     }
     const confirmed = confirmArtifact(artifact, actor, submittedHash)
     await this.store.updateArtifact(confirmed)
