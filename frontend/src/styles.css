@@ -2424,6 +2424,26 @@ textarea:focus-visible {
   cursor: default;
 }
 
+.profile-loading-state {
+  display: flex;
+  min-height: 320px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 9px;
+  color: var(--text-2);
+}
+
+.profile-loading-state strong {
+  color: var(--text);
+  font-size: 15px;
+}
+
+.profile-loading-state span:last-child {
+  color: var(--text-3);
+  font-size: 12px;
+}
+
 .empty-conversation .transcript {
   padding-bottom: 28px;
 }

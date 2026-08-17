@@ -171,7 +171,7 @@ function App() {
     ? {
         ...actor,
         role: effectiveActorRole,
-        display_name: `${actor.display_name}（测试·${actorRoleLabel[effectiveActorRole]}）`,
+        display_name: effectiveActorRole === 'HR' ? 'HR 测试身份' : '用人经理测试身份',
       }
     : actor;
 
@@ -262,11 +262,12 @@ function App() {
     setActiveView('conversation');
   }
 
-  function chooseRole(roleId) {
+  function chooseRole(roleId, nextView = 'conversation') {
     setNewConversationMode(false);
     setActiveRoleId(roleId);
-    setActiveView('conversation');
+    setActiveView(nextView);
     setEvidenceId(null);
+    setRoleDetail(null);
     setMessages([]);
     setClarificationPolicy(null);
     setAgentEvents([]);
@@ -425,6 +426,7 @@ function App() {
     return (
       <EmptyWorkspace
         actor={actor}
+        displayActor={conversationActor}
         activeView={activeView}
         roleSessions={roleSessions}
         agentEvents={agentEvents}
@@ -566,8 +568,8 @@ function App() {
           </div>
           <div className="header-actions">
             <div className="collaborators" aria-label="会话协作者">
-              <span className={`avatar avatar-${viewerRole}`} title={`${actor.display_name} · ${actorRoleLabel[effectiveActorRole]}`}>
-                {displayInitial(actor.display_name, effectiveActorRole)}
+              <span className={`avatar avatar-${viewerRole}`} title={`${conversationActor.display_name} · ${actorRoleLabel[effectiveActorRole]}`}>
+                {displayInitial(conversationActor.display_name, effectiveActorRole)}
               </span>
               <button className="avatar avatar-add" aria-label="邀请协作者"><Plus size={13} /></button>
             </div>
@@ -627,6 +629,7 @@ function App() {
 
 function EmptyWorkspace({
   actor,
+  displayActor,
   activeView,
   roleSessions,
   agentEvents,
@@ -646,6 +649,7 @@ function EmptyWorkspace({
   const [profileOpen, setProfileOpen] = useState(false);
   const effectiveActorRole = actor.role === 'ADMIN' ? adminTestRole : actor.role;
   const viewerRole = effectiveActorRole === 'HR' ? 'hr' : 'manager';
+  const recentRole = roleSessions[0] ?? null;
   return (
     <div className="app-shell empty-workspace-shell">
       <aside className="sidebar">
@@ -727,8 +731,8 @@ function EmptyWorkspace({
           </div>
           <div className="header-actions">
             <div className="collaborators" aria-label="当前账号">
-              <span className={`avatar avatar-${viewerRole}`} title={`${actor.display_name} · ${actorRoleLabel[effectiveActorRole]}`}>
-                {displayInitial(actor.display_name, effectiveActorRole)}
+              <span className={`avatar avatar-${viewerRole}`} title={`${displayActor.display_name} · ${actorRoleLabel[effectiveActorRole]}`}>
+                {displayInitial(displayActor.display_name, effectiveActorRole)}
               </span>
               <button className="avatar avatar-add" aria-label="邀请协作者" disabled><Plus size={13} /></button>
             </div>
@@ -739,8 +743,14 @@ function EmptyWorkspace({
 
         <div className="workspace-tabs">
           <button className={activeView === 'conversation' ? 'active' : ''} onClick={onOpenConversation}>对话</button>
-          <button className="empty-disabled-tab" type="button" disabled>
-            岗位画像 <span className="tab-state">未生成</span>
+          <button
+            className={!recentRole ? 'empty-disabled-tab' : ''}
+            type="button"
+            disabled={!recentRole}
+            onClick={() => recentRole && onChooseRole(recentRole.id, 'profile')}
+            title={recentRole ? `查看${recentRole.name}岗位画像` : '当前还没有可查看的岗位画像'}
+          >
+            岗位画像 <span className="tab-state">{recentRole?.version ?? '未生成'}</span>
           </button>
           {actor.role === 'ADMIN' && (
             <button className={activeView === 'admin-trace' ? 'active' : ''} onClick={onOpenTrace}>
@@ -788,7 +798,7 @@ function EmptyWorkspace({
                   <span className="agent-avatar"><ClarifierMark size={25} /></span>
                   <div className="message-body">
                     <div className="message-label">画像澄清 Agent</div>
-                    <p>你好，{actor.display_name}。我们不用从一张表单开始。</p>
+                    <p>你好，{displayActor.display_name}。我们不用从一张表单开始。</p>
                     <p>你可以直接说：“最近业务遇到了什么问题，所以想招什么样的人？”我会边聊边帮你建立岗位。</p>
                     <div className="empty-chat-starters">
                       <span><Sparkles size={14} />你可以这样开始</span>
@@ -1140,6 +1150,15 @@ function ProfileView({ viewerRole, actualActorRole, onOpenEvidence, roleDetail, 
   const [expandedRequirement, setExpandedRequirement] = useState('C-01');
   const [expandedScore, setExpandedScore] = useState('A-01');
   const state = roleDetail?.state;
+  if (!state) {
+    return (
+      <section className="profile-surface redesigned-profile profile-loading-state" aria-live="polite">
+        <ClarifierMark size={38} plate />
+        <strong>正在加载岗位画像…</strong>
+        <span>正在读取当前岗位的 HC 信息、画像产物和版本状态。</span>
+      </section>
+    );
+  }
   const latestArtifacts = state?.latest_artifacts ?? {};
   const meta = {
     ...roleProfile.meta,
