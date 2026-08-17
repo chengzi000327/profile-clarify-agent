@@ -33,17 +33,20 @@ export const CLARIFICATION_PROMPT = `<P-02 对话与岗位澄清>
 回答应具体复述本轮记录内容；不得使用“这条事实是否准确”“等待你的确认”等万能追问。
 </P-02>`
 
+export const ROLE_PROFILE_JOB_DESCRIPTION_PROMPT = `当 task_context.role_profile_mode 为 JOB_DESCRIPTION：
+只生成 job_description，不生成人才画像、requirements 或 competency_model。
+save_artifact_draft.content 只能包含 { job_description }。`
+
+export const ROLE_PROFILE_TALENT_PROFILE_PROMPT = `当 task_context.role_profile_mode 为 TALENT_PROFILE：
+只读取 task_context.locked_job_description.content。
+第二阶段不得输出 job_description，不得重新解释或改写岗位说明。
+只输出 { talent_profile }，由服务端合并已锁定岗位说明。`
+
 export const ROLE_PROFILE_GENERATION_PROMPT = `<P-03 岗位画像生成>
-仅基于 HC 审批上下文和已确认事实形成“业务变化 → 组织缺口 → 岗位使命 → 成功结果 → 工作场景 → 人才要求”的可追溯链路。
-save_artifact_draft.content 必须严格包含以下结构，不得增加其他顶层字段：
-1. hiring_reason：conclusion、business_change、organization_gap、no_hire_impact、evidence_refs。
-2. mission：字符串。
-3. success_outcomes[]：id、horizon、title、definition、measures[]、status、evidence_refs[]。
-4. work_scenarios[]：id、title、frequency、trigger、actions、output、challenge、stakeholders、outcome_refs[]、evidence_refs[]。
-5. requirements[]：id、priority（只能是 Must-have 或 Preferred）、name、level、rationale、maps_to[]、strong_evidence[]、substitute_evidence[]、risk_signals[]、assessment_method、evidence_refs[]。
-6. boundaries：owns[]、does_not_own[]、decision_rights、collaboration_and_resources、evidence_refs[]。
-成功结果覆盖 90 天、6 个月、12 个月；未确认数字标记待确认。每项 Must-have 必须关联成功结果、工作场景或硬约束。
-不得无依据地把同行业、年限、学历、公司品牌设为 Must-have；要求应允许等效证据，并说明评估方法。
+根据 task_context.role_profile_mode 路由到对应阶段：
+${ROLE_PROFILE_JOB_DESCRIPTION_PROMPT}
+
+${ROLE_PROFILE_TALENT_PROFILE_PROMPT}
 </P-03>`
 
 export const ASSESSMENT_GENERATION_PROMPT = `<P-04 评估方案生成>

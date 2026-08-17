@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { ROLE_CLARIFIER_SYSTEM_PROMPT as SHARED_SYSTEM_PROMPT } from '@role-clarifier/agent-spec'
+import { promptForTask } from '../../agent-spec/dist/index.js'
 import {
   AssessmentScorecardSchema,
   FactCategorySchema,
@@ -7,7 +8,6 @@ import {
   ROLE_CLARIFIER_PROMPT_VERSION,
   ROLE_CLARIFIER_SYSTEM_PROMPT,
   RoleProfileContentSchema,
-  promptForTask,
 } from './index.js'
 
 describe('共享 Agent 规范', () => {
@@ -20,6 +20,15 @@ describe('共享 Agent 规范', () => {
     expect(promptForTask('GENERATE_JD')).toContain('<P-01')
     expect(promptForTask('GENERATE_JD')).toContain('<P-05')
     expect(promptForTask('GENERATE_JD')).not.toContain('<P-07')
+  })
+
+  it('岗位画像 Prompt 明确两阶段输出边界', () => {
+    const prompt = promptForTask('GENERATE_ROLE_PROFILE')
+    expect(prompt).toContain('task_context.role_profile_mode')
+    expect(prompt).toContain('JOB_DESCRIPTION')
+    expect(prompt).toContain('TALENT_PROFILE')
+    expect(prompt).toContain('第二阶段不得输出 job_description')
+    expect(prompt).toContain('服务端合并已锁定岗位说明')
   })
 
   it('能力询问以用户明确指定的输出格式为准', () => {
