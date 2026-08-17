@@ -42,6 +42,8 @@ import { Composer, LiveAgentRun } from './components/AgentConversation.jsx';
 import AdminTraceConsole from './components/AdminTraceConsole.jsx';
 import { normalizeAssessmentContent } from './assessment-content.js';
 import { normalizeRoleProfileContent } from './role-profile-content.js';
+import { normalizeRecruitingContent } from './recruiting-content.js';
+import { normalizePublicJDContent } from './public-jd-content.js';
 
 const sourceIcons = {
   org: Users,
@@ -130,6 +132,34 @@ function ClarifierMark({ size = 32, plate = false }) {
       </svg>
     </span>
   );
+}
+
+class ArtifactRenderBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { failed: false };
+  }
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  componentDidCatch(error) {
+    console.error('Artifact rendering failed', error);
+  }
+
+  render() {
+    if (this.state.failed) {
+      return (
+        <div className="artifact-render-error" role="alert">
+          <span><AlertTriangle size={22} /></span>
+          <strong>当前产物暂时无法展示</strong>
+          <p>这份历史产物的数据格式与当前页面不兼容。工作台和其他页签仍可继续使用，请生成新版本或稍后重试。</p>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
 }
 
 function AdminTestRoleSwitch({ value, onChange, compact = false }) {
@@ -1311,23 +1341,25 @@ function ProfileView({
         </nav>
 
         <div className="profile-content-frame">
-          {(!latestArtifact || latestArtifact.status === 'INVALIDATED') ? (
-            <ArtifactEmptyState
-              artifactType={artifactType}
-              invalidated={latestArtifact?.status === 'INVALIDATED'}
-              canManage={canManageArtifact}
-              onGenerate={() => onArtifactAction?.(artifactType)}
-              busy={agentStatus === 'running'}
-            />
-          ) : section === 'portrait' ? (
-            <RecruitingPortrait onOpenEvidence={onOpenEvidence} artifact={latestArtifact} roleDetail={roleDetail} />
-          ) : section === 'basis' ? (
-            <GeneratedProfileBasis artifact={latestArtifact} state={state} />
-          ) : section === 'assessment' ? (
-            <GeneratedAssessment artifact={latestArtifact} />
-          ) : (
-            <JDPreview jd={latestArtifact} state={state} />
-          )}
+          <ArtifactRenderBoundary key={`${artifactType}-${latestArtifact?.id ?? 'empty'}-${latestArtifact?.version ?? 0}`}>
+            {(!latestArtifact || latestArtifact.status === 'INVALIDATED') ? (
+              <ArtifactEmptyState
+                artifactType={artifactType}
+                invalidated={latestArtifact?.status === 'INVALIDATED'}
+                canManage={canManageArtifact}
+                onGenerate={() => onArtifactAction?.(artifactType)}
+                busy={agentStatus === 'running'}
+              />
+            ) : section === 'portrait' ? (
+              <RecruitingPortrait onOpenEvidence={onOpenEvidence} artifact={latestArtifact} roleDetail={roleDetail} />
+            ) : section === 'basis' ? (
+              <GeneratedProfileBasis artifact={latestArtifact} state={state} />
+            ) : section === 'assessment' ? (
+              <GeneratedAssessment artifact={latestArtifact} />
+            ) : (
+              <JDPreview jd={latestArtifact} state={state} />
+            )}
+          </ArtifactRenderBoundary>
         </div>
       </div>
     </section>
@@ -1335,55 +1367,8 @@ function ProfileView({
 }
 
 function RecruitingPortrait({ onOpenEvidence, artifact, roleDetail }) {
-  const content = artifact?.content ?? {};
   const hc = roleDetail?.state?.hc_context;
-  const sourcing = content.sourcing ?? {};
-  const screening = content.resume_screening ?? {};
-  const candidates = roleDetail?.candidates ?? [];
-  const portrait = {
-    approvedContext: {
-      coreProblem: hc?.organization_gap ?? 'HC 审批数据中尚未同步组织缺口。',
-      evidence: [],
-    },
-    candidateDefinition: content.candidate_definition ?? '当前招聘画像缺少一句话目标候选人，请生成新版本补齐。',
-    sourcingBrief: {
-      targetTypes: sourcing.target_types ?? [],
-      titles: sourcing.titles ?? [],
-      keywords: sourcing.keywords ?? [],
-      query: sourcing.query ?? '当前版本未生成检索式',
-      nonTarget: sourcing.non_target ?? [],
-    },
-    resumeScreening: {
-      decision: screening.decision ?? '当前版本未生成推进规则',
-      coreSignals: (screening.core_signals ?? []).map((signal) => ({
-        ...signal,
-        lookFor: signal.look_for ?? [],
-        notEnough: signal.not_enough ?? '待补充反例',
-      })),
-      rules: screening.rules ?? [],
-    },
-    phoneScreen: (content.phone_screen ?? []).map((item) => ({
-      ...item,
-      listenFor: item.listen_for ?? '',
-    })),
-    candidateCalibration: {
-      source: candidates.length > 0 ? `已导入 ${candidates.length} 份脱敏简历` : '尚未导入首批简历',
-      samples: candidates.map((candidate, index) => {
-        const strongCount = candidate.evidence.filter((item) => item.signal === 'STRONG').length;
-        const missingCount = candidate.evidence.filter((item) => item.signal === 'MISSING').length;
-        const decision = strongCount > 0 && missingCount === 0 ? '建议推进' : missingCount > 0 ? '电话验证' : '待校准';
-        return {
-          id: candidate.candidate_ref,
-          name: `匿名候选人 ${index + 1}`,
-          currentRole: candidate.channel,
-          agentDecision: decision,
-          tone: decision === '建议推进' ? 'go' : 'verify',
-          evidence: candidate.evidence.map((item) => item.criterion),
-          gap: candidate.bottlenecks.join('；') || '暂无重复卡点',
-        };
-      }),
-    },
-  };
+  const portrait = normalizeRecruitingContent(artifact?.content, hc, roleDetail?.candidates);
   const [managerDecisions, setManagerDecisions] = useState({});
   const confirmedCount = Object.keys(managerDecisions).length;
 
@@ -1657,14 +1642,11 @@ function JDPreview({ jd, state }) {
       description: '能定义有意义的观察指标，理解数据限制，并让数据真正改变产品决策。',
     },
   ];
-  const content = jd?.content;
-  const responsibilities = content?.what_you_will_do ?? fallbackResponsibilities;
-  const capabilities = content?.what_we_look_for?.map((item) => ({
-    title: item,
-    description: '',
-  })) ?? fallbackCapabilities;
-  const basics = content?.title_and_basics;
-  const hcBasics = state?.hc_context?.job_basics;
+  const normalized = normalizePublicJDContent(jd?.content, state, {
+    about: '我们正在从项目交付走向标准产品。你会从多个客户场景中识别高价值共性需求，定义可复用的产品路线，并推动首个标准能力完成真实客户验证。这个岗位主导跨项目的产品化判断，不代替单个客户的项目交付。',
+    responsibilities: fallbackResponsibilities,
+    capabilities: fallbackCapabilities.map((item, index) => ({ id: `fallback-${index}`, ...item })),
+  });
 
   return (
     <div className="jd-preview-shell">
@@ -1674,20 +1656,20 @@ function JDPreview({ jd, state }) {
       </div>
       <article className="jd-document">
         <header>
-          <span>{state?.department ?? '团队待同步'} · {basics?.location ?? hcBasics?.locations?.join(' / ') ?? '地点待同步'}</span>
-          <h1>{basics?.title ?? state?.title ?? '岗位名称待同步'}</h1>
+          <span>{normalized.department} · {normalized.location}</span>
+          <h1>{normalized.title}</h1>
           <p>一起把复杂问题转化为真正可验证的业务结果。</p>
-          <div className="jd-facts"><span>{basics?.employment_type ?? hcBasics?.employment_type ?? '全职'}</span><span>{hcBasics?.level ?? '职级待同步'}</span><span>汇报给{basics?.reporting_line ?? hcBasics?.reporting_line ?? '待同步'}</span></div>
+          <div className="jd-facts"><span>{normalized.employmentType}</span><span>{normalized.level}</span><span>汇报给{normalized.reportingLine}</span></div>
         </header>
         <section className="jd-about-role">
           <h2>关于岗位</h2>
-          <p>{content?.about_the_role ?? '我们正在从项目交付走向标准产品。你会从多个客户场景中识别高价值共性需求，定义可复用的产品路线，并推动首个标准能力完成真实客户验证。这个岗位主导跨项目的产品化判断，不代替单个客户的项目交付。'}</p>
+          <p>{normalized.about}</p>
         </section>
         <section><h2>你会做什么</h2><ol className="jd-responsibility-list">
-          {responsibilities.map((item) => <li key={item}>{item}</li>)}
+          {normalized.responsibilities.map((item, index) => <li key={`${index}-${item}`}>{item}</li>)}
         </ol></section>
         <section><h2>我们希望你具备</h2><div className="jd-capability-list">
-          {capabilities.map((capability) => <div key={capability.title}><strong>{capability.title}</strong>{capability.description && <p>{capability.description}</p>}</div>)}
+          {normalized.capabilities.map((capability) => <div key={capability.id}><strong>{capability.title}</strong>{capability.description && <p>{capability.description}</p>}</div>)}
         </div></section>
         <footer className="jd-document-footer"><span>候选人版预览 · 仅包含可公开字段</span><strong>版本 v{jd?.version ?? '0.5'} · {jd?.status === 'CONFIRMED' ? '已确认' : '待发布'}</strong></footer>
       </article>

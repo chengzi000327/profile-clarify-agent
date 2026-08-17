@@ -1890,6 +1890,37 @@ textarea:focus-visible {
   text-align: center;
 }
 
+.artifact-render-error {
+  display: grid;
+  place-items: center;
+  min-height: 360px;
+  padding: 48px;
+  text-align: center;
+}
+
+.artifact-render-error > span {
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  margin-bottom: 14px;
+  border: 1px solid #ffd6c9;
+  border-radius: 14px;
+  color: #d94822;
+  background: #fff6f2;
+}
+
+.artifact-render-error strong {
+  margin-bottom: 8px;
+  font-size: 18px;
+}
+
+.artifact-render-error p {
+  max-width: 520px;
+  color: #667085;
+  line-height: 1.7;
+}
+
 .artifact-empty-state > span {
   display: grid;
   width: 52px;
