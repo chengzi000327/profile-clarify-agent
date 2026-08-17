@@ -8,8 +8,10 @@ import {
   type AgentRun,
   type ArtifactType,
   type CandidateEvidence,
+  type JobDescription,
   type RoleProfileJobDescriptionContent,
   type RoleProfileTalentDraftContent,
+  type TalentProfile,
 } from '@role-clarifier/contracts'
 import { contentHash } from '@role-clarifier/domain'
 import { buildApp, visibleAgentEvent } from './app.js'
@@ -1332,6 +1334,66 @@ describe('Role Clarifier API', () => {
       'ROLE_PROFILE',
       { talent_profile: validTalentProfile },
     )).rejects.toMatchObject({ code: 'TALENT_PROFILE_CONFIRMATION_REQUIRED' })
+  })
+
+  it('上游合法极限值可完成岗位说明锁定与人才画像无损合并', async () => {
+    const maxArtifactText = '甲'.repeat(4_000)
+    const maxSourceList = Array.from({ length: 12 }, () => maxArtifactText)
+    const maximalJobDescription = structuredClone(validJobDescription) as unknown as JobDescription
+    maximalJobDescription.success_criteria.push(
+      ...Array.from({ length: 5 }, (_, index) => ({
+        ...maximalJobDescription.success_criteria[0]!,
+        id: `O-0${index + 4}`,
+        horizon: `${(index + 3) * 6}个月`,
+        title: `扩展成功结果 ${index + 4}`,
+      })),
+    )
+    maximalJobDescription.work_scenarios[0]!.stakeholders = maxSourceList
+    maximalJobDescription.boundaries.decision_rights = maxSourceList
+    maximalJobDescription.boundaries.key_collaborations = maxSourceList
+    maximalJobDescription.boundaries.available_resources = maxSourceList
+    const maximalTalentProfile = structuredClone(validTalentProfile) as unknown as TalentProfile
+    maximalTalentProfile.qualifications.must_have[0]!.definition = maxArtifactText
+
+    const jobDraft = await roleService.saveArtifactDraft(
+      DEMO_ROLE_SESSION_ID,
+      managerActor,
+      'ROLE_PROFILE',
+      { job_description: maximalJobDescription },
+    )
+    const afterDraft = await roleService.get(DEMO_ROLE_SESSION_ID, managerActor)
+    const locked = await roleService.confirmArtifact(
+      DEMO_ROLE_SESSION_ID,
+      jobDraft.id,
+      managerActor,
+      jobDraft.content_hash,
+      afterDraft.state.revision,
+    )
+
+    const talentDraft = await roleService.saveArtifactDraft(
+      DEMO_ROLE_SESSION_ID,
+      managerActor,
+      'ROLE_PROFILE',
+      { talent_profile: maximalTalentProfile },
+    )
+    const talentContent = talentDraft.content as RoleProfileTalentDraftContent
+    const projection = buildLegacyRoleProfileProjection(talentContent)
+
+    expect(locked.content).toMatchObject({ stage: 'JOB_DESCRIPTION_CONFIRMED' })
+    expect(talentContent.success_outcomes).toHaveLength(8)
+    expect(talentContent.requirements.find(({ id }) => id === 'Q-MUST-01')?.level).toBe(maxArtifactText)
+    expect(talentContent.work_scenarios[0]!.stakeholders).toBe(maxSourceList.join('、'))
+    expect(talentContent.boundaries.decision_rights).toBe(maxSourceList.join('、'))
+    expect(talentContent.boundaries.collaboration_and_resources)
+      .toBe(`协作：${maxSourceList.join('、')}；资源：${maxSourceList.join('、')}`)
+    expect({
+      hiring_reason: talentContent.hiring_reason,
+      mission: talentContent.mission,
+      success_outcomes: talentContent.success_outcomes,
+      work_scenarios: talentContent.work_scenarios,
+      requirements: talentContent.requirements,
+      boundaries: talentContent.boundaries,
+    }).toEqual(projection)
   })
 
   it('人才要求 maps_to 只能引用已锁定岗位说明且失败不写入版本或 revision', async () => {

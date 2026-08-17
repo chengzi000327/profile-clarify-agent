@@ -576,6 +576,97 @@ describe('人才画像增量契约', () => {
     }).success).toBe(true)
   })
 
+  it('V2 最终画像接受所有上游合法极限值的无损兼容投影', () => {
+    const maxArtifactText = '甲'.repeat(4_000)
+    const maxSourceList = Array.from({ length: 12 }, () => maxArtifactText)
+    const maxJoinedSourceList = maxSourceList.join('、')
+    const maxCollaborationAndResources = `协作：${maxJoinedSourceList}；资源：${maxJoinedSourceList}`
+    const maximalFinalContent = structuredClone(validTalentDraftContent)
+    const additionalOutcomes = Array.from({ length: 5 }, (_, index) => ({
+      ...maximalFinalContent.job_description.success_criteria[0]!,
+      id: `O-0${index + 4}`,
+      horizon: `${(index + 3) * 6}个月`,
+      title: `扩展成功结果 ${index + 4}`,
+    }))
+    maximalFinalContent.job_description.success_criteria.push(...additionalOutcomes)
+    maximalFinalContent.success_outcomes.push(...structuredClone(additionalOutcomes))
+    maximalFinalContent.job_description.work_scenarios[0]!.stakeholders = maxSourceList
+    maximalFinalContent.work_scenarios[0]!.stakeholders = maxJoinedSourceList
+    maximalFinalContent.job_description.boundaries.decision_rights = maxSourceList
+    maximalFinalContent.job_description.boundaries.key_collaborations = maxSourceList
+    maximalFinalContent.job_description.boundaries.available_resources = maxSourceList
+    maximalFinalContent.boundaries.decision_rights = maxJoinedSourceList
+    maximalFinalContent.boundaries.collaboration_and_resources = maxCollaborationAndResources
+    maximalFinalContent.talent_profile.qualifications.must_have[0]!.definition = maxArtifactText
+    maximalFinalContent.requirements[0]!.level = maxArtifactText
+
+    expect(maximalFinalContent.job_description.success_criteria).toHaveLength(8)
+    expect(maxJoinedSourceList).toHaveLength(48_011)
+    expect(maxCollaborationAndResources).toHaveLength(96_029)
+    expect(RoleProfileTalentDraftContentSchema.safeParse(maximalFinalContent).success).toBe(true)
+  })
+
+  it('standalone legacy 岗位画像继续保留旧的成功结果、level 与拼接文本上限', () => {
+    const {
+      schema_version: _schemaVersion,
+      stage: _stage,
+      job_description: _jobDescription,
+      job_description_confirmation: _jobDescriptionConfirmation,
+      talent_profile: _talentProfile,
+      ...legacyContent
+    } = validTalentDraftContent
+    const maxArtifactText = '甲'.repeat(4_000)
+    const longProjectionText = Array.from({ length: 12 }, () => maxArtifactText).join('、')
+    const sevenOutcomes = [
+      ...legacyContent.success_outcomes,
+      ...Array.from({ length: 4 }, (_, index) => ({
+        ...legacyContent.success_outcomes[0]!,
+        id: `O-LEGACY-${index + 4}`,
+      })),
+    ]
+
+    expect(LegacyRoleProfileContentSchema.safeParse({
+      ...legacyContent,
+      success_outcomes: sevenOutcomes,
+    }).success).toBe(false)
+    expect(LegacyRoleProfileContentSchema.safeParse({
+      ...legacyContent,
+      requirements: [{ ...legacyContent.requirements[0]!, level: maxArtifactText }],
+    }).success).toBe(false)
+    expect(LegacyRoleProfileContentSchema.safeParse({
+      ...legacyContent,
+      work_scenarios: [{ ...legacyContent.work_scenarios[0]!, stakeholders: longProjectionText }],
+    }).success).toBe(false)
+    expect(LegacyRoleProfileContentSchema.safeParse({
+      ...legacyContent,
+      boundaries: { ...legacyContent.boundaries, decision_rights: longProjectionText },
+    }).success).toBe(false)
+    expect(LegacyRoleProfileContentSchema.safeParse({
+      ...legacyContent,
+      boundaries: { ...legacyContent.boundaries, collaboration_and_resources: longProjectionText },
+    }).success).toBe(false)
+  })
+
+  it('V2 最终画像拒绝超过上游理论最大组合长度的兼容投影', () => {
+    const aboveJoinedSourceLimit = '甲'.repeat(48_012)
+    const aboveCollaborationLimit = '甲'.repeat(96_030)
+
+    expect(RoleProfileTalentDraftContentSchema.safeParse({
+      ...validTalentDraftContent,
+      work_scenarios: [{
+        ...validTalentDraftContent.work_scenarios[0],
+        stakeholders: aboveJoinedSourceLimit,
+      }],
+    }).success).toBe(false)
+    expect(RoleProfileTalentDraftContentSchema.safeParse({
+      ...validTalentDraftContent,
+      boundaries: {
+        ...validTalentDraftContent.boundaries,
+        collaboration_and_resources: aboveCollaborationLimit,
+      },
+    }).success).toBe(false)
+  })
+
   it('历史 standalone 岗位画像仍拒绝 13 条 requirements', () => {
     const {
       schema_version: _schemaVersion,

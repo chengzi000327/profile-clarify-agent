@@ -138,7 +138,15 @@ export const HcApprovalSchema = z.object({
 })
 export type HcApproval = z.infer<typeof HcApprovalSchema>
 
-const ArtifactTextSchema = z.string().trim().min(1).max(4_000)
+const ARTIFACT_TEXT_MAX_LENGTH = 4_000
+const ROLE_PROFILE_SOURCE_LIST_MAX_ITEMS = 12
+const ROLE_PROFILE_JOINED_LIST_MAX_LENGTH =
+  ARTIFACT_TEXT_MAX_LENGTH * ROLE_PROFILE_SOURCE_LIST_MAX_ITEMS
+  + (ROLE_PROFILE_SOURCE_LIST_MAX_ITEMS - 1)
+const ROLE_PROFILE_COLLABORATION_AND_RESOURCES_MAX_LENGTH =
+  ROLE_PROFILE_JOINED_LIST_MAX_LENGTH * 2 + '协作：；资源：'.length
+
+const ArtifactTextSchema = z.string().trim().min(1).max(ARTIFACT_TEXT_MAX_LENGTH)
 const ArtifactEvidenceRefsSchema = z.array(z.string().trim().min(1).max(120)).max(20).default([])
 
 const LegacyRoleProfileRequirementSchema = z.object({
@@ -155,6 +163,37 @@ const LegacyRoleProfileRequirementSchema = z.object({
   evidence_refs: ArtifactEvidenceRefsSchema,
 }).strict()
 
+const LegacyRoleProfileSuccessOutcomeSchema = z.object({
+  id: z.string().trim().min(1).max(40),
+  horizon: z.string().trim().min(1).max(80),
+  title: z.string().trim().min(1).max(200),
+  definition: ArtifactTextSchema,
+  measures: z.array(ArtifactTextSchema).min(1).max(8),
+  status: z.string().trim().min(1).max(80),
+  evidence_refs: ArtifactEvidenceRefsSchema,
+}).strict()
+
+const LegacyRoleProfileWorkScenarioSchema = z.object({
+  id: z.string().trim().min(1).max(40),
+  title: z.string().trim().min(1).max(200),
+  frequency: z.string().trim().min(1).max(120),
+  trigger: ArtifactTextSchema,
+  actions: ArtifactTextSchema,
+  output: ArtifactTextSchema,
+  challenge: ArtifactTextSchema,
+  stakeholders: ArtifactTextSchema,
+  outcome_refs: z.array(z.string().trim().min(1).max(40)).max(10).default([]),
+  evidence_refs: ArtifactEvidenceRefsSchema,
+}).strict()
+
+const LegacyRoleProfileBoundariesSchema = z.object({
+  owns: z.array(ArtifactTextSchema).min(1).max(12),
+  does_not_own: z.array(ArtifactTextSchema).min(1).max(12),
+  decision_rights: ArtifactTextSchema,
+  collaboration_and_resources: ArtifactTextSchema,
+  evidence_refs: ArtifactEvidenceRefsSchema,
+}).strict()
+
 export const LegacyRoleProfileContentSchema = z
   .object({
     hiring_reason: z
@@ -167,41 +206,10 @@ export const LegacyRoleProfileContentSchema = z
       })
       .strict(),
     mission: ArtifactTextSchema,
-    success_outcomes: z.array(z
-      .object({
-        id: z.string().trim().min(1).max(40),
-        horizon: z.string().trim().min(1).max(80),
-        title: z.string().trim().min(1).max(200),
-        definition: ArtifactTextSchema,
-        measures: z.array(ArtifactTextSchema).min(1).max(8),
-        status: z.string().trim().min(1).max(80),
-        evidence_refs: ArtifactEvidenceRefsSchema,
-      })
-      .strict()).min(1).max(6),
-    work_scenarios: z.array(z
-      .object({
-        id: z.string().trim().min(1).max(40),
-        title: z.string().trim().min(1).max(200),
-        frequency: z.string().trim().min(1).max(120),
-        trigger: ArtifactTextSchema,
-        actions: ArtifactTextSchema,
-        output: ArtifactTextSchema,
-        challenge: ArtifactTextSchema,
-        stakeholders: ArtifactTextSchema,
-        outcome_refs: z.array(z.string().trim().min(1).max(40)).max(10).default([]),
-        evidence_refs: ArtifactEvidenceRefsSchema,
-      })
-      .strict()).min(1).max(8),
+    success_outcomes: z.array(LegacyRoleProfileSuccessOutcomeSchema).min(1).max(6),
+    work_scenarios: z.array(LegacyRoleProfileWorkScenarioSchema).min(1).max(8),
     requirements: z.array(LegacyRoleProfileRequirementSchema).min(1).max(12),
-    boundaries: z
-      .object({
-        owns: z.array(ArtifactTextSchema).min(1).max(12),
-        does_not_own: z.array(ArtifactTextSchema).min(1).max(12),
-        decision_rights: ArtifactTextSchema,
-        collaboration_and_resources: ArtifactTextSchema,
-        evidence_refs: ArtifactEvidenceRefsSchema,
-      })
-      .strict(),
+    boundaries: LegacyRoleProfileBoundariesSchema,
   })
   .strict()
 
@@ -410,8 +418,25 @@ export const RoleProfileJobDescriptionContentSchema = z.discriminatedUnion('stag
 ])
 export type RoleProfileJobDescriptionContent = z.infer<typeof RoleProfileJobDescriptionContentSchema>
 
+const RoleProfileV2CompatibilityRequirementSchema = LegacyRoleProfileRequirementSchema.extend({
+  level: ArtifactTextSchema,
+})
+
+const RoleProfileV2CompatibilityWorkScenarioSchema = LegacyRoleProfileWorkScenarioSchema.extend({
+  stakeholders: z.string().trim().min(1).max(ROLE_PROFILE_JOINED_LIST_MAX_LENGTH),
+})
+
+const RoleProfileV2CompatibilityBoundariesSchema = LegacyRoleProfileBoundariesSchema.extend({
+  decision_rights: z.string().trim().min(1).max(ROLE_PROFILE_JOINED_LIST_MAX_LENGTH),
+  collaboration_and_resources: z.string().trim().min(1)
+    .max(ROLE_PROFILE_COLLABORATION_AND_RESOURCES_MAX_LENGTH),
+})
+
 export const RoleProfileTalentDraftContentSchema = LegacyRoleProfileContentSchema.extend({
-  requirements: z.array(LegacyRoleProfileRequirementSchema).min(1).max(132),
+  success_outcomes: z.array(LegacyRoleProfileSuccessOutcomeSchema).min(1).max(8),
+  work_scenarios: z.array(RoleProfileV2CompatibilityWorkScenarioSchema).min(1).max(8),
+  requirements: z.array(RoleProfileV2CompatibilityRequirementSchema).min(1).max(132),
+  boundaries: RoleProfileV2CompatibilityBoundariesSchema,
   schema_version: z.literal('2'),
   stage: z.literal('TALENT_PROFILE_DRAFT'),
   job_description: JobDescriptionSchema,
