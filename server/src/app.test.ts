@@ -446,6 +446,25 @@ describe('Role Clarifier API', () => {
     })
   })
 
+  it('每次创建预置聚合时隔离 ROLE_PROFILE 内容变更', () => {
+    const first = createDemoAggregate()
+    const second = createDemoAggregate()
+    const firstContent = first.artifacts.find((artifact) => artifact.type === 'ROLE_PROFILE')!.content as {
+      job_description: { job_purpose: { statement: string } }
+    }
+    const secondContent = second.artifacts.find((artifact) => artifact.type === 'ROLE_PROFILE')!.content as {
+      job_description: { job_purpose: { statement: string } }
+    }
+    const originalPurpose = secondContent.job_description.job_purpose.statement
+
+    try {
+      firstContent.job_description.job_purpose.statement = '不应泄漏到下一次预置聚合的测试变更'
+      expect(secondContent.job_description.job_purpose.statement).toBe(originalPurpose)
+    } finally {
+      firstContent.job_description.job_purpose.statement = originalPurpose
+    }
+  })
+
   const lockJobDescription = async () => {
     const draft = await roleService.saveArtifactDraft(
       DEMO_ROLE_SESSION_ID,

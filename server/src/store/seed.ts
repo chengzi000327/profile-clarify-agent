@@ -493,7 +493,7 @@ export const createDemoAggregate = (): RoleAggregate => {
       roleSessionId: DEMO_ROLE_SESSION_ID,
       type: 'ROLE_PROFILE',
       version: 1,
-      content: roleProfile,
+      content: structuredClone(roleProfile),
       createdBy: 'manager-demo',
       status: 'CONFIRMED',
     }),
