@@ -1,11 +1,14 @@
 import type {
   CandidateEvidence,
+  EnterpriseKnowledgeItem,
   HcContext,
   RoleState,
 } from '@role-clarifier/contracts'
+import { sql } from 'drizzle-orm'
 import {
   bigint,
   boolean,
+  check,
   index,
   integer,
   jsonb,
@@ -104,6 +107,127 @@ export const hcApprovals = pgTable(
     index('hc_approvals_manager_idx').on(table.tenantId, table.hiringManagerUserId),
     index('hc_approvals_hr_idx').on(table.tenantId, table.assignedHrUserId),
     uniqueIndex('hc_approvals_role_session_uidx').on(table.roleSessionId),
+  ],
+)
+
+export const enterpriseKnowledgeItems = pgTable(
+  'enterprise_knowledge_items',
+  {
+    id: text('id').primaryKey(),
+    tenantId: text('tenant_id').notNull(),
+    category: text('category').$type<EnterpriseKnowledgeItem['category']>().notNull(),
+    title: text('title').notNull(),
+    content: text('content').notNull(),
+    summary: text('summary').notNull(),
+    department: text('department'),
+    jobFamily: text('job_family'),
+    tags: text('tags').array().notNull().default(sql`'{}'::text[]`),
+    visibleTo: text('visible_to').$type<EnterpriseKnowledgeItem['visible_to']>().notNull(),
+    sourceRef: text('source_ref').notNull(),
+    sourceVersion: text('source_version').notNull(),
+    status: text('status').$type<EnterpriseKnowledgeItem['status']>().notNull(),
+    validFrom: timestamp('valid_from', { withTimezone: true }).notNull(),
+    validTo: timestamp('valid_to', { withTimezone: true }),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    check('enterprise_knowledge_items_category_check', sql`${table.category} IN ('ORGANIZATION', 'JOB_FAMILY', 'LEVEL_FRAMEWORK', 'HISTORICAL_JD', 'ROLE_PROFILE_CASE', 'RECRUITING_POLICY', 'INTERVIEW_STANDARD')`),
+    check('enterprise_knowledge_items_visibility_check', sql`${table.visibleTo} IN ('ALL_ROLE_MEMBERS', 'HR_ONLY', 'ADMIN_ONLY')`),
+    check('enterprise_knowledge_items_status_check', sql`${table.status} IN ('ACTIVE', 'ARCHIVED')`),
+    uniqueIndex('enterprise_knowledge_items_source_uidx').on(
+      table.tenantId,
+      table.sourceRef,
+      table.sourceVersion,
+    ),
+    index('enterprise_knowledge_items_tenant_status_category_idx').on(
+      table.tenantId,
+      table.status,
+      table.category,
+    ),
+    index('enterprise_knowledge_items_department_idx').on(table.tenantId, table.department),
+    index('enterprise_knowledge_items_job_family_idx').on(table.tenantId, table.jobFamily),
+    index('enterprise_knowledge_items_tags_gin_idx').using('gin', table.tags),
+  ],
+)
+
+export const roleClarificationTasks = pgTable(
+  'role_clarification_tasks',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: text('tenant_id').notNull(),
+    hcRequestId: text('hc_request_id').notNull(),
+    roleSessionId: uuid('role_session_id').references(() => roleSessions.id, { onDelete: 'set null' }),
+    assigneeUserId: text('assignee_user_id')
+      .notNull()
+      .references(() => users.id),
+    status: text('status', { enum: ['OPEN', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED'] }).notNull(),
+    dueAt: timestamp('due_at', { withTimezone: true }),
+    startedAt: timestamp('started_at', { withTimezone: true }),
+    completedAt: timestamp('completed_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    check('role_clarification_tasks_status_check', sql`${table.status} IN ('OPEN', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED')`),
+    uniqueIndex('role_clarification_tasks_hc_uidx').on(table.tenantId, table.hcRequestId),
+    index('role_clarification_tasks_assignee_status_idx').on(table.assigneeUserId, table.status),
+  ],
+)
+
+export const userChannelBindings = pgTable(
+  'user_channel_bindings',
+  {
+    tenantId: text('tenant_id').notNull(),
+    userId: text('user_id').notNull().references(() => users.id),
+    channel: text('channel', { enum: ['FEISHU'] }).notNull(),
+    recipientType: text('recipient_type', { enum: ['OPEN_ID'] }).notNull(),
+    recipientId: text('recipient_id').notNull(),
+    status: text('status', { enum: ['ACTIVE', 'REVOKED'] }).notNull(),
+    verifiedAt: timestamp('verified_at', { withTimezone: true }).notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.tenantId, table.userId, table.channel] }),
+    check('user_channel_bindings_channel_check', sql`${table.channel} IN ('FEISHU')`),
+    check('user_channel_bindings_recipient_type_check', sql`${table.recipientType} IN ('OPEN_ID')`),
+    check('user_channel_bindings_status_check', sql`${table.status} IN ('ACTIVE', 'REVOKED')`),
+    uniqueIndex('user_channel_bindings_active_recipient_idx')
+      .on(table.tenantId, table.channel, table.recipientId)
+      .where(sql`${table.status} = 'ACTIVE'`),
+  ],
+)
+
+export const notificationOutbox = pgTable(
+  'notification_outbox',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: text('tenant_id').notNull(),
+    taskId: uuid('task_id')
+      .notNull()
+      .references(() => roleClarificationTasks.id, { onDelete: 'cascade' }),
+    dedupeKey: text('dedupe_key').notNull(),
+    channel: text('channel', { enum: ['FEISHU'] }).notNull(),
+    recipientUserId: text('recipient_user_id').notNull().references(() => users.id),
+    template: text('template', { enum: ['HC_CLARIFICATION_ASSIGNED'] }).notNull(),
+    payload: jsonb('payload').$type<Record<string, unknown>>().notNull(),
+    status: text('status', { enum: ['PENDING', 'PROCESSING', 'SENT', 'RETRY', 'UNBOUND', 'DEAD'] }).notNull(),
+    attemptCount: integer('attempt_count').notNull().default(0),
+    nextAttemptAt: timestamp('next_attempt_at', { withTimezone: true }).notNull(),
+    lockedBy: text('locked_by'),
+    lockedUntil: timestamp('locked_until', { withTimezone: true }),
+    lastErrorCode: text('last_error_code'),
+    sentAt: timestamp('sent_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    check('notification_outbox_channel_check', sql`${table.channel} IN ('FEISHU')`),
+    check('notification_outbox_template_check', sql`${table.template} IN ('HC_CLARIFICATION_ASSIGNED')`),
+    check('notification_outbox_status_check', sql`${table.status} IN ('PENDING', 'PROCESSING', 'SENT', 'RETRY', 'UNBOUND', 'DEAD')`),
+    check('notification_outbox_attempt_count_check', sql`${table.attemptCount} >= 0`),
+    uniqueIndex('notification_outbox_dedupe_uidx').on(table.dedupeKey),
+    index('notification_outbox_due_idx').on(table.status, table.nextAttemptAt),
+    index('notification_outbox_recipient_idx').on(table.recipientUserId, table.status),
   ],
 )
 
