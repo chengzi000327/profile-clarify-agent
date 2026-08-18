@@ -4,6 +4,8 @@ import {
   normalizeRoleProfileContent,
   roleProfileAction,
   roleProfileRequirementInstanceKey,
+  roleProfileViewSections,
+  roleProfileViewStatus,
 } from './profile-content.js';
 
 const validJobDescription = {
@@ -132,6 +134,48 @@ test('offers talent-profile derivation from a confirmed job description', () => 
     status: 'CONFIRMED',
     content: { schema_version: '2', stage: 'TALENT_PROFILE_DRAFT' },
   }), { kind: 'generate', label: '生成新版本' });
+});
+
+test('separates job-description and target-talent status from one role-profile artifact', () => {
+  const jobDraft = {
+    status: 'DRAFT',
+    content: { schema_version: '2', stage: 'JOB_DESCRIPTION_DRAFT' },
+  };
+  const jobConfirmed = {
+    status: 'CONFIRMED',
+    content: { schema_version: '2', stage: 'JOB_DESCRIPTION_CONFIRMED' },
+  };
+  const talentDraft = {
+    status: 'DRAFT',
+    content: { schema_version: '2', stage: 'TALENT_PROFILE_DRAFT' },
+  };
+  const talentConfirmed = {
+    status: 'CONFIRMED',
+    content: { schema_version: '2', stage: 'TALENT_PROFILE_DRAFT' },
+  };
+
+  assert.equal(roleProfileViewStatus(jobDraft, 'jobDescription'), '待确认');
+  assert.equal(roleProfileViewStatus(jobDraft, 'talentProfile'), '待确认岗位说明');
+  assert.equal(roleProfileViewStatus(jobConfirmed, 'jobDescription'), '已确认');
+  assert.equal(roleProfileViewStatus(jobConfirmed, 'talentProfile'), '尚未生成');
+  assert.equal(roleProfileViewStatus(talentDraft, 'jobDescription'), '已确认');
+  assert.equal(roleProfileViewStatus(talentDraft, 'talentProfile'), '待确认');
+  assert.equal(roleProfileViewStatus(talentConfirmed, 'talentProfile'), '已确认');
+});
+
+test('starts the independent target-talent view at 01 instead of continuing job-description numbering', () => {
+  assert.deepEqual(
+    roleProfileViewSections.jobDescription.map((section) => section.number),
+    ['01', '02', '03', '04', '05', '06'],
+  );
+  assert.deepEqual(
+    roleProfileViewSections.talentProfile.map((section) => section.number),
+    ['01', '02', '03'],
+  );
+  assert.deepEqual(
+    roleProfileViewSections.talentProfile.map((section) => section.title),
+    ['目标人才画像', '任职资格', '岗位胜任力模型'],
+  );
 });
 
 test('creates stable distinct requirement instance keys for duplicate ids in one group', () => {

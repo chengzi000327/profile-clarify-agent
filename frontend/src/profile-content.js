@@ -48,6 +48,22 @@ const normalizeTalentRequirementGroup = (value, prefix) => asArray(value)
 export const roleProfileRequirementInstanceKey = (prefix, item, index) =>
   `${prefix}:${toText(item?.id) || 'requirement'}:${index}`;
 
+export const roleProfileViewSections = Object.freeze({
+  jobDescription: Object.freeze([
+    Object.freeze({ id: 'hiringBackground', number: '01', title: '招聘背景' }),
+    Object.freeze({ id: 'jobPurpose', number: '02', title: '岗位设置目的' }),
+    Object.freeze({ id: 'keyAccountabilities', number: '03', title: '关键责任领域' }),
+    Object.freeze({ id: 'successCriteria', number: '04', title: '关键绩效结果与成功标准' }),
+    Object.freeze({ id: 'workScenarios', number: '05', title: '关键工作场景与挑战' }),
+    Object.freeze({ id: 'boundaries', number: '06', title: '权责边界' }),
+  ]),
+  talentProfile: Object.freeze([
+    Object.freeze({ id: 'targetTalentProfile', number: '01', title: '目标人才画像' }),
+    Object.freeze({ id: 'qualifications', number: '02', title: '任职资格' }),
+    Object.freeze({ id: 'competencyModel', number: '03', title: '岗位胜任力模型' }),
+  ]),
+});
+
 const normalizeTalentProfile = (value) => {
   const source = asObject(value);
   const target = asObject(source.target_talent_profile);
@@ -97,6 +113,27 @@ export function roleProfileAction(latest) {
     return { kind: 'confirm', label: '确认完整岗位画像' };
   }
   return { kind: 'generate', label: '生成新版本' };
+}
+
+export function roleProfileViewStatus(latest, view) {
+  if (!latest) return '尚未生成';
+  if (latest.status === 'INVALIDATED') return '需更新';
+  if (latest.content?.schema_version !== '2') {
+    return latest.status === 'DRAFT' ? '待确认' : '已确认';
+  }
+
+  const stage = latest.content.stage;
+  if (view === 'talentProfile') {
+    if (stage === 'JOB_DESCRIPTION_DRAFT') return '待确认岗位说明';
+    if (stage === 'JOB_DESCRIPTION_CONFIRMED') return '尚未生成';
+    if (stage === 'TALENT_PROFILE_DRAFT') {
+      return latest.status === 'DRAFT' ? '待确认' : '已确认';
+    }
+  }
+
+  if (stage === 'JOB_DESCRIPTION_DRAFT') return '待确认';
+  if (stage === 'JOB_DESCRIPTION_CONFIRMED' || stage === 'TALENT_PROFILE_DRAFT') return '已确认';
+  return latest.status === 'DRAFT' ? '待确认' : '已确认';
 }
 
 export function normalizeRoleProfileContent(content = {}, hc = null) {

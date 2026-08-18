@@ -41,6 +41,8 @@ import {
   normalizeRoleProfileContent,
   roleProfileAction,
   roleProfileRequirementInstanceKey,
+  roleProfileViewSections,
+  roleProfileViewStatus,
 } from './profile-content.js';
 import { normalizePublicJDContent } from './public-jd-content.js';
 import LoginScreen from './components/LoginScreen.jsx';
@@ -1219,13 +1221,19 @@ function roleBasicInfo(state, viewerRole) {
   ];
 }
 
-function ArtifactEmptyState({ artifactType, invalidated, canManage, onGenerate, busy }) {
+function ArtifactEmptyState({ artifactType, invalidated, canManage, onGenerate, busy, roleProfileView = null }) {
   const presentation = artifactPresentation[artifactType];
+  const isTalentProfile = artifactType === 'ROLE_PROFILE' && roleProfileView === 'talentProfile';
+  const displayName = artifactType === 'ROLE_PROFILE'
+    ? isTalentProfile ? '目标人才画像' : '岗位说明'
+    : presentation.name;
   const actionLabel = artifactType === 'ROLE_PROFILE'
     ? roleProfileAction(null).label
     : presentation.generateAction;
   const prerequisite = {
-    ROLE_PROFILE: 'HC 已审批后即可生成；Agent 会基于招聘原因、成功标准和已确认事实形成草稿。',
+    ROLE_PROFILE: isTalentProfile
+      ? '先生成并确认岗位说明，再基于锁定版本推导目标人才画像。'
+      : 'HC 已审批后即可生成；Agent 会基于招聘原因、成功标准和已确认事实形成岗位说明草稿。',
     ASSESSMENT_SCORECARD: '先形成岗位画像，再把成功标准转成可执行的面试维度和判断锚点。',
     PUBLIC_JD: '由已确认的岗位画像和评估方案生成，避免 JD 与真实招聘标准脱节。',
     HR_RECRUITING_BRIEF: '由岗位画像和评估方案生成 HR 内部寻源、简历初筛与电话初筛策略。',
@@ -1233,15 +1241,15 @@ function ArtifactEmptyState({ artifactType, invalidated, canManage, onGenerate, 
   return (
     <div className="artifact-empty-state">
       <span><FileSearch size={22} /></span>
-      <strong>{invalidated ? `${presentation.name}需要更新` : `${presentation.name}尚未生成`}</strong>
+      <strong>{invalidated ? `${displayName}需要更新` : `${displayName}尚未生成`}</strong>
       <p>{invalidated ? '上游产物已发生变化，请生成新版本以保持内容一致。' : prerequisite}</p>
-      {canManage ? (
+      {canManage && !isTalentProfile ? (
         <button className="primary-action" type="button" onClick={onGenerate} disabled={busy}>
           {busy ? 'Agent 生成中…' : actionLabel}<ChevronRight size={15} />
         </button>
-      ) : (
+      ) : !isTalentProfile ? (
         <small>当前身份可查看该产物，但需要由{artifactType === 'HR_RECRUITING_BRIEF' ? ' HR' : '用人经理'}生成和确认。</small>
-      )}
+      ) : null}
     </div>
   );
 }
@@ -1257,7 +1265,7 @@ function ProfileView({
   onArtifactAction,
   agentStatus,
 }) {
-  const [section, setSection] = useState(viewerRole === 'hr' ? 'portrait' : 'basis');
+  const [section, setSection] = useState(viewerRole === 'hr' ? 'portrait' : 'jobDescription');
   const [expandedScenario, setExpandedScenario] = useState('T-01');
   const [expandedRequirement, setExpandedRequirement] = useState('C-01');
   const [expandedScore, setExpandedScore] = useState('A-01');
@@ -1299,14 +1307,17 @@ function ProfileView({
 
   const allProfileTabs = [
     { id: 'portrait', type: 'HR_RECRUITING_BRIEF', label: '招聘画像' },
-    { id: 'basis', type: 'ROLE_PROFILE', label: '画像依据' },
+    { id: 'jobDescription', type: 'ROLE_PROFILE', label: '岗位说明' },
+    { id: 'talentProfile', type: 'ROLE_PROFILE', label: '目标人才画像' },
     { id: 'assessment', type: 'ASSESSMENT_SCORECARD', label: '评估方案' },
     { id: 'jd', type: 'PUBLIC_JD', label: '对外 JD' },
   ];
   const profileTabs = (viewerRole === 'hr' ? allProfileTabs : allProfileTabs.filter((item) => item.id !== 'portrait'))
     .map((item) => ({
       ...item,
-      meta: artifactStatusLabel[latestArtifacts[item.type]?.status] ?? '尚未生成',
+      meta: item.type === 'ROLE_PROFILE'
+        ? roleProfileViewStatus(latestArtifacts.ROLE_PROFILE, item.id)
+        : artifactStatusLabel[latestArtifacts[item.type]?.status] ?? '尚未生成',
     }));
   const artifactType = section === 'jd'
     ? 'PUBLIC_JD'
@@ -1359,7 +1370,7 @@ function ProfileView({
 
         <div className={`profile-permission-note ${viewerRole}`}>
           <ShieldCheck size={13} />
-          <span>{actualActorRole === 'ADMIN' ? `企业管理员正在以“${viewerRole === 'hr' ? 'HR' : '用人经理'}”身份测试；真实身份仍写入审计记录。` : viewerRole === 'hr' ? 'HR 权限：在同一岗位会话中查看招聘画像、画像依据、评估方案和对外 JD。' : '用人经理权限：确认画像依据、评估方案和对外 JD；HR 内部招聘画像不可见。'}</span>
+          <span>{actualActorRole === 'ADMIN' ? `企业管理员正在以“${viewerRole === 'hr' ? 'HR' : '用人经理'}”身份测试；真实身份仍写入审计记录。` : viewerRole === 'hr' ? 'HR 权限：在同一岗位会话中查看招聘画像、岗位说明、目标人才画像、评估方案和对外 JD。' : '用人经理权限：确认岗位说明、完整岗位画像、评估方案和对外 JD；HR 内部招聘画像不可见。'}</span>
         </div>
 
         <nav className={`profile-subnav tabs-${profileTabs.length}`} aria-label="岗位画像目录" style={{ gridTemplateColumns: `repeat(${profileTabs.length}, minmax(0, 1fr))` }}>
@@ -1384,7 +1395,7 @@ function ProfileView({
               <RecruitingPortrait onOpenEvidence={onOpenEvidence} artifact={latestArtifact} roleDetail={roleDetail} />
             )
           ) : (
-            <ArtifactRenderBoundary key={`${artifactType}-${latestArtifact?.id ?? 'empty'}-${latestArtifact?.version ?? 0}`}>
+            <ArtifactRenderBoundary key={`${section}-${artifactType}-${latestArtifact?.id ?? 'empty'}-${latestArtifact?.version ?? 0}`}>
               {(!latestArtifact || latestArtifact.status === 'INVALIDATED') ? (
                 <ArtifactEmptyState
                   artifactType={artifactType}
@@ -1392,9 +1403,10 @@ function ProfileView({
                   canManage={canManageArtifact}
                   onGenerate={() => onArtifactAction?.(artifactType)}
                   busy={agentStatus === 'running'}
+                  roleProfileView={artifactType === 'ROLE_PROFILE' ? section : null}
                 />
-              ) : section === 'basis' ? (
-                <GeneratedProfileBasis artifact={latestArtifact} state={state} onOpenEvidence={onOpenEvidence} />
+              ) : section === 'jobDescription' || section === 'talentProfile' ? (
+                <GeneratedProfileBasis artifact={latestArtifact} state={state} onOpenEvidence={onOpenEvidence} view={section} />
               ) : section === 'assessment' ? (
                 <GeneratedAssessment artifact={latestArtifact} />
               ) : (
@@ -1623,7 +1635,7 @@ function TalentRequirementGroup({ title, items, detailKeyPrefix, onOpenEvidence,
   );
 }
 
-function GeneratedProfileBasis({ artifact, state, onOpenEvidence }) {
+function GeneratedProfileBasis({ artifact, state, onOpenEvidence, view = 'jobDescription' }) {
   const content = artifact?.content ?? {};
   const hc = state?.hc_context;
   const profile = normalizeRoleProfileContent(content, hc);
@@ -1644,22 +1656,58 @@ function GeneratedProfileBasis({ artifact, state, onOpenEvidence }) {
   })[hc?.job_basics?.recruitment_type] ?? '已审批编制'} ${hc?.job_basics?.headcount ?? 1} 人`;
   if (profile.schemaVersion === '2' && profile.jobDescription) {
     const jobDescription = profile.jobDescription;
+    const jobSections = roleProfileViewSections.jobDescription;
+    const talentSections = roleProfileViewSections.talentProfile;
     const hasTalentProfile = profile.talentProfile
       && (profile.internalStage === 'TALENT_PROFILE_DRAFT' || artifact?.status === 'CONFIRMED');
-    const stageLabel = profile.internalStage === 'TALENT_PROFILE_DRAFT'
-      ? artifact?.status === 'CONFIRMED' ? '完整岗位画像已确认' : '岗位说明已锁定 · 人才画像待确认'
-      : profile.internalStage === 'JOB_DESCRIPTION_CONFIRMED'
-        ? '岗位说明已锁定'
-        : '岗位说明待确认';
+    if (view === 'talentProfile') {
+      if (!hasTalentProfile) {
+        const jobDescriptionConfirmed = profile.internalStage === 'JOB_DESCRIPTION_CONFIRMED';
+        return (
+          <div className="artifact-empty-state">
+            <span><FileSearch size={22} /></span>
+            <strong>目标人才画像尚未生成</strong>
+            <p>{jobDescriptionConfirmed
+              ? '岗位说明已锁定，可以点击页面右上角“推导人才画像”。'
+              : '确认岗位说明后，才能推导目标人才画像。'}</p>
+          </div>
+        );
+      }
+      return (
+        <article className="generated-artifact-document role-profile-artifact">
+          <section className="generated-section">
+            <header><span>{talentSections[0].number}</span><div><h3>{talentSections[0].title}</h3><p>先明确目标人群、可迁移背景、匹配信号与不适配情形。</p></div></header>
+            <DefinitionItem label="一句话定义" value={profile.talentProfile.target.coreDefinition} />
+            <DefinitionItem label="可迁移背景" value={profile.talentProfile.target.transferableBackgrounds.join('；')} />
+            <DefinitionItem label="匹配信号" value={profile.talentProfile.target.fitSignals.join('；')} tone="positive" />
+            <DefinitionItem label="非目标与常见误判" value={profile.talentProfile.target.nonTargets.join('；')} />
+            <DefinitionItem label="吸引因素" value={profile.talentProfile.target.attractionFactors.join('；')} />
+            <ArtifactEvidenceRefs refs={profile.talentProfile.target.evidenceRefs} onOpenEvidence={onOpenEvidence} />
+          </section>
+          <section className="generated-section">
+            <header><span>{talentSections[1].number}</span><div><h3>{talentSections[1].title}</h3><p>按资格、经验、岗位条件和可替代路径呈现可追溯要求。</p></div></header>
+            <TalentRequirementGroup title="硬性资格" items={profile.talentProfile.qualifications.hardQualifications} detailKeyPrefix="hard-qualification" onOpenEvidence={onOpenEvidence} isDetailOpen={isStagedDetailOpen} onDetailToggle={rememberStagedDetailToggle} />
+            <TalentRequirementGroup title="必要经验" items={profile.talentProfile.qualifications.necessaryExperience} detailKeyPrefix="necessary-experience" onOpenEvidence={onOpenEvidence} isDetailOpen={isStagedDetailOpen} onDetailToggle={rememberStagedDetailToggle} />
+            <TalentRequirementGroup title="岗位条件" items={profile.talentProfile.qualifications.roleConditions} detailKeyPrefix="role-condition" onOpenEvidence={onOpenEvidence} isDetailOpen={isStagedDetailOpen} onDetailToggle={rememberStagedDetailToggle} />
+            <TalentRequirementGroup title="必须具备" items={profile.talentProfile.qualifications.mustHave} detailKeyPrefix="must-have" onOpenEvidence={onOpenEvidence} isDetailOpen={isStagedDetailOpen} onDetailToggle={rememberStagedDetailToggle} />
+            <TalentRequirementGroup title="优先考虑" items={profile.talentProfile.qualifications.preferred} detailKeyPrefix="preferred" onOpenEvidence={onOpenEvidence} isDetailOpen={isStagedDetailOpen} onDetailToggle={rememberStagedDetailToggle} />
+            <TalentRequirementGroup title="可接受替代" items={profile.talentProfile.qualifications.alternatives} detailKeyPrefix="alternatives" onOpenEvidence={onOpenEvidence} isDetailOpen={isStagedDetailOpen} onDetailToggle={rememberStagedDetailToggle} />
+          </section>
+          <section className="generated-section">
+            <header><span>{talentSections[2].number}</span><div><h3>{talentSections[2].title}</h3><p>将岗位要求组织为知识、技能、行为与动机的可观察模型。</p></div></header>
+            <TalentRequirementGroup title="知识" items={profile.talentProfile.competencyModel.knowledge} detailKeyPrefix="knowledge" onOpenEvidence={onOpenEvidence} isDetailOpen={isStagedDetailOpen} onDetailToggle={rememberStagedDetailToggle} />
+            <TalentRequirementGroup title="技能" items={profile.talentProfile.competencyModel.skills} detailKeyPrefix="skills" onOpenEvidence={onOpenEvidence} isDetailOpen={isStagedDetailOpen} onDetailToggle={rememberStagedDetailToggle} />
+            <TalentRequirementGroup title="行为胜任力" items={profile.talentProfile.competencyModel.behavioralCompetencies} detailKeyPrefix="behavioral-competencies" onOpenEvidence={onOpenEvidence} isDetailOpen={isStagedDetailOpen} onDetailToggle={rememberStagedDetailToggle} />
+            <TalentRequirementGroup title="价值观与工作风格" items={profile.talentProfile.competencyModel.valuesAndWorkStyle} detailKeyPrefix="values-work-style" onOpenEvidence={onOpenEvidence} isDetailOpen={isStagedDetailOpen} onDetailToggle={rememberStagedDetailToggle} />
+            <TalentRequirementGroup title="职业动机" items={profile.talentProfile.competencyModel.careerMotivation} detailKeyPrefix="career-motivation" onOpenEvidence={onOpenEvidence} isDetailOpen={isStagedDetailOpen} onDetailToggle={rememberStagedDetailToggle} />
+          </section>
+        </article>
+      );
+    }
     return (
       <article className="generated-artifact-document role-profile-artifact">
-        <section className="generated-artifact-hero">
-          <span><Target size={14} />{stageLabel}</span>
-          <h2>岗位说明</h2>
-          <p>以下内容基于已审批 HC 基本信息生成；HC 基本信息继续在页面顶部只读展示。</p>
-        </section>
         <section className="generated-section hiring-reason-section">
-          <header><span>01</span><div><h3>招聘背景</h3><p>说明本次招聘对应的业务变化、组织缺口与不招聘影响。</p></div></header>
+          <header><span>{jobSections[0].number}</span><div><h3>{jobSections[0].title}</h3><p>说明本次招聘对应的业务变化、组织缺口与不招聘影响。</p></div></header>
           <div className="generated-decision-chain">
             <div><small>业务变化</small><strong>{jobDescription.hiringBackground.businessChange}</strong></div>
             <ChevronRight size={14} />
@@ -1671,12 +1719,12 @@ function GeneratedProfileBasis({ artifact, state, onOpenEvidence }) {
           <ArtifactEvidenceRefs refs={jobDescription.hiringBackground.evidenceRefs} onOpenEvidence={onOpenEvidence} />
         </section>
         <section className="generated-section">
-          <header><span>02</span><div><h3>岗位设置目的</h3><p>岗位为何存在，以及持续为组织创造的价值。</p></div></header>
+          <header><span>{jobSections[1].number}</span><div><h3>{jobSections[1].title}</h3><p>岗位为何存在，以及持续为组织创造的价值。</p></div></header>
           <p>{jobDescription.jobPurpose.statement}</p>
           <ArtifactEvidenceRefs refs={jobDescription.jobPurpose.evidenceRefs} onOpenEvidence={onOpenEvidence} />
         </section>
         <section className="generated-section">
-          <header><span>03</span><div><h3>关键责任领域</h3><p>持续承担的主要责任、核心产出及其关联成功结果。</p></div></header>
+          <header><span>{jobSections[2].number}</span><div><h3>{jobSections[2].title}</h3><p>持续承担的主要责任、核心产出及其关联成功结果。</p></div></header>
           <div className="generated-requirement-list">
             {jobDescription.accountabilities.map((item, index) => {
               const detailKey = item.instanceKey;
@@ -1699,7 +1747,7 @@ function GeneratedProfileBasis({ artifact, state, onOpenEvidence }) {
           </div>
         </section>
         <section className="generated-section">
-          <header><span>04</span><div><h3>关键绩效结果与成功标准</h3><p>按 3 / 6 / 12 个月明确结果定义、衡量方式与确认状态。</p></div></header>
+          <header><span>{jobSections[3].number}</span><div><h3>{jobSections[3].title}</h3><p>按 3 / 6 / 12 个月明确结果定义、衡量方式与确认状态。</p></div></header>
           <div className="generated-outcome-list">
             {jobDescription.successCriteria.map((outcome) => (
               <div className="generated-outcome-row" key={outcome.instanceKey}>
@@ -1715,7 +1763,7 @@ function GeneratedProfileBasis({ artifact, state, onOpenEvidence }) {
           </div>
         </section>
         <section className="generated-section">
-          <header><span>05</span><div><h3>关键工作场景与挑战</h3><p>描述岗位成功所面对的真实工作情境、挑战与协作关系。</p></div></header>
+          <header><span>{jobSections[4].number}</span><div><h3>{jobSections[4].title}</h3><p>描述岗位成功所面对的真实工作情境、挑战与协作关系。</p></div></header>
           <div className="generated-scenario-list">
             {jobDescription.workScenarios.map((scenario, index) => {
               const detailKey = scenario.instanceKey;
@@ -1744,7 +1792,7 @@ function GeneratedProfileBasis({ artifact, state, onOpenEvidence }) {
           </div>
         </section>
         <section className="generated-section boundary-generated-section">
-          <header><span>06</span><div><h3>权责边界</h3><p>明确负责、不负责、决策权限、关键协作关系和可调用资源。</p></div></header>
+          <header><span>{jobSections[5].number}</span><div><h3>{jobSections[5].title}</h3><p>明确负责、不负责、决策权限、关键协作关系和可调用资源。</p></div></header>
           <div className="generated-boundary-grid">
             <div><h4><Check size={13} />需要负责</h4>{jobDescription.boundaries.owns.map((item) => <p key={item}>{item}</p>)}</div>
             <div><h4><X size={13} />不直接负责</h4>{jobDescription.boundaries.doesNotOwn.map((item) => <p key={item}>{item}</p>)}</div>
@@ -1753,34 +1801,36 @@ function GeneratedProfileBasis({ artifact, state, onOpenEvidence }) {
           </div>
           <ArtifactEvidenceRefs refs={jobDescription.boundaries.evidenceRefs} onOpenEvidence={onOpenEvidence} />
         </section>
-        {hasTalentProfile && <>
-          <section className="generated-section">
-            <header><span>07</span><div><h3>目标人才画像</h3><p>先明确目标人群、可迁移背景、匹配信号与不适配情形。</p></div></header>
-            <DefinitionItem label="一句话定义" value={profile.talentProfile.target.coreDefinition} />
-            <DefinitionItem label="可迁移背景" value={profile.talentProfile.target.transferableBackgrounds.join('；')} />
-            <DefinitionItem label="匹配信号" value={profile.talentProfile.target.fitSignals.join('；')} tone="positive" />
-            <DefinitionItem label="非目标与常见误判" value={profile.talentProfile.target.nonTargets.join('；')} />
-            <DefinitionItem label="吸引因素" value={profile.talentProfile.target.attractionFactors.join('；')} />
-            <ArtifactEvidenceRefs refs={profile.talentProfile.target.evidenceRefs} onOpenEvidence={onOpenEvidence} />
-          </section>
-          <section className="generated-section">
-            <header><span>08</span><div><h3>任职资格</h3><p>按资格、经验、岗位条件和可替代路径呈现可追溯要求。</p></div></header>
-            <TalentRequirementGroup title="硬性资格" items={profile.talentProfile.qualifications.hardQualifications} detailKeyPrefix="hard-qualification" onOpenEvidence={onOpenEvidence} isDetailOpen={isStagedDetailOpen} onDetailToggle={rememberStagedDetailToggle} />
-            <TalentRequirementGroup title="必要经验" items={profile.talentProfile.qualifications.necessaryExperience} detailKeyPrefix="necessary-experience" onOpenEvidence={onOpenEvidence} isDetailOpen={isStagedDetailOpen} onDetailToggle={rememberStagedDetailToggle} />
-            <TalentRequirementGroup title="岗位条件" items={profile.talentProfile.qualifications.roleConditions} detailKeyPrefix="role-condition" onOpenEvidence={onOpenEvidence} isDetailOpen={isStagedDetailOpen} onDetailToggle={rememberStagedDetailToggle} />
-            <TalentRequirementGroup title="必须具备" items={profile.talentProfile.qualifications.mustHave} detailKeyPrefix="must-have" onOpenEvidence={onOpenEvidence} isDetailOpen={isStagedDetailOpen} onDetailToggle={rememberStagedDetailToggle} />
-            <TalentRequirementGroup title="优先考虑" items={profile.talentProfile.qualifications.preferred} detailKeyPrefix="preferred" onOpenEvidence={onOpenEvidence} isDetailOpen={isStagedDetailOpen} onDetailToggle={rememberStagedDetailToggle} />
-            <TalentRequirementGroup title="可接受替代" items={profile.talentProfile.qualifications.alternatives} detailKeyPrefix="alternatives" onOpenEvidence={onOpenEvidence} isDetailOpen={isStagedDetailOpen} onDetailToggle={rememberStagedDetailToggle} />
-          </section>
-          <section className="generated-section">
-            <header><span>09</span><div><h3>岗位胜任力模型</h3><p>将岗位要求组织为知识、技能、行为与动机的可观察模型。</p></div></header>
-            <TalentRequirementGroup title="知识" items={profile.talentProfile.competencyModel.knowledge} detailKeyPrefix="knowledge" onOpenEvidence={onOpenEvidence} isDetailOpen={isStagedDetailOpen} onDetailToggle={rememberStagedDetailToggle} />
-            <TalentRequirementGroup title="技能" items={profile.talentProfile.competencyModel.skills} detailKeyPrefix="skills" onOpenEvidence={onOpenEvidence} isDetailOpen={isStagedDetailOpen} onDetailToggle={rememberStagedDetailToggle} />
-            <TalentRequirementGroup title="行为胜任力" items={profile.talentProfile.competencyModel.behavioralCompetencies} detailKeyPrefix="behavioral-competencies" onOpenEvidence={onOpenEvidence} isDetailOpen={isStagedDetailOpen} onDetailToggle={rememberStagedDetailToggle} />
-            <TalentRequirementGroup title="价值观与工作风格" items={profile.talentProfile.competencyModel.valuesAndWorkStyle} detailKeyPrefix="values-work-style" onOpenEvidence={onOpenEvidence} isDetailOpen={isStagedDetailOpen} onDetailToggle={rememberStagedDetailToggle} />
-            <TalentRequirementGroup title="职业动机" items={profile.talentProfile.competencyModel.careerMotivation} detailKeyPrefix="career-motivation" onOpenEvidence={onOpenEvidence} isDetailOpen={isStagedDetailOpen} onDetailToggle={rememberStagedDetailToggle} />
-          </section>
-        </>}
+      </article>
+    );
+  }
+  if (view === 'talentProfile') {
+    return (
+      <article className="generated-artifact-document role-profile-artifact">
+        <section className="generated-section">
+          <header><span>{roleProfileViewSections.talentProfile[0].number}</span><div><h3>人才规格与可观察证据</h3><p>历史画像按人才要求展示；生成新版本后将升级为目标人才画像、任职资格与胜任力模型。</p></div></header>
+          <div className="generated-requirement-list">
+            {profile.capabilities.map((item, index) => (
+              <details key={`${item.id ?? item.name}-${index}`} defaultOpen={index === 0}>
+                <summary>
+                  <span className={item.priority === 'Must-have' ? 'must' : 'preferred'}>{item.priority}</span>
+                  <strong>{item.id} · {item.name}</strong><small>{item.level}</small>
+                  {item.mapping.length > 0 && <em>{item.mapping.join(' · ')}</em>}
+                  <ChevronDown size={15} />
+                </summary>
+                <div className="generated-requirement-detail">
+                  <DefinitionItem label="为什么需要" value={item.rationale} />
+                  <DefinitionItem label="强证据" value={item.strongEvidence} tone="positive" />
+                  <DefinitionItem label="可接受替代" value={item.substitute} />
+                  <DefinitionItem label="风险信号" value={item.risk} tone="negative" />
+                  <DefinitionItem label="建议评估" value={item.assessment} />
+                  <ArtifactEvidenceRefs refs={item.evidenceRefs} onOpenEvidence={onOpenEvidence} />
+                </div>
+              </details>
+            ))}
+            {profile.capabilities.length === 0 && <p className="generated-empty-copy">当前历史版本没有人才规格。</p>}
+          </div>
+        </section>
       </article>
     );
   }
@@ -1857,30 +1907,6 @@ function GeneratedProfileBasis({ artifact, state, onOpenEvidence }) {
           <div><h4>协作与资源</h4><p>{boundary.resources}</p></div>
         </div>
         <ArtifactEvidenceRefs refs={boundary.evidenceRefs} onOpenEvidence={onOpenEvidence} />
-      </section>
-      <section className="generated-section">
-        <header><span>05</span><div><h3>人才规格与可观察证据</h3><p>每项要求都要说明业务原因、强证据、替代证据和风险信号。</p></div></header>
-        <div className="generated-requirement-list">
-          {profile.capabilities.map((item, index) => (
-            <details key={item.id ?? item.name} defaultOpen={index === 0}>
-              <summary>
-                <span className={item.priority === 'Must-have' ? 'must' : 'preferred'}>{item.priority}</span>
-                <strong>{item.id} · {item.name}</strong><small>{item.level}</small>
-                {item.mapping.length > 0 && <em>{item.mapping.join(' · ')}</em>}
-                <ChevronDown size={15} />
-              </summary>
-              <div className="generated-requirement-detail">
-                <DefinitionItem label="为什么需要" value={item.rationale} />
-                <DefinitionItem label="强证据" value={item.strongEvidence} tone="positive" />
-                <DefinitionItem label="可接受替代" value={item.substitute} />
-                <DefinitionItem label="风险信号" value={item.risk} tone="negative" />
-                <DefinitionItem label="建议评估" value={item.assessment} />
-                <ArtifactEvidenceRefs refs={item.evidenceRefs} onOpenEvidence={onOpenEvidence} />
-              </div>
-            </details>
-          ))}
-          {profile.capabilities.length === 0 && <p className="generated-empty-copy">当前版本没有人才规格。</p>}
-        </div>
       </section>
     </article>
   );
