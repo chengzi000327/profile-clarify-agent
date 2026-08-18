@@ -87,6 +87,12 @@ export const api = {
       body: JSON.stringify({ reason }),
     });
   },
+  decideFact(id, factId, payload) {
+    return request(`/api/v1/role-sessions/${id}/facts/${encodeURIComponent(factId)}:decide`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
   listAdminRuns(filters = {}) {
     const query = new URLSearchParams(
       Object.entries(filters).filter(([, value]) => Boolean(value)),

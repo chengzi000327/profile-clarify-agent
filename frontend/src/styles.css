@@ -3179,6 +3179,71 @@ textarea:focus-visible {
   padding: 6px 9px;
 }
 
+.fact-decision-card {
+  display: grid;
+  width: min(680px, 100%);
+  gap: 9px;
+  margin-top: 12px;
+  padding: 13px 14px;
+  border: 1px solid #d7dfea;
+  border-left: 3px solid #ca8a04;
+  border-radius: 9px;
+  background: #fffdf7;
+  overflow-wrap: anywhere;
+}
+
+.fact-decision-card.status-confirmed { border-left-color: #16815d; background: #f7fcfa; }
+.fact-decision-card.status-conflicted { border-left-color: #c45845; background: #fff9f7; }
+.fact-decision-card.status-stale { border-left-color: #9aa3b2; background: #f8f9fb; }
+
+.fact-decision-card > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: #566176;
+  font-size: 10px;
+}
+
+.fact-decision-card > header strong { color: #9a6700; }
+.fact-decision-card.status-confirmed > header strong { color: #16815d; }
+.fact-decision-card.status-conflicted > header strong { color: #b44735; }
+.fact-decision-card.status-stale > header strong { color: #778091; }
+.fact-decision-card > p { margin: 0; color: var(--text); font-size: 12px; line-height: 19px; }
+.fact-decision-source { color: var(--text-3); font-size: 9px; }
+
+.fact-decision-editor { display: grid; gap: 8px; }
+.fact-decision-editor label { display: grid; gap: 5px; color: var(--text-3); font-size: 9px; }
+.fact-decision-editor select,
+.fact-decision-editor textarea {
+  width: 100%;
+  border: 1px solid #cfd7e4;
+  border-radius: 6px;
+  color: var(--text);
+  background: #fff;
+  font: inherit;
+}
+.fact-decision-editor select { padding: 7px 8px; }
+.fact-decision-editor textarea { min-height: 82px; resize: vertical; padding: 8px; line-height: 18px; }
+
+.fact-decision-actions { display: flex; flex-wrap: wrap; gap: 7px; }
+.fact-decision-actions button {
+  padding: 6px 10px;
+  border: 1px solid #cfd7e4;
+  border-radius: 6px;
+  color: #4d5a70;
+  background: #fff;
+  font-size: 9px;
+  cursor: pointer;
+}
+.fact-decision-actions button.primary { border-color: var(--blue); color: #fff; background: var(--blue); }
+.fact-decision-actions button:disabled { cursor: wait; opacity: .55; }
+.fact-decision-readonly { color: #7a8494; font-size: 9px; }
+
+@media (max-width: 560px) {
+  .fact-decision-actions button { flex: 1 1 auto; }
+}
+
 .conversation-system-message {
   display: flex;
   align-items: center;

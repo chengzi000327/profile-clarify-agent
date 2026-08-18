@@ -44,6 +44,8 @@ import { Composer, LiveAgentRun } from './components/AgentConversation.jsx';
 import AdminTraceConsole from './components/AdminTraceConsole.jsx';
 import HcApprovalLanding from './components/HcApprovalLanding.jsx';
 import ClarifierMark from './components/ClarifierMark.jsx';
+import FactDecisionCard from './components/FactDecisionCard.jsx';
+import { factForMessage } from './fact-decision.js';
 
 const sourceIcons = {
   org: Users,
@@ -191,6 +193,7 @@ function App() {
   const [clarificationPolicy, setClarificationPolicy] = useState(null);
   const [requestError, setRequestError] = useState('');
   const [adminTestRole, setAdminTestRole] = useState('MANAGER');
+  const [factDecisionPendingId, setFactDecisionPendingId] = useState(null);
   const streamStopRef = useRef(null);
   const activeRoleIdRef = useRef(activeRoleId);
   const effectiveActorRole = actor?.role === 'ADMIN' ? adminTestRole : actor?.role;
@@ -509,6 +512,31 @@ function App() {
     }
   }
 
+  async function handleFactDecision(fact, decision, extra = {}) {
+    if (!activeRoleId || !roleDetail || factDecisionPendingId) return;
+    setFactDecisionPendingId(fact.id);
+    setRequestError('');
+    try {
+      const result = await api.decideFact(activeRoleId, fact.id, {
+        decision,
+        expected_revision: roleDetail.state.revision,
+        ...extra,
+        ...(actor.role === 'ADMIN' ? { test_role: adminTestRole } : {}),
+      });
+      setRoleDetail((current) => current ? { ...current, state: result.state } : current);
+      await Promise.all([refreshActiveRole(), refreshConversation()]);
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 409) {
+        await Promise.all([refreshActiveRole(), refreshConversation()]).catch(() => {});
+        setRequestError('事实已被更新，请查看最新状态');
+      } else {
+        setRequestError(error.message || '岗位事实处理失败');
+      }
+    } finally {
+      setFactDecisionPendingId(null);
+    }
+  }
+
   async function handleArtifactAction(type) {
     if (!activeRoleId || !roleDetail) return;
     const latest = roleDetail.state.latest_artifacts?.[type];
@@ -718,6 +746,10 @@ function App() {
             actor={conversationActor}
             messages={messages}
             policy={clarificationPolicy}
+            facts={roleDetail?.state.facts ?? []}
+            effectiveActorRole={effectiveActorRole}
+            factDecisionPendingId={factDecisionPendingId}
+            onFactDecision={handleFactDecision}
           />
         ) : (
           <ProfileView
@@ -920,6 +952,10 @@ function ConversationView({
   actor,
   messages,
   policy,
+  facts,
+  effectiveActorRole,
+  factDecisionPendingId,
+  onFactDecision,
 }) {
   const scrollRef = useRef(null);
   const budget = policy ? policy.initial_budget + policy.granted_rounds : 6;
@@ -969,6 +1005,7 @@ function ConversationView({
               return <div className="conversation-system-message" key={message.id}><AlertTriangle size={13} />{message.content}</div>;
             }
             const structured = message.structured_content ?? {};
+            const messageFact = factForMessage(facts, structured.fact_id);
             return (
               <div className="message message-agent persisted-agent-message" key={message.id}>
                 <span className="agent-avatar"><ClarifierMark size={25} /></span>
@@ -991,6 +1028,14 @@ function ConversationView({
                       <span>主动澄清预算已用完</span>
                       <button onClick={() => onExtend('当前岗位仍有关键问题需要继续澄清')}>增加 {policy?.extension_size ?? 2} 轮</button>
                     </div>
+                  )}
+                  {messageFact && (
+                    <FactDecisionCard
+                      fact={messageFact}
+                      effectiveRole={effectiveActorRole}
+                      pending={factDecisionPendingId === messageFact.id}
+                      onDecide={(decision, extra) => onFactDecision(messageFact, decision, extra)}
+                    />
                   )}
                 </div>
               </div>

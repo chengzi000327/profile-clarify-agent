@@ -8,7 +8,7 @@
     "build": "vite build --configLoader runner",
     "preview": "vite preview --host 127.0.0.1",
     "typecheck": "vite build --configLoader runner",
-    "test": "node --test src/hc-progress.test.js src/profile-content.test.js src/assessment-content.test.js src/public-jd-content.test.js && vite build --configLoader runner"
+    "test": "node --test src/hc-progress.test.js src/fact-decision.test.js src/profile-content.test.js src/assessment-content.test.js src/public-jd-content.test.js && vite build --configLoader runner"
   },
   "dependencies": {
     "@fontsource/ibm-plex-sans": "^5.2.7",
