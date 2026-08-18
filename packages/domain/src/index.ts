@@ -12,6 +12,8 @@ import {
   type RoleState,
 } from '@role-clarifier/contracts'
 
+export * from './fact-decisions.js'
+
 export class DomainError extends Error {
   constructor(
     public readonly code: string,

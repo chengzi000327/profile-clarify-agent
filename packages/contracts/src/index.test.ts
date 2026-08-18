@@ -1,14 +1,53 @@
 import { describe, expect, it } from 'vitest'
 import { ROLE_CLARIFIER_SYSTEM_PROMPT as SHARED_SYSTEM_PROMPT } from '@role-clarifier/agent-spec'
 import {
+  AgentContextSnapshotSchema,
   AssessmentScorecardSchema,
+  EnterpriseContextBundleSchema,
+  FactDecisionRequestSchema,
   FactCategorySchema,
+  FactSchema,
+  HcApprovalSchema,
   PublicJDSchema,
   ROLE_CLARIFIER_PROMPT_VERSION,
   ROLE_CLARIFIER_SYSTEM_PROMPT,
   RoleProfileContentSchema,
   promptForTask,
 } from './index.js'
+
+const oldHc = {
+  request_id: 'HC-OLD-001',
+  tenant_id: 'tenant-demo',
+  title: '企业产品经理',
+  department: '企业服务产品部',
+  status: 'APPROVED' as const,
+  context: {
+    request_id: 'HC-OLD-001',
+    status: 'APPROVED' as const,
+    approved_at: '2026-08-18T00:00:00.000Z',
+    business_change: '业务进入标准产品经营阶段。',
+    organization_gap: '缺少产品化责任人。',
+    approved_reason: '新增企业产品经理。',
+    initial_responsibilities: ['定义产品边界'],
+    recruiting_budget: '年度预算内',
+    recruiting_constraints: [],
+    hiring_manager_user_id: 'manager-demo',
+    assigned_hr_user_id: 'hr-demo',
+    job_basics: {
+      recruitment_type: 'NEW_HEADCOUNT' as const,
+      headcount: 1,
+      level: '3-2',
+      reporting_line: '产品负责人',
+      locations: ['北京'],
+      employment_type: '全职',
+      salary_range: '35K-50K',
+      target_onboard: '8 周内',
+    },
+  },
+  role_session_id: null,
+  created_at: '2026-08-18T00:00:00.000Z',
+  updated_at: '2026-08-18T00:00:00.000Z',
+}
 
 describe('共享 Agent 规范', () => {
   it('从单一事实源导出 System Prompt', () => {
@@ -116,5 +155,81 @@ describe('PublicJDSchema', () => {
     })
 
     expect(result.success).toBe(false)
+  })
+})
+
+describe('三闭环共享契约', () => {
+  it('旧事实缺少来源与确认字段时补为 null', () => {
+    expect(FactSchema.parse({
+      id: 'fact-old',
+      category: 'BACKGROUND',
+      statement: '旧事实',
+      source: '历史数据',
+      status: 'CONFIRMED',
+      evidence_refs: [],
+      visible_to: 'ALL',
+      updated_at: '2026-08-18T00:00:00.000Z',
+    })).toMatchObject({
+      source_message_id: null,
+      source_run_id: null,
+      proposed_by_user_id: null,
+      confirmed_by_user_id: null,
+      confirmed_at: null,
+      supersedes_fact_id: null,
+      decision_reason: null,
+    })
+  })
+
+  it('修改事实必须携带替代内容', () => {
+    expect(() => FactDecisionRequestSchema.parse({
+      decision: 'REVISE',
+      expected_revision: 3,
+    })).toThrow()
+  })
+
+  it('企业上下文拒绝超过六条的命中', () => {
+    expect(() => EnterpriseContextBundleSchema.parse({
+      query: {
+        role_session_id: '11111111-1111-4111-8111-111111111111',
+        task: 'CLARIFY_MESSAGE',
+        department: '企业服务产品部',
+        job_family: '产品',
+        query_terms: ['企业产品经理', '职级', '成功标准'],
+      },
+      hits: Array.from({ length: 7 }, (_, index) => ({
+        knowledge_id: `K-${index}`,
+        category: 'ORGANIZATION',
+        title: '组织职责',
+        summary: '摘要',
+        source_ref: `mock://org/${index}`,
+        source_version: 'v1',
+        relevance_score: 30,
+        match_reasons: ['部门一致'],
+      })),
+      truncated: false,
+    })).toThrow()
+  })
+
+  it('历史 HC 与 Trace 缺少闭环字段时使用兼容默认值', () => {
+    expect(HcApprovalSchema.parse(oldHc)).toMatchObject({
+      clarification_task: null,
+      notification_delivery: null,
+    })
+    expect(AgentContextSnapshotSchema.parse({
+      system_prompt: {
+        section_name: 'system',
+        content: 'rules',
+        provenance: 'HARNESS_SYSTEM_PROMPT',
+        harness_managed_base: {
+          included: true,
+          captured_as_text: false,
+          description: 'Harness managed',
+        },
+      },
+      current_user_input: { content: '继续澄清', source: 'CURRENT_REQUEST' },
+      short_term_memory: { source: 'RECENT_CONVERSATION', window_size: 1, messages: [] },
+      long_term_memory: { source: 'BUSINESS_DATABASE', role_state: {} },
+      task_state: {},
+    }).long_term_memory.enterprise_context).toBeNull()
   })
 })

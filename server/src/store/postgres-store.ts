@@ -87,6 +87,8 @@ const hcApprovalFromRow = (row: HcApprovalRow): HcApproval => ({
   status: row.status,
   context: row.context,
   role_session_id: row.roleSessionId,
+  clarification_task: null,
+  notification_delivery: null,
   created_at: iso(row.createdAt),
   updated_at: iso(row.updatedAt),
 })

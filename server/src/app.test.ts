@@ -67,7 +67,11 @@ class TestHarnessStub implements HarnessAdapter {
         window_size: request.conversation_context?.recent_messages.length ?? 0,
         messages: request.conversation_context?.recent_messages ?? [],
       },
-      long_term_memory: { source: 'BUSINESS_DATABASE', role_state: roleState },
+      long_term_memory: {
+        source: 'BUSINESS_DATABASE',
+        role_state: roleState,
+        enterprise_context: null,
+      },
       task_state: {
         task: request.task,
         current_user_role: request.conversation_context?.current_user_role ?? null,

@@ -125,6 +125,7 @@ export const buildContextSnapshot = (request: HarnessRequest): AgentContextSnaps
     long_term_memory: {
       source: 'BUSINESS_DATABASE',
       role_state: projectInitialRoleState(request),
+      enterprise_context: null,
     },
     task_state: {
       task: request.task,
