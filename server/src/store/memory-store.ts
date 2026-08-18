@@ -293,7 +293,7 @@ export class MemoryStore implements ApplicationStore {
           (actor.role === 'HR' && hc.context.assigned_hr_user_id === actor.user_id)
         ),
       )
-      .map(clone)
+      .map((hc) => this.withHcClosureSummaries(hc))
       .sort((left, right) => right.context.approved_at.localeCompare(left.context.approved_at))
   }
 
@@ -302,17 +302,52 @@ export class MemoryStore implements ApplicationStore {
     if (!hc || hc.tenant_id !== actor.tenant_id) return null
     if (actor.role === 'MANAGER' && hc.context.hiring_manager_user_id !== actor.user_id) return null
     if (actor.role === 'HR' && hc.context.assigned_hr_user_id !== actor.user_id) return null
-    return clone(hc)
+    return this.withHcClosureSummaries(hc)
   }
 
-  async createRoleAggregateForHc(hcRequestId: string, aggregate: RoleAggregate): Promise<string> {
+  async createRoleAggregateForHc(
+    hcRequestId: string,
+    aggregate: RoleAggregate,
+  ): Promise<{ roleSessionId: string; created: boolean }> {
     const hc = this.hcApprovals.get(hcKey(aggregate.state.tenant_id, hcRequestId))
     if (!hc) throw new Error('HC_APPROVAL_NOT_FOUND')
-    if (hc.role_session_id) return hc.role_session_id
+    if (hc.role_session_id) {
+      await this.startClarificationTaskForExistingWorkspace({
+        tenant_id: aggregate.state.tenant_id,
+        hc_request_id: hcRequestId,
+        role_session_id: hc.role_session_id,
+        started_at: aggregate.state.updated_at,
+      })
+      return { roleSessionId: hc.role_session_id, created: false }
+    }
     await this.createRoleAggregate(aggregate)
     hc.role_session_id = aggregate.state.id
-    hc.updated_at = new Date().toISOString()
-    return aggregate.state.id
+    hc.updated_at = aggregate.state.updated_at
+    await this.startClarificationTaskForExistingWorkspace({
+      tenant_id: aggregate.state.tenant_id,
+      hc_request_id: hcRequestId,
+      role_session_id: aggregate.state.id,
+      started_at: aggregate.state.updated_at,
+    })
+    return { roleSessionId: aggregate.state.id, created: true }
+  }
+
+  async startClarificationTaskForExistingWorkspace(input: {
+    tenant_id: string
+    hc_request_id: string
+    role_session_id: string
+    started_at: string
+  }): Promise<void> {
+    const key = hcKey(input.tenant_id, input.hc_request_id)
+    const task = this.clarificationTasks.get(key)
+    if (!task || task.status !== 'OPEN') return
+    this.clarificationTasks.set(key, {
+      ...task,
+      role_session_id: input.role_session_id,
+      status: 'IN_PROGRESS',
+      started_at: input.started_at,
+      updated_at: input.started_at,
+    })
   }
 
   async listRoleStates(actor: ActorContext): Promise<RoleState[]> {
@@ -370,6 +405,21 @@ export class MemoryStore implements ApplicationStore {
     aggregate.state = clone(state)
     const assignedHr = state.hc_context?.assigned_hr_user_id
     if (assignedHr && !aggregate.member_ids.includes(assignedHr)) aggregate.member_ids.push(assignedHr)
+    if (state.stage === 'PROFILE_CONFIRMED') {
+      for (const [key, task] of this.clarificationTasks) {
+        if (
+          task.role_session_id === state.id &&
+          ['OPEN', 'IN_PROGRESS'].includes(task.status)
+        ) {
+          this.clarificationTasks.set(key, {
+            ...task,
+            status: 'COMPLETED',
+            completed_at: state.updated_at,
+            updated_at: state.updated_at,
+          })
+        }
+      }
+    }
     return true
   }
 
@@ -645,5 +695,33 @@ export class MemoryStore implements ApplicationStore {
     const found = this.findNotification(id)
     if (!found || found.record.status !== 'PROCESSING' || found.record.locked_by !== workerId) return
     this.notifications.set(found.key, update(found.record))
+  }
+
+  private withHcClosureSummaries(hc: HcApproval): HcApproval {
+    const value = clone(hc)
+    const task = this.clarificationTasks.get(hcKey(hc.tenant_id, hc.request_id))
+    const notification = task
+      ? [...this.notifications.values()]
+          .filter((item) => item.task_id === task.id)
+          .sort((left, right) => right.created_at.localeCompare(left.created_at))[0]
+      : undefined
+    value.clarification_task = task
+      ? {
+          id: task.id,
+          status: task.status,
+          assignee_user_id: task.assignee_user_id,
+          started_at: task.started_at,
+          completed_at: task.completed_at,
+        }
+      : null
+    value.notification_delivery = notification
+      ? {
+          channel: notification.channel,
+          status: notification.status,
+          sent_at: notification.sent_at,
+          last_error_code: notification.last_error_code,
+        }
+      : null
+    return value
   }
 }

@@ -97,6 +97,12 @@ export class RoleService {
     const hc = await this.store.getHcApproval(requestId, actor)
     if (!hc) throw new DomainError('HC_APPROVAL_NOT_FOUND', '未找到可访问的已通过 HC', 404)
     if (hc.role_session_id) {
+      await this.store.startClarificationTaskForExistingWorkspace({
+        tenant_id: hc.tenant_id,
+        hc_request_id: hc.request_id,
+        role_session_id: hc.role_session_id,
+        started_at: nowIso(),
+      })
       await this.ensureHcOpeningQuestion(hc.role_session_id, hc, actor)
       return { role: await this.get(hc.role_session_id, actor), created: false }
     }
@@ -166,11 +172,11 @@ export class RoleService {
       calibration_signals: [],
       manager_tasks: [],
     }
-    const roleSessionId = await this.store.createRoleAggregateForHc(hc.request_id, aggregate)
-    await this.ensureHcOpeningQuestion(roleSessionId, hc, actor)
+    const result = await this.store.createRoleAggregateForHc(hc.request_id, aggregate)
+    await this.ensureHcOpeningQuestion(result.roleSessionId, hc, actor)
     return {
-      role: await this.get(roleSessionId, actor),
-      created: roleSessionId === state.id,
+      role: await this.get(result.roleSessionId, actor),
+      created: result.created,
     }
   }
 

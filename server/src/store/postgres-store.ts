@@ -59,6 +59,7 @@ const iso = (value: Date | string): string =>
 
 type RoleSessionRow = typeof schema.roleSessions.$inferSelect
 type HcApprovalRow = typeof schema.hcApprovals.$inferSelect
+type RoleClarificationTaskRow = typeof schema.roleClarificationTasks.$inferSelect
 type EnterpriseKnowledgeRow = typeof schema.enterpriseKnowledgeItems.$inferSelect
 type NotificationOutboxRow = typeof schema.notificationOutbox.$inferSelect
 type UserChannelBindingRow = typeof schema.userChannelBindings.$inferSelect
@@ -95,7 +96,11 @@ const roleStateFromRow = (row: RoleSessionRow): RoleState => ({
   updated_at: iso(row.updatedAt),
 })
 
-const hcApprovalFromRow = (row: HcApprovalRow): HcApproval => ({
+const hcApprovalFromRow = (
+  row: HcApprovalRow,
+  task?: RoleClarificationTaskRow,
+  notification?: NotificationOutboxRow,
+): HcApproval => ({
   request_id: row.requestId,
   tenant_id: row.tenantId,
   title: row.title,
@@ -103,8 +108,23 @@ const hcApprovalFromRow = (row: HcApprovalRow): HcApproval => ({
   status: row.status,
   context: row.context,
   role_session_id: row.roleSessionId,
-  clarification_task: null,
-  notification_delivery: null,
+  clarification_task: task
+    ? {
+        id: task.id,
+        status: task.status,
+        assignee_user_id: task.assigneeUserId,
+        started_at: task.startedAt ? iso(task.startedAt) : null,
+        completed_at: task.completedAt ? iso(task.completedAt) : null,
+      }
+    : null,
+  notification_delivery: notification
+    ? {
+        channel: notification.channel,
+        status: notification.status,
+        sent_at: notification.sentAt ? iso(notification.sentAt) : null,
+        last_error_code: notification.lastErrorCode,
+      }
+    : null,
   created_at: iso(row.createdAt),
   updated_at: iso(row.updatedAt),
 })
@@ -621,7 +641,7 @@ export class PostgresStore implements ApplicationStore {
       .from(schema.hcApprovals)
       .where(access)
       .orderBy(desc(schema.hcApprovals.createdAt))
-    return rows.map(hcApprovalFromRow)
+    return this.hcApprovalsWithSummaries(rows)
   }
 
   async getHcApproval(requestId: string, actor: ActorContext): Promise<HcApproval | null> {
@@ -638,7 +658,9 @@ export class PostgresStore implements ApplicationStore {
             : eq(schema.hcApprovals.assignedHrUserId, actor.user_id),
         )
     const [row] = await this.db.select().from(schema.hcApprovals).where(access).limit(1)
-    return row ? hcApprovalFromRow(row) : null
+    if (!row) return null
+    const [approval] = await this.hcApprovalsWithSummaries([row])
+    return approval ?? null
   }
 
   async listRoleStates(actor: ActorContext): Promise<RoleState[]> {
@@ -801,7 +823,7 @@ export class PostgresStore implements ApplicationStore {
   async createRoleAggregateForHc(
     hcRequestId: string,
     aggregate: RoleAggregate,
-  ): Promise<string> {
+  ): Promise<{ roleSessionId: string; created: boolean }> {
     return this.db.transaction(async (tx) => {
       const [hc] = await tx
         .select({ roleSessionId: schema.hcApprovals.roleSessionId })
@@ -815,7 +837,22 @@ export class PostgresStore implements ApplicationStore {
         .for('update')
         .limit(1)
       if (!hc) throw new Error('HC_APPROVAL_NOT_FOUND')
-      if (hc.roleSessionId) return hc.roleSessionId
+      if (hc.roleSessionId) {
+        await tx
+          .update(schema.roleClarificationTasks)
+          .set({
+            roleSessionId: hc.roleSessionId,
+            status: 'IN_PROGRESS',
+            startedAt: new Date(aggregate.state.updated_at),
+            updatedAt: new Date(aggregate.state.updated_at),
+          })
+          .where(and(
+            eq(schema.roleClarificationTasks.tenantId, aggregate.state.tenant_id),
+            eq(schema.roleClarificationTasks.hcRequestId, hcRequestId),
+            eq(schema.roleClarificationTasks.status, 'OPEN'),
+          ))
+        return { roleSessionId: hc.roleSessionId, created: false }
+      }
 
       const memberIds = [...new Set([
         ...aggregate.member_ids,
@@ -843,44 +880,96 @@ export class PostgresStore implements ApplicationStore {
       }
       await tx
         .update(schema.hcApprovals)
-        .set({ roleSessionId: aggregate.state.id, updatedAt: new Date() })
+        .set({
+          roleSessionId: aggregate.state.id,
+          updatedAt: new Date(aggregate.state.updated_at),
+        })
         .where(
           and(
             eq(schema.hcApprovals.requestId, hcRequestId),
             eq(schema.hcApprovals.tenantId, aggregate.state.tenant_id),
           ),
         )
-      return aggregate.state.id
+      await tx
+        .update(schema.roleClarificationTasks)
+        .set({
+          roleSessionId: aggregate.state.id,
+          status: 'IN_PROGRESS',
+          startedAt: new Date(aggregate.state.updated_at),
+          updatedAt: new Date(aggregate.state.updated_at),
+        })
+        .where(and(
+          eq(schema.roleClarificationTasks.tenantId, aggregate.state.tenant_id),
+          eq(schema.roleClarificationTasks.hcRequestId, hcRequestId),
+          eq(schema.roleClarificationTasks.status, 'OPEN'),
+        ))
+      return { roleSessionId: aggregate.state.id, created: true }
     })
   }
 
-  async saveRoleState(state: RoleState, expectedRevision: number): Promise<boolean> {
-    const rows = await this.db
-      .update(schema.roleSessions)
+  async startClarificationTaskForExistingWorkspace(input: {
+    tenant_id: string
+    hc_request_id: string
+    role_session_id: string
+    started_at: string
+  }): Promise<void> {
+    await this.db
+      .update(schema.roleClarificationTasks)
       .set({
-        title: state.title,
-        department: state.department,
-        stage: state.stage,
-        revision: state.revision,
-        businessState: roleBusinessState(state),
-        updatedAt: new Date(state.updated_at),
+        roleSessionId: input.role_session_id,
+        status: 'IN_PROGRESS',
+        startedAt: new Date(input.started_at),
+        updatedAt: new Date(input.started_at),
       })
-      .where(
-        and(
-          eq(schema.roleSessions.id, state.id),
-          eq(schema.roleSessions.revision, expectedRevision),
-        ),
-      )
-      .returning({ id: schema.roleSessions.id })
-    if (rows.length !== 1) return false
-    const assignedHr = state.hc_context?.assigned_hr_user_id
-    if (assignedHr) {
-      await this.db
-        .insert(schema.roleMembers)
-        .values({ roleSessionId: state.id, userId: assignedHr })
-        .onConflictDoNothing()
-    }
-    return true
+      .where(and(
+        eq(schema.roleClarificationTasks.tenantId, input.tenant_id),
+        eq(schema.roleClarificationTasks.hcRequestId, input.hc_request_id),
+        eq(schema.roleClarificationTasks.status, 'OPEN'),
+      ))
+  }
+
+  async saveRoleState(state: RoleState, expectedRevision: number): Promise<boolean> {
+    return this.db.transaction(async (tx) => {
+      const rows = await tx
+        .update(schema.roleSessions)
+        .set({
+          title: state.title,
+          department: state.department,
+          stage: state.stage,
+          revision: state.revision,
+          businessState: roleBusinessState(state),
+          updatedAt: new Date(state.updated_at),
+        })
+        .where(
+          and(
+            eq(schema.roleSessions.id, state.id),
+            eq(schema.roleSessions.revision, expectedRevision),
+          ),
+        )
+        .returning({ id: schema.roleSessions.id })
+      if (rows.length !== 1) return false
+      const assignedHr = state.hc_context?.assigned_hr_user_id
+      if (assignedHr) {
+        await tx
+          .insert(schema.roleMembers)
+          .values({ roleSessionId: state.id, userId: assignedHr })
+          .onConflictDoNothing()
+      }
+      if (state.stage === 'PROFILE_CONFIRMED') {
+        await tx
+          .update(schema.roleClarificationTasks)
+          .set({
+            status: 'COMPLETED',
+            completedAt: new Date(state.updated_at),
+            updatedAt: new Date(state.updated_at),
+          })
+          .where(and(
+            eq(schema.roleClarificationTasks.roleSessionId, state.id),
+            inArray(schema.roleClarificationTasks.status, ['OPEN', 'IN_PROGRESS']),
+          ))
+      }
+      return true
+    })
   }
 
   async insertArtifact(artifact: ArtifactEnvelope): Promise<void> {
@@ -1381,6 +1470,39 @@ export class PostgresStore implements ApplicationStore {
         eq(schema.notificationOutbox.status, 'PROCESSING'),
         eq(schema.notificationOutbox.lockedBy, workerId),
       ))
+  }
+
+  private async hcApprovalsWithSummaries(rows: HcApprovalRow[]): Promise<HcApproval[]> {
+    if (rows.length === 0) return []
+    const tenantId = rows[0]!.tenantId
+    const tasks = await this.db
+      .select()
+      .from(schema.roleClarificationTasks)
+      .where(and(
+        eq(schema.roleClarificationTasks.tenantId, tenantId),
+        inArray(
+          schema.roleClarificationTasks.hcRequestId,
+          rows.map((row) => row.requestId),
+        ),
+      ))
+    const taskByHc = new Map(tasks.map((task) => [task.hcRequestId, task]))
+    const notifications = tasks.length > 0
+      ? await this.db
+          .select()
+          .from(schema.notificationOutbox)
+          .where(inArray(schema.notificationOutbox.taskId, tasks.map((task) => task.id)))
+          .orderBy(desc(schema.notificationOutbox.createdAt))
+      : []
+    const notificationByTask = new Map<string, NotificationOutboxRow>()
+    for (const notification of notifications) {
+      if (!notificationByTask.has(notification.taskId)) {
+        notificationByTask.set(notification.taskId, notification)
+      }
+    }
+    return rows.map((row) => {
+      const task = taskByHc.get(row.requestId)
+      return hcApprovalFromRow(row, task, task ? notificationByTask.get(task.id) : undefined)
+    })
   }
 
   private makeDefaultPolicy(roleSessionId: string): ClarificationPolicy {

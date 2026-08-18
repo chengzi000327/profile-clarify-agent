@@ -149,7 +149,16 @@ export interface ApplicationStore {
   listEnterpriseKnowledge(input: EnterpriseKnowledgeQuery): Promise<EnterpriseKnowledgeItem[]>
   listHcApprovals(actor: ActorContext): Promise<HcApproval[]>
   getHcApproval(requestId: string, actor: ActorContext): Promise<HcApproval | null>
-  createRoleAggregateForHc(hcRequestId: string, aggregate: RoleAggregate): Promise<string>
+  createRoleAggregateForHc(
+    hcRequestId: string,
+    aggregate: RoleAggregate,
+  ): Promise<{ roleSessionId: string; created: boolean }>
+  startClarificationTaskForExistingWorkspace(input: {
+    tenant_id: string
+    hc_request_id: string
+    role_session_id: string
+    started_at: string
+  }): Promise<void>
   listRoleStates(actor: ActorContext): Promise<RoleState[]>
   getRoleAggregate(
     roleSessionId: string,

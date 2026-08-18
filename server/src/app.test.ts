@@ -268,9 +268,11 @@ const login = async (
 
 describe('Role Clarifier API', () => {
   let app: FastifyInstance
+  let store: MemoryStore
 
   beforeEach(async () => {
-    app = await buildApp(config, { store: new MemoryStore(), harness: testHarness })
+    store = new MemoryStore()
+    app = await buildApp(config, { store, harness: testHarness })
   })
 
   it('普通成员的 SSE 不暴露内部错误，企业管理员 Trace 保留诊断信息', () => {
@@ -447,6 +449,130 @@ describe('Role Clarifier API', () => {
       const salary = response.json().items[0].context.job_basics.salary_range
       expect(salary).toBe(userId === 'manager-demo' ? '按权限可见' : '35K-50K·15薪')
     }
+  })
+
+  it('HC 状态从待澄清到已提醒、进行中并在画像确认后完成', async () => {
+    const context = createMockHcContext({
+      hiringManagerUserId: 'manager-demo',
+      assignedHrUserId: 'hr-demo',
+    })
+    context.request_id = 'HC-LIFECYCLE-001'
+    context.approved_at = new Date().toISOString()
+    const event = {
+      event_id: 'evt-lifecycle-001',
+      event_type: 'HC_APPROVED' as const,
+      occurred_at: context.approved_at,
+      tenant_id: 'tenant-demo',
+      hc: {
+        request_id: context.request_id,
+        title: '企业产品经理',
+        department: '企业服务产品部',
+        hiring_manager_user_id: 'manager-demo',
+        assigned_hr_user_id: 'hr-demo',
+        context,
+      },
+    }
+    const timestamp = new Date().toISOString()
+    await app.inject({
+      method: 'POST',
+      url: '/api/v1/integrations/mock-hris/hc-events',
+      headers: {
+        'x-hc-event-timestamp': timestamp,
+        'x-hc-event-signature': signMockHrisEvent(config.HC_EVENT_SECRET!, timestamp, event),
+      },
+      payload: event,
+    })
+    const [claimed] = await store.claimDueNotifications({
+      worker_id: 'test-worker',
+      now: timestamp,
+      locked_until: new Date(Date.parse(timestamp) + 30_000).toISOString(),
+      limit: 1,
+    })
+    await store.markNotificationSent(claimed!.id, 'test-worker', timestamp)
+
+    const managerCookie = await login(app, 'manager-demo')
+    const listHc = async () => (await app.inject({
+      method: 'GET',
+      url: '/api/v1/hc-approvals',
+      headers: { cookie: managerCookie },
+    })).json().items.find((item: { request_id: string }) => item.request_id === context.request_id)
+
+    expect(await listHc()).toMatchObject({
+      clarification_task: { status: 'OPEN', assignee_user_id: 'manager-demo' },
+      notification_delivery: { status: 'SENT', channel: 'FEISHU' },
+    })
+
+    const workspace = await app.inject({
+      method: 'POST',
+      url: `/api/v1/hc-approvals/${context.request_id}/workspace`,
+      headers: { cookie: managerCookie },
+    })
+    expect(workspace.statusCode).toBe(201)
+    const roleId = workspace.json().role.state.id as string
+    expect(await listHc()).toMatchObject({ clarification_task: { status: 'IN_PROGRESS' } })
+
+    const generated = await app.inject({
+      method: 'POST',
+      url: `/api/v1/role-sessions/${roleId}/artifacts/ROLE_PROFILE/generate`,
+      headers: { cookie: managerCookie },
+      payload: {},
+    })
+    expect(generated.statusCode).toBe(202)
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const status = await app.inject({
+        method: 'GET',
+        url: `/api/v1/agent-runs/${generated.json().run_id}`,
+        headers: { cookie: managerCookie },
+      })
+      if (status.json().run.status === 'COMPLETED') break
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    const detail = (await app.inject({
+      method: 'GET',
+      url: `/api/v1/role-sessions/${roleId}`,
+      headers: { cookie: managerCookie },
+    })).json()
+    const profile = detail.state.latest_artifacts.ROLE_PROFILE
+    const confirmed = await app.inject({
+      method: 'POST',
+      url: `/api/v1/role-sessions/${roleId}/artifacts/${profile.id}:confirm`,
+      headers: { cookie: managerCookie },
+      payload: {
+        content_hash: profile.content_hash,
+        expected_revision: detail.state.revision,
+      },
+    })
+    expect(confirmed.statusCode, confirmed.body).toBe(200)
+    expect(await listHc()).toMatchObject({ clarification_task: { status: 'COMPLETED' } })
+    const hrCookie = await login(app, 'hr-demo')
+    const hrApproval = (await app.inject({
+      method: 'GET',
+      url: '/api/v1/hc-approvals',
+      headers: { cookie: hrCookie },
+    })).json().items.find((item: { request_id: string }) => item.request_id === context.request_id)
+    expect(hrApproval).toMatchObject({
+      clarification_task: { status: 'COMPLETED' },
+      notification_delivery: { status: 'SENT' },
+    })
+
+    const messagesBeforeReopen = await app.inject({
+      method: 'GET',
+      url: `/api/v1/role-sessions/${roleId}/messages`,
+      headers: { cookie: managerCookie },
+    })
+    const reopened = await app.inject({
+      method: 'POST',
+      url: `/api/v1/hc-approvals/${context.request_id}/workspace`,
+      headers: { cookie: managerCookie },
+    })
+    expect(reopened.statusCode).toBe(200)
+    expect(reopened.json().role.state.id).toBe(roleId)
+    const messages = await app.inject({
+      method: 'GET',
+      url: `/api/v1/role-sessions/${roleId}/messages`,
+      headers: { cookie: managerCookie },
+    })
+    expect(messages.json().items).toHaveLength(messagesBeforeReopen.json().items.length)
   })
 
   it('选择 HC 后由 Agent 幂等发起首问，重复进入不会生成重复会话或消息', async () => {
