@@ -7,7 +7,6 @@ import type {
   ArtifactType,
   ConversationMessage,
 } from '@role-clarifier/contracts'
-import { DomainError } from '@role-clarifier/domain'
 import type { AppConfig } from '../config.js'
 import type { AgentRunner } from '../agent/runner.js'
 import type { RoleService } from '../services/role-service.js'
@@ -51,13 +50,12 @@ const UserMappingSchema = z.record(
   }),
 )
 
-export type FeishuCard = Record<string, unknown>
+type FeishuCard = Record<string, unknown>
 
 export interface FeishuClientLike {
   configured(): boolean
   sendText?(chatId: string, text: string): Promise<void>
   sendCard(chatId: string, card: FeishuCard): Promise<void>
-  sendCardToOpenId(openId: string, card: FeishuCard): Promise<void>
 }
 
 export class FeishuOpenApiClient implements FeishuClientLike {
@@ -78,23 +76,18 @@ export class FeishuOpenApiClient implements FeishuClientLike {
     await this.sendMessage(chatId, 'interactive', JSON.stringify(card))
   }
 
-  async sendCardToOpenId(openId: string, card: FeishuCard): Promise<void> {
-    await this.sendMessage(openId, 'interactive', JSON.stringify(card), 'open_id')
-  }
-
   async sendText(chatId: string, text: string): Promise<void> {
     await this.sendMessage(chatId, 'text', JSON.stringify({ text: text.slice(0, 20_000) }))
   }
 
   private async sendMessage(
-    receiveId: string,
+    chatId: string,
     messageType: 'text' | 'interactive',
     content: string,
-    receiveIdType: 'chat_id' | 'open_id' = 'chat_id',
   ): Promise<void> {
     const token = await this.getTenantAccessToken()
     const response = await fetch(
-      `${this.config.FEISHU_API_BASE_URL}/im/v1/messages?receive_id_type=${receiveIdType}`,
+      `${this.config.FEISHU_API_BASE_URL}/im/v1/messages?receive_id_type=chat_id`,
       {
         method: 'POST',
         headers: {
@@ -102,7 +95,7 @@ export class FeishuOpenApiClient implements FeishuClientLike {
           'content-type': 'application/json; charset=utf-8',
         },
         body: JSON.stringify({
-          receive_id: receiveId,
+          receive_id: chatId,
           msg_type: messageType,
           content,
         }),
@@ -110,14 +103,7 @@ export class FeishuOpenApiClient implements FeishuClientLike {
     )
     const payload = await response.json() as { code?: number; msg?: string }
     if (!response.ok || payload.code !== 0) {
-      const code = response.status === 429
-        ? 'FEISHU_RATE_LIMITED'
-        : [401, 403].includes(response.status)
-          ? 'FEISHU_AUTH_FAILED'
-          : response.status >= 500
-            ? 'FEISHU_UNAVAILABLE'
-            : 'UNKNOWN_DELIVERY_ERROR'
-      throw Object.assign(new Error('Feishu message delivery failed'), { code })
+      throw new Error(`Feishu send failed (${response.status}): ${payload.msg ?? 'unknown error'}`)
     }
   }
 
@@ -146,12 +132,7 @@ export class FeishuOpenApiClient implements FeishuClientLike {
       expire?: number
     }
     if (!response.ok || payload.code !== 0 || !payload.tenant_access_token) {
-      const code = [401, 403].includes(response.status)
-        ? 'FEISHU_AUTH_FAILED'
-        : response.status >= 500
-          ? 'FEISHU_UNAVAILABLE'
-          : 'UNKNOWN_DELIVERY_ERROR'
-      throw Object.assign(new Error('Feishu access token request failed'), { code })
+      throw new Error(`Feishu token failed (${response.status}): ${payload.msg ?? 'unknown error'}`)
     }
     this.accessToken = {
       value: payload.tenant_access_token,
@@ -220,21 +201,16 @@ const outputMessageText = (message: ConversationMessage): string => {
 const artifactMarkdown = (artifact: ArtifactEnvelope): string => {
   const content = artifact.content as Record<string, unknown>
   if (artifact.type === 'ROLE_PROFILE') {
-    const outcomeSource = Array.isArray(content.success_outcomes) ? content.success_outcomes : content.outcomes
-    const outcomes = Array.isArray(outcomeSource)
-      ? outcomeSource.map((item) => {
+    const outcomes = Array.isArray(content.outcomes)
+      ? content.outcomes.map((item) => {
           const value = item as Record<string, unknown>
-          return `- **${String(value.horizon ?? '阶段')}**：${String(value.title ?? value.result ?? value.definition ?? '')}`
+          return `- **${String(value.horizon ?? '阶段')}**：${String(value.result ?? '')}`
         }).join('\n')
       : ''
-    const capabilitySource = Array.isArray(content.requirements) ? content.requirements : content.capabilities
-    const capabilities = Array.isArray(capabilitySource)
-      ? capabilitySource.map((item) => {
+    const capabilities = Array.isArray(content.capabilities)
+      ? content.capabilities.map((item) => {
           const value = item as Record<string, unknown>
-          const strongEvidence = Array.isArray(value.strong_evidence)
-            ? value.strong_evidence.map(String).join('；')
-            : String(value.evidence ?? '')
-          return `- **${String(value.name ?? value.title ?? '')}**（${String(value.level ?? value.priority ?? '')}）：${strongEvidence}`
+          return `- **${String(value.name ?? '')}**（${String(value.level ?? '')}）：${String(value.evidence ?? '')}`
         }).join('\n')
       : ''
     return `**岗位使命**\n${String(content.mission ?? '待补充')}\n\n**预期结果**\n${outcomes || '- 待补充'}\n\n**关键能力**\n${capabilities || '- 待补充'}`
@@ -305,70 +281,21 @@ export class FeishuGateway {
     return { ok: true }
   }
 
-  async initializeBindings(): Promise<void> {
-    const now = new Date().toISOString()
-    for (const [openId, mapping] of Object.entries(this.mappings)) {
-      const user = await this.store.getUser(mapping.account_id)
-      if (!user?.active) continue
-      await this.store.upsertUserChannelBinding({
-        tenant_id: user.tenant_id,
-        user_id: user.user_id,
-        channel: 'FEISHU',
-        recipient_type: 'OPEN_ID',
-        recipient_id: openId,
-        status: 'ACTIVE',
-        verified_at: now,
-        updated_at: now,
-      })
-      await this.store.requeueUnboundNotificationsForUser(
-        user.tenant_id,
-        user.user_id,
-        now,
-      )
-    }
-  }
-
   private verifyToken(token: string): void {
     if (!this.config.FEISHU_VERIFICATION_TOKEN || token !== this.config.FEISHU_VERIFICATION_TOKEN) {
       throw new Error('Feishu verification token is invalid')
     }
   }
 
-  private async actorFor(openId: string): Promise<ActorContext> {
-    const mapping = this.mappings[openId]
-    if (mapping) {
-      const user = await this.store.getUser(mapping.account_id)
-      if (!user?.active) throw new Error('Mapped Feishu user is unavailable')
-      const now = new Date().toISOString()
-      await this.store.upsertUserChannelBinding({
-        tenant_id: user.tenant_id,
-        user_id: user.user_id,
-        channel: 'FEISHU',
-        recipient_type: 'OPEN_ID',
-        recipient_id: openId,
-        status: 'ACTIVE',
-        verified_at: now,
-        updated_at: now,
-      })
-      await this.store.requeueUnboundNotificationsForUser(
-        user.tenant_id,
-        user.user_id,
-        now,
-      )
-      return {
-        tenant_id: user.tenant_id,
-        user_id: user.user_id,
-        role: user.role,
-        display_name: user.display_name,
-      }
-    }
+  private actorFor(openId: string): ActorContext {
     const tenantId = stableId('tenant', this.config.FEISHU_WORKSPACE_ID.trim().toLowerCase())
-    const accountId = `feishu-${openId}`
+    const mapping = this.mappings[openId]
+    const accountId = mapping?.account_id ?? `feishu-${openId}`
     return {
       tenant_id: tenantId,
       user_id: stableId('user', `${tenantId}\u0000${accountId.trim().toLowerCase()}`),
-      role: 'MANAGER' as ActorRole,
-      display_name: `飞书用户${openId.slice(-4)}`,
+      role: (mapping?.role ?? 'MANAGER') as ActorRole,
+      display_name: mapping?.display_name ?? `飞书用户${openId.slice(-4)}`,
     }
   }
 
@@ -419,7 +346,7 @@ export class FeishuGateway {
     }
     const text = parseTextMessage(message.content)
     if (!text) return
-    const actor = await this.actorFor(sender.sender_id.open_id)
+    const actor = this.actorFor(sender.sender_id.open_id)
     await this.store.saveUser({ ...actor, active: true })
 
     if (/^(新岗位|新建岗位|\/new)$/i.test(text)) {
@@ -446,22 +373,9 @@ export class FeishuGateway {
       [/生成.*HR.*画像|输出.*HR.*画像/i, 'HR_RECRUITING_BRIEF'],
     ]
     const requestedArtifact = artifactCommand.find(([pattern]) => pattern.test(text))?.[1]
-    let run
-    try {
-      run = requestedArtifact
-        ? await this.runner.submitArtifact(role.id, actor, requestedArtifact)
-        : (await this.runner.submitMessage(role.id, actor, text)).run
-    } catch (error) {
-      if (error instanceof DomainError && error.code === 'UNRESOLVED_FACTS_PENDING') {
-        const count = typeof error.details?.count === 'number' ? error.details.count : 1
-        await this.sendText(
-          message.chat_id,
-          `还有 ${count} 条岗位事实待确认。请先到 Web 工作台完成确认或修订，正式生效后再生成岗位画像。`,
-        )
-        return
-      }
-      throw error
-    }
+    const run = requestedArtifact
+      ? await this.runner.submitArtifact(role.id, actor, requestedArtifact)
+      : (await this.runner.submitMessage(role.id, actor, text)).run
 
     const completed = await this.waitForRun(run.id)
     if (completed.status !== 'COMPLETED') {

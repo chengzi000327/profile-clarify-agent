@@ -8,17 +8,11 @@ import type {
   ArtifactType,
   ClarificationRound,
   ConversationMessage,
-  Fact,
   ToolExecutionContext,
 } from '@role-clarifier/contracts'
-import { ROLE_CLARIFIER_PROMPT_VERSION } from '@role-clarifier/contracts'
 import { DomainError } from '@role-clarifier/domain'
 import type { AppConfig } from '../config.js'
 import { RoleService } from '../services/role-service.js'
-import {
-  emptyEnterpriseContextBundle,
-  type EnterpriseContextRetriever,
-} from '../services/enterprise-context-retriever.js'
 import type { ApplicationStore } from '../store/index.js'
 import type {
   CandidateImportItem,
@@ -61,7 +55,6 @@ export class AgentRunner {
     private readonly roleService: RoleService,
     private readonly harness: HarnessAdapter,
     private readonly config: AppConfig,
-    private readonly enterpriseContextRetriever: Pick<EnterpriseContextRetriever, 'retrieve'>,
   ) {}
 
   async submitMessage(
@@ -173,7 +166,7 @@ export class AgentRunner {
       model_tier: modelTier,
       task,
       harness_session_id: null,
-      prompt_version: ROLE_CLARIFIER_PROMPT_VERSION,
+      prompt_version: 'role-clarifier-v2',
       model_name:
         modelTier === 'FLASH'
           ? this.config.DEEPSEEK_FLASH_MODEL
@@ -289,23 +282,6 @@ export class AgentRunner {
 
     try {
       const view = await this.roleService.get(run.role_session_id, pending.actor)
-      let enterpriseContext = emptyEnterpriseContextBundle(view.state, pending.task)
-      if (this.config.ENTERPRISE_CONTEXT_RETRIEVAL_ENABLED) {
-        try {
-          enterpriseContext = await this.enterpriseContextRetriever.retrieve({
-            actor: pending.actor,
-            effective_role: pending.effectiveRole,
-            task: pending.task,
-            role: view.state,
-            message: pending.task === 'CLARIFY_MESSAGE' ? pending.message ?? null : null,
-          })
-        } catch {
-          await emit('context.retrieval_failed', {
-            code: 'ENTERPRISE_CONTEXT_UNAVAILABLE',
-            task: pending.task,
-          })
-        }
-      }
       const executionContext: ToolExecutionContext = {
         tenant_id: pending.actor.tenant_id,
         actor_user_id: pending.actor.user_id,
@@ -320,7 +296,6 @@ export class AgentRunner {
       const request: HarnessRequest = {
         task: pending.task,
         role_state: view.state,
-        enterprise_context: enterpriseContext,
         execution_context: executionContext,
         maximum_transitions: 10,
         structured_output_repair_attempts: 1,
@@ -474,25 +449,14 @@ export class AgentRunner {
           result.role_identity,
         )
       }
-      let persistedFact: Fact | undefined
       if (result.persistence !== 'TOOL') {
-        const saved = await this.roleService.saveFactDraft(
+        await this.roleService.saveFactDraft(
           run.role_session_id,
           actor,
-          {
-            statement: result.fact_draft.statement,
-            category: result.fact_draft.category,
-            source_message_id: run.input_message_id,
-            source_run_id: run.id,
-            proposed_by_user_id: run.actor_user_id,
-          },
+          result.fact_draft.statement,
+          result.fact_draft.category,
         )
-        persistedFact = saved.fact
-      } else {
-        const refreshed = await this.roleService.get(run.role_session_id, actor)
-        persistedFact = refreshed.state.facts.find((fact) => fact.source_run_id === run.id)
       }
-      if (!persistedFact) throw new Error('Harness fact tool did not persist a traceable fact')
       const timestamp = new Date().toISOString()
       const policy = await this.store.getClarificationPolicy(run.role_session_id)
       if (pending.answeredRound) {
@@ -537,9 +501,6 @@ export class AgentRunner {
           question: result.question,
           round_ordinal: openedRound.ordinal,
           budget,
-          fact_id: persistedFact.id,
-          fact_category: persistedFact.category,
-          fact_status: persistedFact.status,
         }
       } else {
         policy.status = 'LIMIT_REACHED'
@@ -548,9 +509,6 @@ export class AgentRunner {
           kind: 'CLARIFICATION_LIMIT',
           completed_rounds: policy.completed_rounds,
           budget,
-          fact_id: persistedFact.id,
-          fact_category: persistedFact.category,
-          fact_status: persistedFact.status,
         }
       }
       policy.updated_by = actor.user_id

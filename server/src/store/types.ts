@@ -7,18 +7,8 @@ import type {
   ClarificationPolicy,
   ClarificationRound,
   ConversationMessage,
-  EnterpriseKnowledgeItem,
-  HcApproval,
   RoleState,
 } from '@role-clarifier/contracts'
-import type {
-  ApprovedHcIngestion,
-  NotificationClaim,
-  NotificationFailureUpdate,
-  NotificationOutboxRecord,
-  NotificationRetryUpdate,
-  UserChannelBindingRecord,
-} from './closure-types.js'
 
 export interface StoredUser extends ActorContext {
   active: boolean
@@ -87,22 +77,6 @@ export interface AdminRunRecord extends RunRecord {
   actor_role: ActorContext['role']
 }
 
-export interface AdminRunFilters {
-  status?: AgentRun['status']
-  model_tier?: AgentRun['model_tier']
-  role_session_id?: string
-  query?: string
-  page: number
-  page_size: number
-}
-
-export interface AdminRunPage {
-  items: AdminRunRecord[]
-  total: number
-  page: number
-  page_size: number
-}
-
 export interface TraceAccessAuditRecord {
   id: string
   tenant_id: string
@@ -113,13 +87,6 @@ export interface TraceAccessAuditRecord {
   created_at: string
 }
 
-export interface EnterpriseKnowledgeQuery {
-  tenant_id: string
-  visible_to: EnterpriseKnowledgeItem['visible_to'][]
-  categories: EnterpriseKnowledgeItem['category'][]
-  now: string
-}
-
 export type EventSubscriber = (event: AgentEvent) => void
 
 export interface ApplicationStore {
@@ -128,37 +95,6 @@ export interface ApplicationStore {
   getUser(userId: string): Promise<StoredUser | null>
   saveUser(user: StoredUser): Promise<void>
   claimExternalEvent(channel: string, eventId: string): Promise<boolean>
-  ingestApprovedHcClosure(input: ApprovedHcIngestion): Promise<{ inserted: boolean }>
-  claimDueNotifications(input: NotificationClaim): Promise<NotificationOutboxRecord[]>
-  getNotification(id: string): Promise<NotificationOutboxRecord | null>
-  getUserChannelBinding(
-    tenantId: string,
-    userId: string,
-    channel: 'FEISHU',
-  ): Promise<UserChannelBindingRecord | null>
-  upsertUserChannelBinding(binding: UserChannelBindingRecord): Promise<void>
-  requeueUnboundNotificationsForUser(
-    tenantId: string,
-    userId: string,
-    nextAttemptAt: string,
-  ): Promise<number>
-  markNotificationSent(id: string, workerId: string, sentAt: string): Promise<void>
-  markNotificationRetry(input: NotificationRetryUpdate): Promise<void>
-  markNotificationUnbound(id: string, workerId: string, updatedAt: string): Promise<void>
-  markNotificationDead(input: NotificationFailureUpdate): Promise<void>
-  listEnterpriseKnowledge(input: EnterpriseKnowledgeQuery): Promise<EnterpriseKnowledgeItem[]>
-  listHcApprovals(actor: ActorContext): Promise<HcApproval[]>
-  getHcApproval(requestId: string, actor: ActorContext): Promise<HcApproval | null>
-  createRoleAggregateForHc(
-    hcRequestId: string,
-    aggregate: RoleAggregate,
-  ): Promise<{ roleSessionId: string; created: boolean }>
-  startClarificationTaskForExistingWorkspace(input: {
-    tenant_id: string
-    hc_request_id: string
-    role_session_id: string
-    started_at: string
-  }): Promise<void>
   listRoleStates(actor: ActorContext): Promise<RoleState[]>
   getRoleAggregate(
     roleSessionId: string,
@@ -167,14 +103,6 @@ export interface ApplicationStore {
   ): Promise<RoleAggregate | null>
   createRoleAggregate(aggregate: RoleAggregate): Promise<void>
   saveRoleState(state: RoleState, expectedRevision: number): Promise<boolean>
-  commitFactDecision(input: {
-    role_session_id: string
-    tenant_id: string
-    expected_revision: number
-    state: RoleState
-    artifacts: ArtifactEnvelope[]
-    decisions: DecisionRecord[]
-  }): Promise<boolean>
   insertArtifact(artifact: ArtifactEnvelope): Promise<void>
   updateArtifact(artifact: ArtifactEnvelope): Promise<void>
   insertCandidates(
@@ -198,14 +126,13 @@ export interface ApplicationStore {
   subscribeToRun(runId: string, subscriber: EventSubscriber): () => void
   listConversationMessages(roleSessionId: string, afterSequence?: number): Promise<ConversationMessage[]>
   appendConversationMessage(message: ConversationMessage): Promise<void>
-  appendConversationMessageIfAbsent(message: ConversationMessage): Promise<boolean>
   updateConversationMessage(message: ConversationMessage): Promise<void>
   getClarificationPolicy(roleSessionId: string): Promise<ClarificationPolicy>
   saveClarificationPolicy(policy: ClarificationPolicy): Promise<void>
   getOpenClarificationRound(roleSessionId: string): Promise<ClarificationRound | null>
   insertClarificationRound(round: ClarificationRound): Promise<void>
   updateClarificationRound(round: ClarificationRound): Promise<void>
-  listRunsForTenant(tenantId: string, filters: AdminRunFilters): Promise<AdminRunPage>
+  listRunsForTenant(tenantId: string): Promise<AdminRunRecord[]>
   appendTraceAccessAudit(record: TraceAccessAuditRecord): Promise<void>
   listTraceAccessAudits(tenantId: string): Promise<TraceAccessAuditRecord[]>
 }

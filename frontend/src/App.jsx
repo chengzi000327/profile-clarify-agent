@@ -4,7 +4,6 @@ import {
   ArrowRight,
   ArrowUp,
   BarChart3,
-  BriefcaseBusiness,
   Check,
   CheckCircle2,
   ChevronDown,
@@ -24,6 +23,7 @@ import {
   Search,
   Settings,
   ShieldCheck,
+  SlidersHorizontal,
   Sparkles,
   Target,
   Users,
@@ -37,20 +37,9 @@ import {
   versions,
 } from './data.js';
 import { api, ApiError } from './api/client.js';
-import { normalizeAssessmentContent } from './assessment-content.js';
-import { normalizeRoleProfileContent } from './profile-content.js';
-import { normalizePublicJDContent } from './public-jd-content.js';
 import LoginScreen from './components/LoginScreen.jsx';
 import { Composer, LiveAgentRun } from './components/AgentConversation.jsx';
 import AdminTraceConsole from './components/AdminTraceConsole.jsx';
-import HcApprovalLanding from './components/HcApprovalLanding.jsx';
-import ClarifierMark from './components/ClarifierMark.jsx';
-import FactDecisionCard from './components/FactDecisionCard.jsx';
-import {
-  enterpriseContextWarning,
-  factForMessage,
-  pendingFactNotice,
-} from './fact-decision.js';
 
 const sourceIcons = {
   org: Users,
@@ -89,10 +78,7 @@ const actorRoleLabel = {
 const recruitmentTypeLabel = {
   NEW_HEADCOUNT: '新增编制',
   REPLACEMENT: '人员替换',
-  ATTRITION_REPLACEMENT: '离职补充',
-  PERFORMANCE_REPLACEMENT: '汰换补充',
   ORGANIZATION_ADJUSTMENT: '组织调整',
-  OTHER: '其他补充',
 };
 
 const artifactPresentation = {
@@ -101,34 +87,6 @@ const artifactPresentation = {
   PUBLIC_JD: { name: '对外 JD', draftAction: '确认并交给 HR 发布', generateAction: '生成对外 JD' },
   HR_RECRUITING_BRIEF: { name: '招聘画像', draftAction: '确认招聘画像', generateAction: '生成招聘画像' },
 };
-
-class ArtifactRenderBoundary extends React.Component {
-  constructor(props) {
-    super(props);
-    this.state = { failed: false };
-  }
-
-  static getDerivedStateFromError() {
-    return { failed: true };
-  }
-
-  componentDidCatch(error) {
-    console.error('Artifact rendering failed', error);
-  }
-
-  render() {
-    if (this.state.failed) {
-      return (
-        <div className="artifact-render-error" role="alert">
-          <span><AlertTriangle size={22} /></span>
-          <strong>当前产物暂时无法展示</strong>
-          <p>这份历史产物的数据格式与当前页面不兼容。其他页签仍可继续使用，请为当前产物生成新版本。</p>
-        </div>
-      );
-    }
-    return this.props.children;
-  }
-}
 
 const artifactStatusLabel = {
   DRAFT: '草稿待确认',
@@ -159,6 +117,19 @@ function toRoleCard(state) {
   };
 }
 
+function ClarifierMark({ size = 32, plate = false }) {
+  return (
+    <span className={`clarifier-mark ${plate ? 'with-plate' : ''}`} style={{ width: size, height: size }} aria-hidden="true">
+      <svg viewBox="0 0 40 40" role="img">
+        <path className="mark-blue" d="M18.1 7.5h-6.3A5.8 5.8 0 0 0 6 13.3v6.3a5.8 5.8 0 0 0 4.4 5.6L7.6 29l6.3-3.6h4.2" />
+        <path className="mark-cyan" d="M21.9 7.5h6.3a5.8 5.8 0 0 1 5.8 5.8v6.3a5.8 5.8 0 0 1-4.4 5.6l2.8 3.8-6.3-3.6h-4.2" />
+        <path className="mark-focus" d="M15.8 14.2h-2.1v2.2M24.2 14.2h2.1v2.2M15.8 22.6h-2.1v-2.2M24.2 22.6h2.1v-2.2" />
+        <circle className="mark-dot" cx="20" cy="18.4" r="2.2" />
+      </svg>
+    </span>
+  );
+}
+
 function AdminTestRoleSwitch({ value, onChange, compact = false }) {
   return (
     <div className={`admin-test-role-switch ${compact ? 'compact' : ''}`} aria-label="Agent 测试身份">
@@ -175,17 +146,10 @@ function AdminTestRoleSwitch({ value, onChange, compact = false }) {
 function App() {
   const [actor, setActor] = useState(null);
   const [booting, setBooting] = useState(true);
-  const [hcApprovals, setHcApprovals] = useState([]);
-  const [hcLoading, setHcLoading] = useState(false);
-  const [hcError, setHcError] = useState('');
-  const [landingMode, setLandingMode] = useState(true);
   const [roleSessions, setRoleSessions] = useState([]);
   const [activeRoleId, setActiveRoleId] = useState(null);
   const [newConversationMode, setNewConversationMode] = useState(false);
   const [roleDetail, setRoleDetail] = useState(null);
-  const [roleDetailLoading, setRoleDetailLoading] = useState(false);
-  const [roleDetailError, setRoleDetailError] = useState('');
-  const [roleDetailReloadKey, setRoleDetailReloadKey] = useState(0);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [activeView, setActiveView] = useState('conversation');
   const [evidenceId, setEvidenceId] = useState(null);
@@ -198,9 +162,7 @@ function App() {
   const [clarificationPolicy, setClarificationPolicy] = useState(null);
   const [requestError, setRequestError] = useState('');
   const [adminTestRole, setAdminTestRole] = useState('MANAGER');
-  const [factDecisionPendingId, setFactDecisionPendingId] = useState(null);
   const streamStopRef = useRef(null);
-  const activeRoleIdRef = useRef(activeRoleId);
   const effectiveActorRole = actor?.role === 'ADMIN' ? adminTestRole : actor?.role;
   const viewerRole = effectiveActorRole === 'HR' ? 'hr' : 'manager';
   const canCreateRole = effectiveActorRole === 'MANAGER';
@@ -222,18 +184,13 @@ function App() {
   const evidence = evidenceId ? evidenceById[evidenceId] : null;
 
   useEffect(() => {
-    activeRoleIdRef.current = activeRoleId;
-  }, [activeRoleId]);
-
-  useEffect(() => {
     let cancelled = false;
     async function bootstrap() {
       try {
         const session = await api.me();
         if (cancelled) return;
         setActor(session.actor);
-        setActiveView('hc');
-        await loadHcApprovals(cancelled);
+        await loadRoleSessions(cancelled);
       } catch (error) {
         if (!(error instanceof ApiError) || error.status !== 401) setRequestError(error.message);
       } finally {
@@ -248,16 +205,8 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!actor || !activeRoleId) {
-      setRoleDetail(null);
-      setRoleDetailLoading(false);
-      setRoleDetailError('');
-      return;
-    }
+    if (!actor || !activeRoleId) return;
     let cancelled = false;
-    setRoleDetail(null);
-    setRoleDetailLoading(true);
-    setRoleDetailError('');
     Promise.all([
       api.getRoleSession(activeRoleId),
       api.getMessages(activeRoleId),
@@ -270,29 +219,17 @@ function App() {
         }
       })
       .catch((error) => {
-        if (!cancelled) setRoleDetailError(error.message || '岗位详情加载失败');
-      })
-      .finally(() => {
-        if (!cancelled) setRoleDetailLoading(false);
+        if (!cancelled) setRequestError(error.message);
       });
     return () => {
       cancelled = true;
     };
-  }, [actor, activeRoleId, roleDetailReloadKey]);
+  }, [actor, activeRoleId]);
 
   async function loadRoleSessions(cancelled = false, preferredRoleId = null) {
-    const [result, hcResult] = await Promise.all([
-      api.listRoleSessions(),
-      api.listHcApprovals(),
-    ]);
+    const result = await api.listRoleSessions();
     if (cancelled) return;
-    setHcApprovals(hcResult.items);
-    const linkedRoleIds = new Set(
-      hcResult.items.map((hc) => hc.role_session_id).filter(Boolean),
-    );
-    const cards = result.items
-      .filter((role) => linkedRoleIds.has(role.id))
-      .map(toRoleCard);
+    const cards = result.items.map(toRoleCard);
     setRoleSessions(cards);
     setActiveRoleId((current) => {
       if (preferredRoleId && cards.some((item) => item.id === preferredRoleId)) return preferredRoleId;
@@ -301,38 +238,20 @@ function App() {
     if (cards.length === 0) setNewConversationMode(true);
   }
 
-  async function loadHcApprovals(cancelled = false) {
-    setHcLoading(true);
-    setHcError('');
-    try {
-      const result = await api.listHcApprovals();
-      if (!cancelled) setHcApprovals(result.items);
-    } catch (error) {
-      if (!cancelled) setHcError(error.message || 'HC 审批读取失败');
-      throw error;
-    } finally {
-      if (!cancelled) setHcLoading(false);
-    }
-  }
-
   async function handleLogin(credentials) {
     const session = await api.login(credentials);
     setActor(session.actor);
-    setActiveView('hc');
-    setLandingMode(true);
+    setActiveView('conversation');
     setNewConversationMode(false);
     setRequestError('');
     setAdminTestRole('MANAGER');
-    await loadHcApprovals();
+    await loadRoleSessions();
   }
 
   async function handleLogout() {
     streamStopRef.current?.();
     await api.logout();
     setActor(null);
-    setHcApprovals([]);
-    setHcError('');
-    setLandingMode(true);
     setRoleSessions([]);
     setActiveRoleId(null);
     setNewConversationMode(false);
@@ -341,40 +260,6 @@ function App() {
     setClarificationPolicy(null);
     setProfileMenuOpen(false);
     setActiveView('conversation');
-  }
-
-  async function handleOpenHc(requestId) {
-    setHcError('');
-    try {
-      const result = await api.openHcWorkspace(requestId);
-      const roleId = result.role.state.id;
-      const conversation = await api.getMessages(roleId);
-      await loadRoleSessions(false, roleId);
-      setNewConversationMode(false);
-      setActiveRoleId(roleId);
-      setRoleDetail(result.role);
-      setMessages(conversation.items);
-      setClarificationPolicy(conversation.policy);
-      setActiveView('conversation');
-      setLandingMode(false);
-    } catch (error) {
-      setHcError(error.message || '岗位澄清会话打开失败');
-      throw error;
-    }
-  }
-
-  function openHcLanding() {
-    streamStopRef.current?.();
-    setLandingMode(true);
-    setActiveRoleId(null);
-    setRoleDetail(null);
-    setMessages([]);
-    setClarificationPolicy(null);
-    setAgentEvents([]);
-    setAgentStatus('idle');
-    setActiveView('hc');
-    setRequestError('');
-    loadHcApprovals().catch(() => {});
   }
 
   function chooseRole(roleId, nextView = 'conversation') {
@@ -422,16 +307,14 @@ function App() {
     if (!roleId) return;
     const [detail] = await Promise.all([
       api.getRoleSession(roleId),
-      loadRoleSessions(false),
+      loadRoleSessions(false, roleId),
     ]);
-    if (activeRoleIdRef.current !== roleId) return;
     setRoleDetail(detail);
   }
 
   async function refreshConversation(roleId = activeRoleId) {
     if (!roleId) return;
     const conversation = await api.getMessages(roleId);
-    if (activeRoleIdRef.current !== roleId) return;
     setMessages(conversation.items);
     setClarificationPolicy(conversation.policy);
   }
@@ -444,15 +327,7 @@ function App() {
       runInfo.stream_url,
       (event) => {
         setAgentEvents((current) => [...current, event]);
-        const contextWarning = enterpriseContextWarning(event);
-        if (contextWarning) setRequestError(contextWarning);
         if (event.type === 'agent.status') setAgentStatus(event.payload.status);
-        if (
-          event.type === 'artifact.updated'
-          && ['ROLE_PROFILE', 'ASSESSMENT_SCORECARD', 'PUBLIC_JD'].includes(event.payload.artifact_type)
-        ) {
-          refreshActiveRole(roleId).catch((error) => setRequestError(error.message));
-        }
         if (event.type === 'run.completed') {
           setAgentStatus('completed');
           Promise.all([refreshActiveRole(roleId), refreshConversation(roleId)])
@@ -519,31 +394,6 @@ function App() {
     }
   }
 
-  async function handleFactDecision(fact, decision, extra = {}) {
-    if (!activeRoleId || !roleDetail || factDecisionPendingId) return;
-    setFactDecisionPendingId(fact.id);
-    setRequestError('');
-    try {
-      const result = await api.decideFact(activeRoleId, fact.id, {
-        decision,
-        expected_revision: roleDetail.state.revision,
-        ...extra,
-        ...(actor.role === 'ADMIN' ? { test_role: adminTestRole } : {}),
-      });
-      setRoleDetail((current) => current ? { ...current, state: result.state } : current);
-      await Promise.all([refreshActiveRole(), refreshConversation()]);
-    } catch (error) {
-      if (error instanceof ApiError && error.status === 409) {
-        await Promise.all([refreshActiveRole(), refreshConversation()]).catch(() => {});
-        setRequestError('事实已被更新，请查看最新状态');
-      } else {
-        setRequestError(error.message || '岗位事实处理失败');
-      }
-    } finally {
-      setFactDecisionPendingId(null);
-    }
-  }
-
   async function handleArtifactAction(type) {
     if (!activeRoleId || !roleDetail) return;
     const latest = roleDetail.state.latest_artifacts?.[type];
@@ -562,38 +412,15 @@ function App() {
         connectRun(run);
       }
     } catch (error) {
-      if (error instanceof ApiError && error.code === 'UNRESOLVED_FACTS_PENDING') {
-        const count = error.details?.count ?? pendingFactNotice(roleDetail.state.facts).count;
-        setRequestError(`还有 ${count} 条岗位事实待确认，请先在对话中处理`);
-        setActiveView('conversation');
-      } else {
-        setRequestError(error.message);
-      }
+      setRequestError(error.message);
     }
   }
 
   if (booting) {
-    return <div className="app-loading"><ClarifierMark size={46} plate /><span>正在加载岗位澄清…</span></div>;
+    return <div className="app-loading"><ClarifierMark size={46} plate /><span>正在加载岗位工作台…</span></div>;
   }
 
   if (!actor) return <LoginScreen onLogin={handleLogin} />;
-
-  if (landingMode) {
-    return (
-      <HcApprovalLanding
-        actor={actor}
-        approvals={hcApprovals}
-        loading={hcLoading}
-        error={hcError}
-        activeView={activeView}
-        onOpenHc={handleOpenHc}
-        onOpenApprovals={() => setActiveView('hc')}
-        onOpenProfile={() => setActiveView('profile')}
-        onOpenTrace={() => setActiveView('admin-trace')}
-        onLogout={handleLogout}
-      />
-    );
-  }
 
   if (!activeRole) {
     return (
@@ -641,31 +468,53 @@ function App() {
           </button>
         </div>
 
-        <button className="new-project-button" onClick={openHcLanding} aria-label="返回选择 HC">
-          <BriefcaseBusiness size={17} />
-          {!sidebarCollapsed && <span>返回选择 HC</span>}
+        <button className="new-project-button" onClick={startNewConversation} disabled={!canCreateRole}>
+          <Plus size={17} />
+          {!sidebarCollapsed && <span>{canCreateRole ? '开始新岗位对话' : 'HR 查看获批岗位'}</span>}
         </button>
 
         {actor.role === 'ADMIN' && !sidebarCollapsed && (
           <AdminTestRoleSwitch value={adminTestRole} onChange={handleAdminTestRoleChange} />
         )}
 
-        {!sidebarCollapsed && <div className="sidebar-section-title"><span>当前会话</span></div>}
-        <nav className="role-session-list current-role-session-list" aria-label="当前岗位澄清会话">
-          <button
-            className="role-session-row active"
-            type="button"
-            onClick={() => setActiveView('conversation')}
-            title={`${activeRole.name} · ${activeRole.stage}`}
-          >
-            <span className="session-icon"><MessageSquare size={15} /></span>
-            {!sidebarCollapsed && (
-              <span className="role-session-copy">
-                <span className="role-session-title"><strong>{activeRole.name}</strong><small>{activeRole.updatedAt}</small></span>
-                <span className="role-session-meta"><em className={activeRole.stageTone}>{activeRole.stage}</em><i>·</i><small>{activeRole.meta}</small></span>
-              </span>
-            )}
-          </button>
+        {!sidebarCollapsed && (
+          <div className="sidebar-section-title">
+            <span>最近会话</span>
+            <div>
+              <button className="icon-button tiny" aria-label="搜索会话"><Search size={15} /></button>
+              <button className="icon-button tiny" aria-label="会话筛选"><SlidersHorizontal size={15} /></button>
+            </div>
+          </div>
+        )}
+
+        <nav className="role-session-list" aria-label="岗位澄清会话列表">
+          {roleSessions.map((role) => {
+            const active = role.id === activeRoleId;
+            return (
+              <button
+                className={`role-session-row ${active ? 'active' : ''}`}
+                key={role.id}
+                onClick={() => {
+                  if (sidebarCollapsed) setSidebarCollapsed(false);
+                  chooseRole(role.id);
+                }}
+                title={`${role.name} · ${role.stage}`}
+              >
+                <span className="session-icon"><MessageSquare size={15} /></span>
+                {!sidebarCollapsed && (
+                  <span className="role-session-copy">
+                    <span className="role-session-title"><strong>{role.name}</strong><small>{role.updatedAt}</small></span>
+                    <span className="role-session-meta">
+                      <em className={role.stageTone}>{role.stage}</em>
+                      <i>·</i>
+                      <small>{role.meta}</small>
+                    </span>
+                  </span>
+                )}
+                {role.unread && <span className="session-unread">{role.unread}</span>}
+              </button>
+            );
+          })}
         </nav>
 
         <div className="sidebar-footer">
@@ -759,10 +608,6 @@ function App() {
             actor={conversationActor}
             messages={messages}
             policy={clarificationPolicy}
-            facts={roleDetail?.state.facts ?? []}
-            effectiveActorRole={effectiveActorRole}
-            factDecisionPendingId={factDecisionPendingId}
-            onFactDecision={handleFactDecision}
           />
         ) : (
           <ProfileView
@@ -771,12 +616,8 @@ function App() {
             actualActorRole={actor.role}
             onOpenEvidence={setEvidenceId}
             roleDetail={roleDetail}
-            loading={roleDetailLoading}
-            error={roleDetailError}
-            onRetry={() => setRoleDetailReloadKey((value) => value + 1)}
             onArtifactAction={handleArtifactAction}
             agentStatus={agentStatus}
-            onOpenConversation={() => setActiveView('conversation')}
           />
         )}
       </main>
@@ -818,17 +659,35 @@ function EmptyWorkspace({
             <span className="brand-copy"><strong>画像澄清 Agent</strong><small>ROLE CLARIFIER</small></span>
           </div>
         </div>
-        <button
-          className="new-project-button"
-          onClick={onStartNew}
-          disabled={!canCreateRole}
-          aria-label={canCreateRole ? '开始新岗位对话' : 'HR 查看获批岗位'}
-        >
+        <button className="new-project-button" onClick={onStartNew} disabled={!canCreateRole}>
           <Plus size={17} /><span>{canCreateRole ? '开始新岗位对话' : 'HR 查看获批岗位'}</span>
         </button>
         {actor.role === 'ADMIN' && (
           <AdminTestRoleSwitch value={adminTestRole} onChange={onAdminTestRoleChange} />
         )}
+        <div className="sidebar-section-title">
+          <span>最近会话</span>
+          <div>
+            <button className="icon-button tiny" aria-label="搜索会话"><Search size={15} /></button>
+            <button className="icon-button tiny" aria-label="会话筛选"><SlidersHorizontal size={15} /></button>
+          </div>
+        </div>
+        <nav className="role-session-list empty-role-session-list" aria-label="岗位澄清会话列表">
+          {roleSessions.length === 0 ? (
+            <div className="empty-session-list">
+              <span className="session-icon"><MessageSquare size={15} /></span>
+              <span><strong>还没有岗位会话</strong><small>直接在右侧和 Agent 聊聊</small></span>
+            </div>
+          ) : roleSessions.map((role) => (
+            <button className="role-session-row" key={role.id} onClick={() => onChooseRole(role.id)}>
+              <span className="session-icon"><MessageSquare size={15} /></span>
+              <span className="role-session-copy">
+                <span className="role-session-title"><strong>{role.name}</strong><small>{role.updatedAt}</small></span>
+                <span className="role-session-meta"><em className={role.stageTone}>{role.stage}</em><i>·</i><small>{role.meta}</small></span>
+              </span>
+            </button>
+          ))}
+        </nav>
         <div className="sidebar-footer">
           {actor.role === 'ADMIN' && (
             <button className={`sidebar-utility ${activeView === 'admin-trace' ? 'active' : ''}`} onClick={onOpenTrace}>
@@ -971,10 +830,6 @@ function ConversationView({
   actor,
   messages,
   policy,
-  facts,
-  effectiveActorRole,
-  factDecisionPendingId,
-  onFactDecision,
 }) {
   const scrollRef = useRef(null);
   const budget = policy ? policy.initial_budget + policy.granted_rounds : 6;
@@ -1005,8 +860,8 @@ function ConversationView({
           {messages.length === 0 && (
             <div className="conversation-empty-state">
               <ClarifierMark size={34} plate />
-              <strong>Agent 正在准备第一个澄清问题</strong>
-              <p>系统会根据已审批 HC 的招聘原因和组织缺口主动发问，请稍候。</p>
+              <strong>开始真实岗位对话</strong>
+              <p>{actor.display_name}，请补充招聘原因、成功标准或希望Agent协助判断的问题。消息发送后会立即保存。</p>
             </div>
           )}
 
@@ -1024,7 +879,6 @@ function ConversationView({
               return <div className="conversation-system-message" key={message.id}><AlertTriangle size={13} />{message.content}</div>;
             }
             const structured = message.structured_content ?? {};
-            const messageFact = factForMessage(facts, structured.fact_id);
             return (
               <div className="message message-agent persisted-agent-message" key={message.id}>
                 <span className="agent-avatar"><ClarifierMark size={25} /></span>
@@ -1033,13 +887,9 @@ function ConversationView({
                   {message.content.split('\n').filter(Boolean).map((paragraph, index) => <p key={`${message.id}-${index}`}>{paragraph}</p>)}
                   {structured.question && (
                     <div className="persisted-question">
-                      <span><CircleDot size={13} />{structured.kind === 'HC_OPENING_QUESTION'
-                        ? 'Agent 主动发起 · 第一个问题'
-                        : `第 ${structured.round_ordinal} / ${structured.budget} 轮主动澄清`}</span>
+                      <span><CircleDot size={13} />第 {structured.round_ordinal} / {structured.budget} 轮主动澄清</span>
                       <strong>{structured.question}</strong>
-                      <small>{structured.kind === 'HC_OPENING_QUESTION'
-                        ? '请用人经理直接在下方回答；HR 和企业管理员可以补充事实。'
-                        : '经理、HR或企业管理员都可以直接在下方回答。'}</small>
+                      <small>经理、HR或企业管理员都可以直接在下方回答。</small>
                     </div>
                   )}
                   {structured.kind === 'CLARIFICATION_LIMIT' && (
@@ -1047,14 +897,6 @@ function ConversationView({
                       <span>主动澄清预算已用完</span>
                       <button onClick={() => onExtend('当前岗位仍有关键问题需要继续澄清')}>增加 {policy?.extension_size ?? 2} 轮</button>
                     </div>
-                  )}
-                  {messageFact && (
-                    <FactDecisionCard
-                      fact={messageFact}
-                      effectiveRole={effectiveActorRole}
-                      pending={factDecisionPendingId === messageFact.id}
-                      onDecide={(decision, extra) => onFactDecision(messageFact, decision, extra)}
-                    />
                   )}
                 </div>
               </div>
@@ -1278,7 +1120,7 @@ function roleBasicInfo(state, viewerRole) {
   ];
 }
 
-function ArtifactEmptyState({ artifactType, invalidated, canManage, onGenerate, busy, blockedLabel = '' }) {
+function ArtifactEmptyState({ artifactType, invalidated, canManage, onGenerate, busy }) {
   const presentation = artifactPresentation[artifactType];
   const prerequisite = {
     ROLE_PROFILE: 'HC 已审批后即可生成；Agent 会基于招聘原因、成功标准和已确认事实形成草稿。',
@@ -1292,8 +1134,8 @@ function ArtifactEmptyState({ artifactType, invalidated, canManage, onGenerate, 
       <strong>{invalidated ? `${presentation.name}需要更新` : `${presentation.name}尚未生成`}</strong>
       <p>{invalidated ? '上游产物已发生变化，请生成新版本以保持内容一致。' : prerequisite}</p>
       {canManage ? (
-        <button className="primary-action" type="button" onClick={onGenerate} disabled={busy || Boolean(blockedLabel)}>
-          {busy ? 'Agent 生成中…' : blockedLabel || presentation.generateAction}<ChevronRight size={15} />
+        <button className="primary-action" type="button" onClick={onGenerate} disabled={busy}>
+          {busy ? 'Agent 生成中…' : presentation.generateAction}<ChevronRight size={15} />
         </button>
       ) : (
         <small>当前身份可查看该产物，但需要由{artifactType === 'HR_RECRUITING_BRIEF' ? ' HR' : '用人经理'}生成和确认。</small>
@@ -1302,48 +1144,18 @@ function ArtifactEmptyState({ artifactType, invalidated, canManage, onGenerate, 
   );
 }
 
-function ProfileView({
-  viewerRole,
-  actualActorRole,
-  onOpenEvidence,
-  roleDetail,
-  loading,
-  error,
-  onRetry,
-  onArtifactAction,
-  agentStatus,
-  onOpenConversation,
-}) {
+function ProfileView({ viewerRole, actualActorRole, onOpenEvidence, roleDetail, onArtifactAction, agentStatus }) {
   const [section, setSection] = useState(viewerRole === 'hr' ? 'portrait' : 'basis');
   const [expandedScenario, setExpandedScenario] = useState('T-01');
   const [expandedRequirement, setExpandedRequirement] = useState('C-01');
   const [expandedScore, setExpandedScore] = useState('A-01');
   const state = roleDetail?.state;
-  if (loading) {
-    return (
-      <section className="profile-surface redesigned-profile profile-loading-state" aria-live="polite">
-        <ClarifierMark size={38} plate />
-        <strong>正在加载岗位画像</strong>
-        <p>正在同步岗位详情、画像产物与审批状态，请稍候。</p>
-      </section>
-    );
-  }
-  if (error) {
-    return (
-      <section className="profile-surface redesigned-profile profile-loading-state" role="alert">
-        <AlertTriangle size={38} />
-        <strong>岗位画像加载失败</strong>
-        <p>{error}</p>
-        <button className="primary-action" type="button" onClick={onRetry}>重新加载</button>
-      </section>
-    );
-  }
   if (!state) {
     return (
       <section className="profile-surface redesigned-profile profile-loading-state" aria-live="polite">
         <ClarifierMark size={38} plate />
-        <strong>暂无岗位画像</strong>
-        <span>当前岗位还没有可展示的画像详情，请先在岗位澄清对话中补充信息。</span>
+        <strong>正在加载岗位画像…</strong>
+        <span>正在读取当前岗位的 HC 信息、画像产物和版本状态。</span>
       </section>
     );
   }
@@ -1375,13 +1187,14 @@ function ProfileView({
   const latestArtifact = roleDetail?.state?.latest_artifacts?.[artifactType];
   const presentation = artifactPresentation[artifactType];
   const canManageArtifact = section === 'portrait' ? viewerRole === 'hr' : viewerRole === 'manager';
-  const factNotice = pendingFactNotice(state.facts);
-  const factGenerationBlocked = artifactType === 'ROLE_PROFILE' && factNotice.generationBlocked;
   const connectedActionLabel = latestArtifact?.status === 'DRAFT'
     ? presentation.draftAction
     : latestArtifact?.status === 'CONFIRMED'
       ? '生成新版本'
       : presentation.generateAction;
+  const decisionSteps = ['招聘原因与成功标准', '岗位画像', '评估方案', '对外 JD'];
+  const currentDecisionStep = section === 'assessment' ? 2 : section === 'jd' ? 3 : 1;
+
   return (
     <section className="profile-surface redesigned-profile">
       <div className="profile-page profile-page-wide">
@@ -1397,14 +1210,10 @@ function ProfileView({
             <button className="quiet-button"><History size={15} />查看版本</button>
             <button
               className="primary-action"
-              disabled={agentStatus === 'running' || !canManageArtifact || factGenerationBlocked}
+              disabled={agentStatus === 'running' || !canManageArtifact}
               onClick={() => onArtifactAction?.(artifactType)}
             >
-              {agentStatus === 'running'
-                ? 'Agent 生成中…'
-                : factGenerationBlocked
-                  ? `先确认 ${factNotice.count} 条事实`
-                  : canManageArtifact ? connectedActionLabel : '只读查看'}<ChevronRight size={16} />
+              {agentStatus === 'running' ? 'Agent 生成中…' : canManageArtifact ? connectedActionLabel : '只读查看'}<ChevronRight size={16} />
             </button>
           </div>
         </div>
@@ -1423,10 +1232,16 @@ function ProfileView({
           <span>{actualActorRole === 'ADMIN' ? `企业管理员正在以“${viewerRole === 'hr' ? 'HR' : '用人经理'}”身份测试；真实身份仍写入审计记录。` : viewerRole === 'hr' ? 'HR 权限：在同一岗位会话中查看招聘画像、画像依据、评估方案和对外 JD。' : '用人经理权限：确认画像依据、评估方案和对外 JD；HR 内部招聘画像不可见。'}</span>
         </div>
 
-        {factNotice.count > 0 && (
-          <div className="profile-pending-facts" role="status">
-            <span><AlertTriangle size={13} /><strong>{factNotice.text}</strong>，处理完成后再生成正式岗位画像。</span>
-            <button type="button" onClick={onOpenConversation}>{factNotice.action}<ChevronRight size={13} /></button>
+        {section !== 'portrait' && (
+          <div className="decision-flow" aria-label="岗位画像产出流程">
+            {decisionSteps.map((step, index) => (
+              <React.Fragment key={step}>
+                <div className={`${index < currentDecisionStep ? 'completed' : ''} ${index === currentDecisionStep ? 'current' : ''}`}>
+                  <span>{index < currentDecisionStep ? <Check size={11} /> : index + 1}</span><strong>{step}</strong>
+                </div>
+                {index < decisionSteps.length - 1 && <ChevronRight size={13} />}
+              </React.Fragment>
+            ))}
           </div>
         )}
 
@@ -1439,38 +1254,22 @@ function ProfileView({
         </nav>
 
         <div className="profile-content-frame">
-          {section === 'portrait' ? (
-            (!latestArtifact || latestArtifact.status === 'INVALIDATED') ? (
-              <ArtifactEmptyState
-                artifactType={artifactType}
-                invalidated={latestArtifact?.status === 'INVALIDATED'}
-                canManage={canManageArtifact}
-                onGenerate={() => onArtifactAction?.(artifactType)}
-                busy={agentStatus === 'running'}
-                blockedLabel={factGenerationBlocked ? `先确认 ${factNotice.count} 条事实` : ''}
-              />
-            ) : (
-              <RecruitingPortrait onOpenEvidence={onOpenEvidence} artifact={latestArtifact} roleDetail={roleDetail} />
-            )
+          {(!latestArtifact || latestArtifact.status === 'INVALIDATED') ? (
+            <ArtifactEmptyState
+              artifactType={artifactType}
+              invalidated={latestArtifact?.status === 'INVALIDATED'}
+              canManage={canManageArtifact}
+              onGenerate={() => onArtifactAction?.(artifactType)}
+              busy={agentStatus === 'running'}
+            />
+          ) : section === 'portrait' ? (
+            <RecruitingPortrait onOpenEvidence={onOpenEvidence} artifact={latestArtifact} roleDetail={roleDetail} />
+          ) : section === 'basis' ? (
+            <GeneratedProfileBasis artifact={latestArtifact} state={state} />
+          ) : section === 'assessment' ? (
+            <GeneratedAssessment artifact={latestArtifact} />
           ) : (
-            <ArtifactRenderBoundary key={`${artifactType}-${latestArtifact?.id ?? 'empty'}-${latestArtifact?.version ?? 0}`}>
-              {(!latestArtifact || latestArtifact.status === 'INVALIDATED') ? (
-                <ArtifactEmptyState
-                  artifactType={artifactType}
-                  invalidated={latestArtifact?.status === 'INVALIDATED'}
-                  canManage={canManageArtifact}
-                  onGenerate={() => onArtifactAction?.(artifactType)}
-                  busy={agentStatus === 'running'}
-                  blockedLabel={factGenerationBlocked ? `先确认 ${factNotice.count} 条事实` : ''}
-                />
-              ) : section === 'basis' ? (
-                <GeneratedProfileBasis artifact={latestArtifact} state={state} onOpenEvidence={onOpenEvidence} />
-              ) : section === 'assessment' ? (
-                <GeneratedAssessment artifact={latestArtifact} />
-              ) : (
-                <JDPreview jd={latestArtifact} state={state} />
-              )}
-            </ArtifactRenderBoundary>
+            <JDPreview jd={latestArtifact} state={state} />
           )}
         </div>
       </div>
@@ -1646,162 +1445,71 @@ function ActionSectionHeading({ number, title, description }) {
   );
 }
 
-function ArtifactEvidenceRefs({ refs = [], onOpenEvidence }) {
-  if (!refs.length) return null;
-  return (
-    <div className="generated-evidence-refs" aria-label="证据来源">
-      <span>依据</span>
-      {refs.map((ref) => evidenceById[ref] && onOpenEvidence
-        ? <button type="button" key={ref} onClick={() => onOpenEvidence(ref)}>{ref}<Link2 size={10} /></button>
-        : <em key={ref}>{ref}</em>)}
-    </div>
-  );
-}
-
-function GeneratedProfileBasis({ artifact, state, onOpenEvidence }) {
+function GeneratedProfileBasis({ artifact, state }) {
   const content = artifact?.content ?? {};
   const hc = state?.hc_context;
-  const profile = normalizeRoleProfileContent(content, hc);
-  const boundary = profile.boundaryGroups;
-  const approvedFact = `${({
-    NEW_HEADCOUNT: '新增正式编制',
-    REPLACEMENT: '人员替换',
-    ATTRITION_REPLACEMENT: '离职补充',
-    PERFORMANCE_REPLACEMENT: '汰换补充',
-    ORGANIZATION_ADJUSTMENT: '组织调整',
-    OTHER: '其他补充',
-  })[hc?.job_basics?.recruitment_type] ?? '已审批编制'} ${hc?.job_basics?.headcount ?? 1} 人`;
+  const outcomes = content.success_outcomes ?? content.outcomes ?? [];
+  const responsibilities = content.responsibilities ?? hc?.initial_responsibilities ?? [];
+  const capabilities = content.capabilities ?? [];
+  const boundaries = content.boundaries ?? [];
   return (
     <article className="generated-artifact-document role-profile-artifact">
       <section className="generated-artifact-hero">
         <span><Target size={14} />岗位使命</span>
-        <h2>{profile.mission}</h2>
-        {profile.recruitment.noHireImpact && <p><strong>不招聘的影响：</strong>{profile.recruitment.noHireImpact}</p>}
+        <h2>{content.mission ?? '当前版本未形成岗位使命，请生成新版本补齐。'}</h2>
       </section>
       <section className="generated-section hiring-reason-section">
-        <header><span>01</span><div><h3>岗位为什么存在</h3><p>从已审批事实推导岗位结论，不重新审批 HC。</p></div></header>
-        <div className="generated-decision-chain">
-          <div><small>已审批事实</small><strong>{approvedFact}</strong></div>
-          <ChevronRight size={14} />
-          <div><small>业务变化</small><strong>{profile.recruitment.businessChange}</strong></div>
-          <ChevronRight size={14} />
-          <div><small>组织缺口</small><strong>{profile.recruitment.organizationGap}</strong></div>
-          <ChevronRight size={14} />
-          <div className="conclusion"><small>招聘结论</small><strong>{profile.recruitment.conclusion}</strong></div>
+        <header><span>01</span><div><h3>为什么新增这个编制</h3><p>来自 HC 审批和用人经理澄清，不重新审批 HC。</p></div></header>
+        <div className="generated-reason-grid">
+          <div><small>业务变化</small><strong>{hc?.business_change ?? '待同步'}</strong></div>
+          <div><small>组织缺口</small><strong>{hc?.organization_gap ?? '待同步'}</strong></div>
+          <div><small>招聘结论</small><strong>{content.hiring_reason ?? hc?.approved_reason ?? '待同步'}</strong></div>
         </div>
-        <ArtifactEvidenceRefs refs={profile.recruitment.evidenceRefs} onOpenEvidence={onOpenEvidence} />
       </section>
       <section className="generated-section">
-        <header><span>02</span><div><h3>阶段性成功结果</h3><p>明确到什么时间、产生什么结果，以及如何观察和验收。</p></div></header>
-        <div className="generated-outcome-list">
-          {profile.outcomes.map((outcome, index) => (
-            <div className="generated-outcome-row" key={`${outcome.id}-${index}`}>
-              <div className="generated-outcome-time"><small>{outcome.id}</small><strong>{outcome.horizon}</strong></div>
-              <div className="generated-outcome-main">
-                <div><h4>{outcome.title}</h4><span>{outcome.status}</span></div>
-                <p>{outcome.definition}</p>
-                {outcome.measures.length > 0 && <div>{outcome.measures.map((measure) => <em key={measure}>{measure}</em>)}</div>}
-                {outcome.evidence && <small>{outcome.evidence}</small>}
-              </div>
-              <ArtifactEvidenceRefs refs={outcome.evidenceRefs} onOpenEvidence={onOpenEvidence} />
-            </div>
+        <header><span>02</span><div><h3>成功标准</h3><p>HR 可以据此判断候选人是否能在岗位上产生结果。</p></div></header>
+        <div className="generated-outcome-grid">
+          {outcomes.map((outcome, index) => (
+            <div key={`${outcome.horizon}-${index}`}><small>{outcome.horizon ?? `阶段 ${index + 1}`}</small><strong>{outcome.result ?? outcome.title}</strong>{outcome.evidence && <p>{outcome.evidence}</p>}</div>
           ))}
-          {profile.outcomes.length === 0 && <p className="generated-empty-copy">当前版本没有成功标准。</p>}
+          {outcomes.length === 0 && <p className="generated-empty-copy">当前版本没有成功标准。</p>}
         </div>
       </section>
-      <section className="generated-section">
-        <header><span>03</span><div><h3>关键工作场景</h3><p>描述最影响岗位成功、最能区分候选人的真实工作，而不是复制旧 JD。</p></div></header>
-        {profile.scenarios.length > 0 ? (
-          <div className="generated-scenario-list">
-            {profile.scenarios.map((scenario, index) => (
-              <details key={scenario.id} defaultOpen={index === 0}>
-                <summary>
-                  <span>{scenario.id}</span><strong>{scenario.title}</strong><small>{scenario.frequency}</small>
-                  {scenario.outcomeRefs.length > 0 && <em>{scenario.outcomeRefs.join(' · ')}</em>}
-                  <ChevronDown size={15} />
-                </summary>
-                <div className="generated-scenario-detail">
-                  <DefinitionItem label="触发情境" value={scenario.trigger} />
-                  <DefinitionItem label="关键动作" value={scenario.actions} />
-                  <DefinitionItem label="主要产出" value={scenario.output} />
-                  <DefinitionItem label="核心挑战" value={scenario.challenge} />
-                  <DefinitionItem label="协作对象" value={scenario.stakeholders} />
-                  <ArtifactEvidenceRefs refs={scenario.evidenceRefs} onOpenEvidence={onOpenEvidence} />
-                </div>
-              </details>
-            ))}
-          </div>
-        ) : (
-          <ol className="generated-responsibility-fallback">{profile.responsibilities.map((item) => <li key={item}>{item}</li>)}</ol>
-        )}
+      <section className="generated-section split-generated-section">
+        <div><header><span>03</span><div><h3>核心职责</h3><p>候选人入职后真正承担的工作。</p></div></header><ol>{responsibilities.map((item) => <li key={item}>{item}</li>)}</ol></div>
+        <div><header><span>04</span><div><h3>人才规格</h3><p>用可观察证据表达能力要求。</p></div></header><div className="generated-capability-list">{capabilities.map((item) => <div key={item.name}><strong>{item.name}<em>{item.level}</em></strong><p>{item.evidence}</p></div>)}</div></div>
       </section>
       <section className="generated-section boundary-generated-section">
-        <header><span>04</span><div><h3>权责边界与资源</h3><p>明确负责、不负责、关键决策权和岗位真正可调用的资源。</p></div></header>
-        <div className="generated-boundary-grid">
-          <div><h4><Check size={13} />需要负责</h4>{boundary.owns.map((item) => <p key={item}>{item}</p>)}</div>
-          <div><h4><X size={13} />不直接负责</h4>{boundary.notOwns.map((item) => <p key={item}>{item}</p>)}</div>
-          <div><h4>决策权限</h4><p>{boundary.decisionRights}</p></div>
-          <div><h4>协作与资源</h4><p>{boundary.resources}</p></div>
-        </div>
-        <ArtifactEvidenceRefs refs={boundary.evidenceRefs} onOpenEvidence={onOpenEvidence} />
-      </section>
-      <section className="generated-section">
-        <header><span>05</span><div><h3>人才规格与可观察证据</h3><p>每项要求都要说明业务原因、强证据、替代证据和风险信号。</p></div></header>
-        <div className="generated-requirement-list">
-          {profile.capabilities.map((item, index) => (
-            <details key={item.id ?? item.name} defaultOpen={index === 0}>
-              <summary>
-                <span className={item.priority === 'Must-have' ? 'must' : 'preferred'}>{item.priority}</span>
-                <strong>{item.id} · {item.name}</strong><small>{item.level}</small>
-                {item.mapping.length > 0 && <em>{item.mapping.join(' · ')}</em>}
-                <ChevronDown size={15} />
-              </summary>
-              <div className="generated-requirement-detail">
-                <DefinitionItem label="为什么需要" value={item.rationale} />
-                <DefinitionItem label="强证据" value={item.strongEvidence} tone="positive" />
-                <DefinitionItem label="可接受替代" value={item.substitute} />
-                <DefinitionItem label="风险信号" value={item.risk} tone="negative" />
-                <DefinitionItem label="建议评估" value={item.assessment} />
-                <ArtifactEvidenceRefs refs={item.evidenceRefs} onOpenEvidence={onOpenEvidence} />
-              </div>
-            </details>
-          ))}
-          {profile.capabilities.length === 0 && <p className="generated-empty-copy">当前版本没有人才规格。</p>}
-        </div>
+        <header><span>05</span><div><h3>岗位边界</h3><p>明确负责、不负责以及关键决策权。</p></div></header>
+        <ul>{boundaries.map((item) => <li key={item}><ShieldCheck size={12} />{item}</li>)}</ul>
       </section>
     </article>
   );
 }
 
 function GeneratedAssessment({ artifact }) {
-  const { dimensions, decisionRule } = normalizeAssessmentContent(artifact?.content);
+  const content = artifact?.content ?? {};
+  const dimensions = content.dimensions ?? [];
   return (
     <article className="generated-artifact-document assessment-artifact">
       <section className="generated-artifact-hero">
-        <div className="assessment-rule-heading">
-          <span><ListChecks size={14} />招聘评估方案</span>
-          {decisionRule.status && <em>{decisionRule.status}</em>}
-        </div>
+        <span><ListChecks size={14} />招聘评估方案</span>
         <h2>把岗位成功标准转成统一、可观察的面试判断</h2>
-        {decisionRule.summary && <p>{decisionRule.summary}</p>}
-        {decisionRule.items.length > 0 && (
-          <div className="assessment-decision-rule-grid">
-            {decisionRule.items.map((item) => (
-              <div key={item.label}><small>{item.label}</small><strong>{item.value}</strong></div>
-            ))}
-          </div>
-        )}
+        <p>{content.decision_rule ?? '当前版本尚未生成录用决策规则。'}</p>
       </section>
       <section className="generated-section">
         <div className="assessment-dimension-grid">
           {dimensions.map((dimension, index) => {
+            const anchors = Array.isArray(dimension.anchors)
+              ? dimension.anchors
+              : Object.entries(dimension.anchors ?? {}).map(([score, text]) => `${score} 分：${text}`);
             return (
               <div className="assessment-dimension-card" key={`${dimension.name}-${index}`}>
-                <header><span>{dimension.id}</span><div><h3>{dimension.name}</h3><p>{dimension.weight === '—' ? '权重待确认' : `${dimension.weight}%`} · {dimension.method}</p></div></header>
+                <header><span>{String(index + 1).padStart(2, '0')}</span><div><h3>{dimension.name}</h3><p>{dimension.weight ?? '—'}% · {dimension.method ?? '待确认'}</p></div></header>
                 {dimension.owner && <p><strong>评估人：</strong>{dimension.owner}</p>}
                 {dimension.question && <p><strong>核心问题：</strong>{dimension.question}</p>}
                 {dimension.evidence && <p><strong>必须听到：</strong>{dimension.evidence}</p>}
-                <div className="assessment-anchor-list">{dimension.anchors.map((anchor) => <span key={anchor}>{anchor}</span>)}</div>
+                <div className="assessment-anchor-list">{anchors.map((anchor) => <span key={String(anchor)}>{anchor}</span>)}</div>
               </div>
             );
           })}
@@ -1862,21 +1570,38 @@ function HiringReasonDecision({ onOpenEvidence }) {
 
 function JDPreview({ jd, state }) {
   const fallbackResponsibilities = [
-    '当前历史版本没有可展示的岗位职责，请生成新版本补齐。',
+    '分析多个客户与业务场景，识别可复用的共性问题，定义清晰的产品边界与路线。',
+    '定义标准能力的核心用户、使用场景、MVP 范围和验证方式，推动方案落地。',
+    '协同销售、交付、解决方案与研发，对客户承诺、短期收入和长期产品价值做出可解释的取舍。',
+    '设计并跟踪产品采用、复用与交付效率指标，把客户验证结果转化为产品迭代决策。',
   ];
 
   const fallbackCapabilities = [
     {
-      id: 'missing-capability',
-      title: '当前历史版本没有可展示的人才要求',
-      description: '请生成新版本补齐。',
+      title: '复杂 B 端问题抽象与产品化',
+      description: '能够从多个客户或业务场景中识别共性，并说清产品选择与边界。',
+    },
+    {
+      title: '从机会判断到 MVP 验证的闭环能力',
+      description: '不只停留在方案或上线，能用真实用户和结果完成验证与复盘。',
+    },
+    {
+      title: '跨角色的复杂决策推动',
+      description: '能够在没有直接汇报关系的情况下，用事实、取舍和清晰责任推动共识。',
+    },
+    {
+      title: '用指标验证产品价值',
+      description: '能定义有意义的观察指标，理解数据限制，并让数据真正改变产品决策。',
     },
   ];
-  const normalized = normalizePublicJDContent(jd?.content, state, {
-    about: '当前历史版本没有可展示的岗位说明，请生成新版本补齐。',
-    responsibilities: fallbackResponsibilities,
-    capabilities: fallbackCapabilities,
-  });
+  const content = jd?.content;
+  const responsibilities = content?.what_you_will_do ?? fallbackResponsibilities;
+  const capabilities = content?.what_we_look_for?.map((item) => ({
+    title: item,
+    description: '',
+  })) ?? fallbackCapabilities;
+  const basics = content?.title_and_basics;
+  const hcBasics = state?.hc_context?.job_basics;
 
   return (
     <div className="jd-preview-shell">
@@ -1886,20 +1611,20 @@ function JDPreview({ jd, state }) {
       </div>
       <article className="jd-document">
         <header>
-          <span>{normalized.department} · {normalized.location}</span>
-          <h1>{normalized.title}</h1>
+          <span>{state?.department ?? '团队待同步'} · {basics?.location ?? hcBasics?.locations?.join(' / ') ?? '地点待同步'}</span>
+          <h1>{basics?.title ?? state?.title ?? '岗位名称待同步'}</h1>
           <p>一起把复杂问题转化为真正可验证的业务结果。</p>
-          <div className="jd-facts"><span>{normalized.employmentType}</span><span>{normalized.level}</span><span>汇报给{normalized.reportingLine}</span></div>
+          <div className="jd-facts"><span>{basics?.employment_type ?? hcBasics?.employment_type ?? '全职'}</span><span>{hcBasics?.level ?? '职级待同步'}</span><span>汇报给{basics?.reporting_line ?? hcBasics?.reporting_line ?? '待同步'}</span></div>
         </header>
         <section className="jd-about-role">
           <h2>关于岗位</h2>
-          <p>{normalized.about}</p>
+          <p>{content?.about_the_role ?? '我们正在从项目交付走向标准产品。你会从多个客户场景中识别高价值共性需求，定义可复用的产品路线，并推动首个标准能力完成真实客户验证。这个岗位主导跨项目的产品化判断，不代替单个客户的项目交付。'}</p>
         </section>
         <section><h2>你会做什么</h2><ol className="jd-responsibility-list">
-          {normalized.responsibilities.map((item, index) => <li key={`${index}-${item}`}>{item}</li>)}
+          {responsibilities.map((item) => <li key={item}>{item}</li>)}
         </ol></section>
         <section><h2>我们希望你具备</h2><div className="jd-capability-list">
-          {normalized.capabilities.map((capability) => <div key={capability.id}><strong>{capability.title}</strong>{capability.description && <p>{capability.description}</p>}</div>)}
+          {capabilities.map((capability) => <div key={capability.title}><strong>{capability.title}</strong>{capability.description && <p>{capability.description}</p>}</div>)}
         </div></section>
         <footer className="jd-document-footer"><span>候选人版预览 · 仅包含可公开字段</span><strong>版本 v{jd?.version ?? '0.5'} · {jd?.status === 'CONFIRMED' ? '已确认' : '待发布'}</strong></footer>
       </article>

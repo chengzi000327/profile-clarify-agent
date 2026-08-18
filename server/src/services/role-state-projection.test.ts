@@ -59,7 +59,7 @@ describe('read_role_state task projection', () => {
       model_tier: task === 'CLARIFY_MESSAGE' || task === 'EXTRACT_CANDIDATES' ? 'FLASH' : 'PRO',
       task,
       harness_session_id: `role-${DEMO_ROLE_SESSION_ID}`,
-      prompt_version: 'role-clarifier-v11-layered',
+      prompt_version: 'role-clarifier-v2',
       model_name: 'test-model',
       tool_count: 0,
       input_tokens: 0,
@@ -100,7 +100,7 @@ describe('read_role_state task projection', () => {
       stage: 'JD_DRAFT',
       hc_status: 'APPROVED',
       hc_context: expect.objectContaining({
-        request_id: 'HC-2026-EP-001',
+        request_id: 'HC-2026-001',
         job_basics: expect.objectContaining({
           level: '3-2 至 4-1',
           reporting_line: '产品负责人',

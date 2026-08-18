@@ -2,7 +2,6 @@ import {
   type AgentContextSnapshot,
   type ArtifactType,
   type CandidateEvidence,
-  type EnterpriseContextBundle,
   type FactCategory,
   type RoleState,
   type ToolExecutionContext,
@@ -28,7 +27,6 @@ export interface CandidateImportItem {
 export interface HarnessRequest {
   task: HarnessTask
   role_state: RoleState
-  enterprise_context: EnterpriseContextBundle
   message?: string
   conversation_context?: {
     current_user_role: 'MANAGER' | 'HR' | 'ADMIN'

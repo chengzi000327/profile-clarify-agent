@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Activity,
   AlertTriangle,
@@ -116,9 +116,6 @@ export default function AdminTraceConsole() {
   const [status, setStatus] = useState('');
   const [modelTier, setModelTier] = useState('');
   const [query, setQuery] = useState('');
-  const [page, setPage] = useState(1);
-  const [total, setTotal] = useState(0);
-  const pageSize = 25;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [initialBudget, setInitialBudget] = useState(6);
@@ -129,15 +126,8 @@ export default function AdminTraceConsole() {
     setLoading(true);
     setError('');
     try {
-      const result = await api.listAdminRuns({
-        status,
-        model_tier: modelTier,
-        q: query.trim(),
-        page,
-        page_size: pageSize,
-      });
+      const result = await api.listAdminRuns({ status, model_tier: modelTier });
       setRuns(result.items);
-      setTotal(result.total);
       setSelectedId((current) =>
         result.items.some((item) => item.run.id === current)
           ? current
@@ -152,7 +142,7 @@ export default function AdminTraceConsole() {
 
   useEffect(() => {
     loadRuns();
-  }, [status, modelTier, query, page]);
+  }, [status, modelTier]);
 
   useEffect(() => {
     if (!selectedId) {
@@ -171,6 +161,15 @@ export default function AdminTraceConsole() {
       cancelled = true;
     };
   }, [selectedId]);
+
+  const filteredRuns = useMemo(() => {
+    const keyword = query.trim().toLowerCase();
+    if (!keyword) return runs;
+    return runs.filter((item) =>
+      [item.role_title, item.actor_display_name, item.run.id, item.run.model_name]
+        .some((value) => String(value).toLowerCase().includes(keyword)),
+    );
+  }, [runs, query]);
 
   async function savePolicy() {
     setError('');
@@ -202,31 +201,24 @@ export default function AdminTraceConsole() {
       {error && <div className="trace-console-error"><AlertTriangle size={14} />{error}</div>}
 
       <div className="trace-toolbar">
-        <label className="trace-search"><Search size={14} /><input value={query} onChange={(event) => { setQuery(event.target.value); setPage(1); }} placeholder="搜索岗位、操作者、Run ID" /></label>
-        <label><Filter size={13} /><select value={status} onChange={(event) => { setStatus(event.target.value); setPage(1); }}><option value="">全部状态</option>{Object.entries(statusLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-        <label><Activity size={13} /><select value={modelTier} onChange={(event) => { setModelTier(event.target.value); setPage(1); }}><option value="">全部模型</option><option value="FLASH">Flash</option><option value="PRO">Pro</option></select></label>
+        <label className="trace-search"><Search size={14} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索岗位、操作者、Run ID" /></label>
+        <label><Filter size={13} /><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="">全部状态</option>{Object.entries(statusLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+        <label><Activity size={13} /><select value={modelTier} onChange={(event) => setModelTier(event.target.value)}><option value="">全部模型</option><option value="FLASH">Flash</option><option value="PRO">Pro</option></select></label>
         <button onClick={loadRuns}><RefreshCw size={13} />刷新</button>
       </div>
 
       <div className="trace-console-grid">
         <aside className="trace-run-list">
-          <div className="trace-list-heading"><strong>运行记录</strong><span>{total}</span></div>
+          <div className="trace-list-heading"><strong>运行记录</strong><span>{filteredRuns.length}</span></div>
           {loading && <div className="trace-empty">正在读取运行记录…</div>}
-          {!loading && runs.length === 0 && <div className="trace-empty">暂无符合条件的运行记录</div>}
-          {runs.map((item) => (
+          {!loading && filteredRuns.length === 0 && <div className="trace-empty">暂无符合条件的运行记录</div>}
+          {filteredRuns.map((item) => (
             <button className={selectedId === item.run.id ? 'active' : ''} key={item.run.id} onClick={() => setSelectedId(item.run.id)}>
               <div><strong>{item.role_title}</strong><em className={item.run.status.toLowerCase()}>{statusLabel[item.run.status]}</em></div>
               <p>{item.actor_display_name} · {item.actor_role === 'ADMIN' ? `测试为 ${roleLabel[item.run.effective_actor_role]}` : roleLabel[item.actor_role]} · {item.run.task}</p>
               <span>{formatTime(item.run.started_at)}<code>{item.run.id.slice(0, 8)}</code></span>
             </button>
           ))}
-          {total > pageSize && (
-            <div className="trace-pagination">
-              <button disabled={page <= 1} onClick={() => setPage((value) => value - 1)}>上一页</button>
-              <span>第 {page} / {Math.ceil(total / pageSize)} 页</span>
-              <button disabled={page >= Math.ceil(total / pageSize)} onClick={() => setPage((value) => value + 1)}>下一页</button>
-            </div>
-          )}
         </aside>
 
         <main className="trace-detail">

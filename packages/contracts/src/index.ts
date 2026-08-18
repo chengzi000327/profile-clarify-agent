@@ -1,20 +1,11 @@
 import {
   FACT_CATEGORIES,
-  ROLE_CLARIFIER_PROMPT_VERSION,
   ROLE_CLARIFIER_SYSTEM_PROMPT,
-  promptForTask,
-  taskPromptForTask,
   type FactCategory,
 } from '@role-clarifier/agent-spec'
 import { z } from 'zod'
 
-export {
-  ROLE_CLARIFIER_PROMPT_VERSION,
-  ROLE_CLARIFIER_SYSTEM_PROMPT,
-  promptForTask,
-  taskPromptForTask,
-  type FactCategory,
-}
+export { ROLE_CLARIFIER_SYSTEM_PROMPT, type FactCategory }
 
 export const ActorRoleSchema = z.enum(['MANAGER', 'HR', 'ADMIN'])
 export type ActorRole = z.infer<typeof ActorRoleSchema>
@@ -66,104 +57,8 @@ export const FactSchema = z.object({
   evidence_refs: z.array(z.string()).default([]),
   visible_to: z.enum(['ALL', 'HR_ONLY']).default('ALL'),
   updated_at: z.string().datetime(),
-  source_message_id: z.string().nullable().default(null),
-  source_run_id: z.string().nullable().default(null),
-  proposed_by_user_id: z.string().nullable().default(null),
-  confirmed_by_user_id: z.string().nullable().default(null),
-  confirmed_at: z.string().datetime().nullable().default(null),
-  supersedes_fact_id: z.string().nullable().default(null),
-  decision_reason: z.string().nullable().default(null),
 })
 export type Fact = z.infer<typeof FactSchema>
-
-export const FactDecisionRequestSchema = z.discriminatedUnion('decision', [
-  z.object({
-    decision: z.literal('CONFIRM'),
-    expected_revision: z.number().int().nonnegative(),
-    test_role: AdminTestRoleSchema.optional(),
-  }).strict(),
-  z.object({
-    decision: z.literal('REJECT'),
-    expected_revision: z.number().int().nonnegative(),
-    reason: z.string().trim().min(3).max(500).optional(),
-    test_role: AdminTestRoleSchema.optional(),
-  }).strict(),
-  z.object({
-    decision: z.literal('REVISE'),
-    expected_revision: z.number().int().nonnegative(),
-    reason: z.string().trim().min(3).max(500).optional(),
-    replacement: z.object({
-      category: FactCategorySchema,
-      statement: z.string().trim().min(1).max(2_000),
-    }).strict(),
-    test_role: AdminTestRoleSchema.optional(),
-  }).strict(),
-])
-export type FactDecisionRequest = z.infer<typeof FactDecisionRequestSchema>
-
-export const EnterpriseKnowledgeCategorySchema = z.enum([
-  'ORGANIZATION',
-  'JOB_FAMILY',
-  'LEVEL_FRAMEWORK',
-  'HISTORICAL_JD',
-  'ROLE_PROFILE_CASE',
-  'RECRUITING_POLICY',
-  'INTERVIEW_STANDARD',
-])
-export type EnterpriseKnowledgeCategory = z.infer<typeof EnterpriseKnowledgeCategorySchema>
-
-export const EnterpriseKnowledgeItemSchema = z.object({
-  id: z.string().min(1),
-  tenant_id: z.string().min(1),
-  category: EnterpriseKnowledgeCategorySchema,
-  title: z.string().min(1),
-  content: z.string().min(1),
-  summary: z.string().min(1),
-  department: z.string().nullable(),
-  job_family: z.string().nullable(),
-  tags: z.array(z.string().min(1)),
-  visible_to: z.enum(['ALL_ROLE_MEMBERS', 'HR_ONLY', 'ADMIN_ONLY']),
-  source_ref: z.string().min(1),
-  source_version: z.string().min(1),
-  status: z.enum(['ACTIVE', 'ARCHIVED']),
-  valid_from: z.string().datetime(),
-  valid_to: z.string().datetime().nullable(),
-  updated_at: z.string().datetime(),
-})
-export type EnterpriseKnowledgeItem = z.infer<typeof EnterpriseKnowledgeItemSchema>
-
-export const EnterpriseContextHitSchema = z.object({
-  knowledge_id: z.string().min(1),
-  category: EnterpriseKnowledgeCategorySchema,
-  title: z.string().min(1),
-  summary: z.string().min(1),
-  source_ref: z.string().min(1),
-  source_version: z.string().min(1),
-  relevance_score: z.number().nonnegative(),
-  match_reasons: z.array(z.string().min(1)).min(1),
-})
-export type EnterpriseContextHit = z.infer<typeof EnterpriseContextHitSchema>
-
-export const EnterpriseContextBundleSchema = z.object({
-  query: z.object({
-    role_session_id: z.string().uuid(),
-    task: z.enum([
-      'CLARIFY_MESSAGE',
-      'GENERATE_ROLE_PROFILE',
-      'GENERATE_ASSESSMENT',
-      'GENERATE_JD',
-      'GENERATE_HR_BRIEF',
-      'EXTRACT_CANDIDATES',
-      'CALIBRATION_ADVICE',
-    ]),
-    department: z.string().min(1),
-    job_family: z.string().nullable(),
-    query_terms: z.array(z.string().min(2).max(24)).max(20),
-  }),
-  hits: z.array(EnterpriseContextHitSchema).max(6),
-  truncated: z.boolean(),
-})
-export type EnterpriseContextBundle = z.infer<typeof EnterpriseContextBundleSchema>
 
 export const ConflictSchema = z.object({
   id: z.string(),
@@ -185,14 +80,7 @@ export const JobHeaderSchema = z.object({
 export type JobHeader = z.infer<typeof JobHeaderSchema>
 
 export const JobBasicsSchema = z.object({
-  recruitment_type: z.enum([
-    'NEW_HEADCOUNT',
-    'REPLACEMENT',
-    'ATTRITION_REPLACEMENT',
-    'PERFORMANCE_REPLACEMENT',
-    'ORGANIZATION_ADJUSTMENT',
-    'OTHER',
-  ]),
+  recruitment_type: z.enum(['NEW_HEADCOUNT', 'REPLACEMENT', 'ORGANIZATION_ADJUSTMENT']),
   headcount: z.number().int().positive(),
   level: z.string().min(1),
   reporting_line: z.string().min(1),
@@ -219,145 +107,6 @@ export const HcContextSchema = z.object({
 })
 export type HcContext = z.infer<typeof HcContextSchema>
 
-export const RoleClarificationTaskSummarySchema = z.object({
-  id: z.string().min(1),
-  status: z.enum(['OPEN', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED']),
-  assignee_user_id: z.string().min(1),
-  started_at: z.string().datetime().nullable(),
-  completed_at: z.string().datetime().nullable(),
-})
-export type RoleClarificationTaskSummary = z.infer<typeof RoleClarificationTaskSummarySchema>
-
-export const NotificationDeliverySummarySchema = z.object({
-  channel: z.literal('FEISHU'),
-  status: z.enum(['PENDING', 'PROCESSING', 'SENT', 'RETRY', 'UNBOUND', 'DEAD']),
-  sent_at: z.string().datetime().nullable(),
-  last_error_code: z.string().nullable(),
-})
-export type NotificationDeliverySummary = z.infer<typeof NotificationDeliverySummarySchema>
-
-export const HcApprovalSchema = z.object({
-  request_id: z.string().min(1),
-  tenant_id: z.string().min(1),
-  title: z.string().min(1),
-  department: z.string().min(1),
-  status: z.literal('APPROVED'),
-  context: HcContextSchema,
-  role_session_id: z.string().uuid().nullable(),
-  clarification_status: z.enum(['NOT_STARTED', 'IN_PROGRESS', 'PROFILE_READY']).optional(),
-  role_stage: RoleSessionStageSchema.nullable().optional(),
-  clarification_task: RoleClarificationTaskSummarySchema.nullable().default(null),
-  notification_delivery: NotificationDeliverySummarySchema.nullable().default(null),
-  created_at: z.string().datetime(),
-  updated_at: z.string().datetime(),
-})
-export type HcApproval = z.infer<typeof HcApprovalSchema>
-
-const ArtifactTextSchema = z.string().trim().min(1).max(4_000)
-const ArtifactEvidenceRefsSchema = z.array(z.string().trim().min(1).max(120)).max(20).default([])
-
-export const RoleProfileContentSchema = z
-  .object({
-    hiring_reason: z
-      .object({
-        conclusion: ArtifactTextSchema,
-        business_change: ArtifactTextSchema,
-        organization_gap: ArtifactTextSchema,
-        no_hire_impact: ArtifactTextSchema,
-        evidence_refs: ArtifactEvidenceRefsSchema,
-      })
-      .strict(),
-    mission: ArtifactTextSchema,
-    success_outcomes: z.array(z
-      .object({
-        id: z.string().trim().min(1).max(40),
-        horizon: z.string().trim().min(1).max(80),
-        title: z.string().trim().min(1).max(200),
-        definition: ArtifactTextSchema,
-        measures: z.array(ArtifactTextSchema).min(1).max(8),
-        status: z.string().trim().min(1).max(80),
-        evidence_refs: ArtifactEvidenceRefsSchema,
-      })
-      .strict()).min(1).max(6),
-    work_scenarios: z.array(z
-      .object({
-        id: z.string().trim().min(1).max(40),
-        title: z.string().trim().min(1).max(200),
-        frequency: z.string().trim().min(1).max(120),
-        trigger: ArtifactTextSchema,
-        actions: ArtifactTextSchema,
-        output: ArtifactTextSchema,
-        challenge: ArtifactTextSchema,
-        stakeholders: ArtifactTextSchema,
-        outcome_refs: z.array(z.string().trim().min(1).max(40)).max(10).default([]),
-        evidence_refs: ArtifactEvidenceRefsSchema,
-      })
-      .strict()).min(1).max(8),
-    requirements: z.array(z
-      .object({
-        id: z.string().trim().min(1).max(40),
-        priority: z.enum(['Must-have', 'Preferred']),
-        name: z.string().trim().min(1).max(200),
-        level: z.string().trim().min(1).max(120),
-        rationale: ArtifactTextSchema,
-        maps_to: z.array(z.string().trim().min(1).max(40)).min(1).max(12),
-        strong_evidence: z.array(ArtifactTextSchema).min(1).max(8),
-        substitute_evidence: z.array(ArtifactTextSchema).max(8).default([]),
-        risk_signals: z.array(ArtifactTextSchema).max(8).default([]),
-        assessment_method: ArtifactTextSchema,
-        evidence_refs: ArtifactEvidenceRefsSchema,
-      })
-      .strict()).min(1).max(12),
-    boundaries: z
-      .object({
-        owns: z.array(ArtifactTextSchema).min(1).max(12),
-        does_not_own: z.array(ArtifactTextSchema).min(1).max(12),
-        decision_rights: ArtifactTextSchema,
-        collaboration_and_resources: ArtifactTextSchema,
-        evidence_refs: ArtifactEvidenceRefsSchema,
-      })
-      .strict(),
-  })
-  .strict()
-export type RoleProfileContent = z.infer<typeof RoleProfileContentSchema>
-
-export const AssessmentScorecardSchema = z
-  .object({
-    dimensions: z.array(z
-      .object({
-        id: z.string().trim().min(1).max(40),
-        name: z.string().trim().min(1).max(200),
-        weight: z.number().min(0).max(100),
-        method: ArtifactTextSchema,
-        owner: ArtifactTextSchema,
-        question: ArtifactTextSchema,
-        evidence: ArtifactTextSchema,
-        anchors: z
-          .object({
-            1: ArtifactTextSchema,
-            3: ArtifactTextSchema,
-            5: ArtifactTextSchema,
-          })
-          .strict(),
-      })
-      .strict()).min(1).max(12),
-    decision_rule: z
-      .object({
-        status: z.string().trim().min(1).max(120),
-        summary: ArtifactTextSchema,
-        scoring: ArtifactTextSchema,
-        pass_thresholds: ArtifactTextSchema,
-        calibration: ArtifactTextSchema,
-      })
-      .strict(),
-  })
-  .strict()
-  .refine(
-    (value) => Math.abs(value.dimensions.reduce((sum, item) => sum + item.weight, 0) - 100) < 0.001,
-    { message: '评估维度权重之和必须等于 100', path: ['dimensions'] },
-  )
-export type AssessmentScorecard = z.infer<typeof AssessmentScorecardSchema>
-
 export const PublicJDSchema = z
   .object({
     title_and_basics: JobHeaderSchema,
@@ -375,22 +124,6 @@ export const ArtifactTypeSchema = z.enum([
   'HR_RECRUITING_BRIEF',
 ])
 export type ArtifactType = z.infer<typeof ArtifactTypeSchema>
-
-export const artifactTypeForTask = (task: string): ArtifactType | undefined => ({
-  GENERATE_ROLE_PROFILE: 'ROLE_PROFILE',
-  GENERATE_ASSESSMENT: 'ASSESSMENT_SCORECARD',
-  GENERATE_JD: 'PUBLIC_JD',
-  GENERATE_HR_BRIEF: 'HR_RECRUITING_BRIEF',
-} as const)[task as 'GENERATE_ROLE_PROFILE' | 'GENERATE_ASSESSMENT' | 'GENERATE_JD' | 'GENERATE_HR_BRIEF']
-
-export const generatedArtifactContentSchema = (
-  type: ArtifactType,
-): typeof RoleProfileContentSchema | typeof AssessmentScorecardSchema | typeof PublicJDSchema | null => {
-  if (type === 'ROLE_PROFILE') return RoleProfileContentSchema
-  if (type === 'ASSESSMENT_SCORECARD') return AssessmentScorecardSchema
-  if (type === 'PUBLIC_JD') return PublicJDSchema
-  return null
-}
 
 export const ArtifactStatusSchema = z.enum(['DRAFT', 'CONFIRMED', 'INVALIDATED'])
 export type ArtifactStatus = z.infer<typeof ArtifactStatusSchema>
@@ -487,7 +220,6 @@ export const AgentEventTypeSchema = z.enum([
   'agent.status',
   'message.accepted',
   'context.snapshot',
-  'context.retrieval_failed',
   'model.request',
   'model.response',
   'assistant.delta',
@@ -514,34 +246,32 @@ export const AgentEventSchema = z.object({
 })
 export type AgentEvent = z.infer<typeof AgentEventSchema>
 
-export const AgentContextSnapshotSchema = z.object({
-  system_prompt: z.object({
-    section_name: z.string().min(1),
-    content: z.string(),
-    provenance: z.literal('HARNESS_SYSTEM_PROMPT'),
-    harness_managed_base: z.object({
-      included: z.boolean(),
-      captured_as_text: z.boolean(),
-      description: z.string(),
-    }),
-  }),
-  current_user_input: z.object({
-    content: z.unknown(),
-    source: z.literal('CURRENT_REQUEST'),
-  }),
-  short_term_memory: z.object({
-    source: z.literal('RECENT_CONVERSATION'),
-    window_size: z.number().int().nonnegative(),
-    messages: z.array(z.unknown()),
-  }),
-  long_term_memory: z.object({
-    source: z.literal('BUSINESS_DATABASE'),
-    role_state: z.unknown(),
-    enterprise_context: EnterpriseContextBundleSchema.nullable().default(null),
-  }),
-  task_state: z.record(z.string(), z.unknown()),
-})
-export type AgentContextSnapshot = z.infer<typeof AgentContextSnapshotSchema>
+export interface AgentContextSnapshot {
+  system_prompt: {
+    section_name: string
+    content: string
+    provenance: 'HARNESS_SYSTEM_PROMPT'
+    harness_managed_base: {
+      included: boolean
+      captured_as_text: boolean
+      description: string
+    }
+  }
+  current_user_input: {
+    content: unknown
+    source: 'CURRENT_REQUEST'
+  }
+  short_term_memory: {
+    source: 'RECENT_CONVERSATION'
+    window_size: number
+    messages: unknown[]
+  }
+  long_term_memory: {
+    source: 'BUSINESS_DATABASE'
+    role_state: unknown
+  }
+  task_state: Record<string, unknown>
+}
 
 export const ConversationMessageStatusSchema = z.enum([
   'PENDING',

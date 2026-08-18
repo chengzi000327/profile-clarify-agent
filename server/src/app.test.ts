@@ -2,11 +2,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { FastifyInstance } from 'fastify'
 import {
   ROLE_CLARIFIER_SYSTEM_PROMPT,
-  type AgentRun,
   type ArtifactType,
   type CandidateEvidence,
-  type Fact,
-  type RoleState,
 } from '@role-clarifier/contracts'
 import { buildApp, visibleAgentEvent } from './app.js'
 import type {
@@ -17,20 +14,15 @@ import type {
 } from './agent/harness-adapter.js'
 import { loadConfig } from './config.js'
 import { MemoryStore } from './store/memory-store.js'
-import { createMockHcContext, DEMO_ROLE_SESSION_ID } from './store/seed.js'
-import { signMockHrisEvent } from './integrations/mock-hris.js'
+import { DEMO_ROLE_SESSION_ID } from './store/seed.js'
 
 const config = loadConfig({
   NODE_ENV: 'test',
   SESSION_SECRET: 'test-session-secret-that-is-long-enough',
-  HC_EVENT_SECRET: 'test-hc-event-secret-that-is-at-least-32-characters',
 })
-
-const capturedHarnessRequests: HarnessRequest[] = []
 
 class TestHarnessStub implements HarnessAdapter {
   async run(request: HarnessRequest, hooks: HarnessHooks): Promise<HarnessResult> {
-    capturedHarnessRequests.push(structuredClone(request))
     const { tenant_id: _tenantId, ...roleState } = request.role_state
     let toolCount = 0
     const tool = async (name: string, args: unknown, result: unknown): Promise<void> => {
@@ -75,11 +67,7 @@ class TestHarnessStub implements HarnessAdapter {
         window_size: request.conversation_context?.recent_messages.length ?? 0,
         messages: request.conversation_context?.recent_messages ?? [],
       },
-      long_term_memory: {
-        source: 'BUSINESS_DATABASE',
-        role_state: roleState,
-        enterprise_context: request.enterprise_context,
-      },
+      long_term_memory: { source: 'BUSINESS_DATABASE', role_state: roleState },
       task_state: {
         task: request.task,
         current_user_role: request.conversation_context?.current_user_role ?? null,
@@ -178,49 +166,8 @@ class TestHarnessStub implements HarnessAdapter {
       GENERATE_HR_BRIEF: 'HR_RECRUITING_BRIEF',
     }
     const artifactType = artifactTypeByTask[request.task]
-    const content = artifactType === 'ROLE_PROFILE'
+    const content = artifactType === 'PUBLIC_JD'
       ? {
-          hiring_reason: {
-            conclusion: `补充一名${request.role_state.title}。`,
-            business_change: request.role_state.hc_context?.business_change ?? '业务发生变化。',
-            organization_gap: request.role_state.hc_context?.organization_gap ?? '组织存在能力缺口。',
-            no_hire_impact: '关键业务目标无法按期完成。',
-            evidence_refs: [request.role_state.hc_context?.request_id ?? 'HC-TEST'],
-          },
-          mission: `负责${request.role_state.title}岗位的关键业务结果。`,
-          success_outcomes: [{
-            id: 'O-01', horizon: '90 天', title: '完成现状诊断', definition: '形成岗位关键任务与推进计划。',
-            measures: ['输出诊断与计划'], status: '已确认', evidence_refs: [],
-          }],
-          work_scenarios: [{
-            id: 'T-01', title: '关键任务推进', frequency: '每周', trigger: '业务目标进入执行阶段',
-            actions: '识别问题并推动跨团队协作', output: '可验收结果', challenge: '协作链路复杂',
-            stakeholders: request.role_state.department, outcome_refs: ['O-01'], evidence_refs: [],
-          }],
-          requirements: [{
-            id: 'C-01', priority: 'Must-have', name: '结构化问题解决', level: '熟练', rationale: '支撑 O-01 与 T-01',
-            maps_to: ['O-01', 'T-01'], strong_evidence: ['能够说明问题、取舍和结果'], substitute_evidence: [],
-            risk_signals: ['只能描述过程'], assessment_method: '案例面试', evidence_refs: [],
-          }],
-          boundaries: {
-            owns: ['岗位关键目标与结果'], does_not_own: ['其他团队的专业决策'], decision_rights: '提出岗位范围内的优先级建议',
-            collaboration_and_resources: request.role_state.department, evidence_refs: [],
-          },
-        }
-      : artifactType === 'ASSESSMENT_SCORECARD'
-        ? {
-            dimensions: [{
-              id: 'A-01', name: '结构化问题解决', weight: 100, method: '案例面试', owner: '用人经理',
-              question: '请说明一次复杂问题的判断与推进过程。', evidence: '问题、取舍、行动和结果完整',
-              anchors: { 1: '只能描述过程', 3: '能够说明方案与结果', 5: '形成可复用的方法并验证结果' },
-            }],
-            decision_rule: {
-              status: '草稿', summary: '核心维度达到 3 分后进入综合校准', scoring: '按权重计算加权得分',
-              pass_thresholds: '核心维度不得低于 3 分', calibration: '面试官提交证据后统一校准',
-            },
-          }
-        : artifactType === 'PUBLIC_JD'
-          ? {
           title_and_basics: {
             title: request.role_state.title,
             location: '上海 / 可协商',
@@ -231,7 +178,7 @@ class TestHarnessStub implements HarnessAdapter {
           what_you_will_do: ['澄清目标并推动交付'],
           what_we_look_for: ['具备结构化分析和协作能力'],
         }
-          : { title: request.role_state.title, generated_for: artifactType }
+      : { title: request.role_state.title, generated_for: artifactType }
     await tool('save_artifact_draft', { artifact_type: artifactType, content }, { saved: true })
     const summary = artifactType === 'ROLE_PROFILE' ? '岗位画像草稿已生成。' : '产物草稿已生成。'
     return finish({ kind: 'ARTIFACT', artifact_type: artifactType, content, summary }, summary)
@@ -272,52 +219,11 @@ const login = async (
   return cookieFrom(response)
 }
 
-const submitFactAndWait = async (
-  app: FastifyInstance,
-  cookie: string,
-  content: string,
-): Promise<{ run: AgentRun; fact: Fact; state: RoleState }> => {
-  const submitted = await app.inject({
-    method: 'POST',
-    url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/messages`,
-    headers: { cookie },
-    payload: { content },
-  })
-  expect(submitted.statusCode, submitted.body).toBe(202)
-  const runId = submitted.json().run_id
-  let run: AgentRun | undefined
-  for (let attempt = 0; attempt < 40; attempt += 1) {
-    const status = await app.inject({
-      method: 'GET',
-      url: `/api/v1/agent-runs/${runId}`,
-      headers: { cookie },
-    })
-    run = status.json().run
-    if (run?.status === 'COMPLETED') break
-    await new Promise((resolve) => setTimeout(resolve, 10))
-  }
-  expect(run?.status).toBe('COMPLETED')
-  if (!run) throw new Error('Run did not complete')
-  const detail = (await app.inject({
-    method: 'GET',
-    url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}`,
-    headers: { cookie },
-  })).json()
-  const fact = detail.state.facts.find(
-    (item: { source_run_id: string | null }) => item.source_run_id === runId,
-  )
-  expect(fact).toBeDefined()
-  return { run, fact, state: detail.state }
-}
-
 describe('Role Clarifier API', () => {
   let app: FastifyInstance
-  let store: MemoryStore
 
   beforeEach(async () => {
-    capturedHarnessRequests.length = 0
-    store = new MemoryStore()
-    app = await buildApp(config, { store, harness: testHarness })
+    app = await buildApp(config, { store: new MemoryStore(), harness: testHarness })
   })
 
   it('普通成员的 SSE 不暴露内部错误，企业管理员 Trace 保留诊断信息', () => {
@@ -350,352 +256,76 @@ describe('Role Clarifier API', () => {
     expect(adminEvent.payload.internal_message).toBe('runtime stack for administrator')
   })
 
-  it('只允许三个预置账号按固定姓名和角色登录', async () => {
-    const arbitrary = await app.inject({
-      method: 'POST',
-      url: '/api/v1/auth/login',
-      payload: {
-        workspace_id: 'demo-company',
-        account_id: 'someone@example.com',
-        display_name: '临时账号',
-        role: 'HR',
-      },
-    })
-    expect(arbitrary.statusCode).toBe(403)
-    expect(arbitrary.json().error.code).toBe('LOGIN_NOT_ALLOWED')
-
-    const mismatchedIdentity = await app.inject({
-      method: 'POST',
-      url: '/api/v1/auth/login',
-      payload: {
-        workspace_id: 'legacy-demo',
-        account_id: 'manager-demo',
-        display_name: '用人经理 · 陈曦',
-        role: 'HR',
-      },
-    })
-    expect(mismatchedIdentity.statusCode).toBe(403)
-    expect(mismatchedIdentity.json().error.code).toBe('LOGIN_IDENTITY_MISMATCH')
-
-    const managerCookie = await login(app, 'manager-demo')
-    const session = await app.inject({
-      method: 'GET',
-      url: '/api/v1/auth/me',
-      headers: { cookie: managerCookie },
-    })
-    expect(session.statusCode).toBe(200)
-    expect(session.json().actor).toMatchObject({
-      tenant_id: 'tenant-demo',
-      user_id: 'manager-demo',
-      role: 'MANAGER',
-      display_name: '用人经理 · 陈曦',
-    })
-  })
-
-  it('无需 Cookie 但必须使用有效签名接收 HC 审批事件', async () => {
-    const context = createMockHcContext({
-      hiringManagerUserId: 'manager-demo',
-      assignedHrUserId: 'hr-demo',
-    })
-    context.request_id = 'HC-ROUTE-001'
-    context.approved_at = new Date().toISOString()
-    const body = {
-      event_id: 'evt-route-001',
-      event_type: 'HC_APPROVED' as const,
-      occurred_at: context.approved_at,
-      tenant_id: 'tenant-demo',
-      hc: {
-        request_id: context.request_id,
-        title: '企业产品经理',
-        department: '企业服务产品部',
-        hiring_manager_user_id: 'manager-demo',
-        assigned_hr_user_id: 'hr-demo',
-        context,
-      },
-    }
-    const timestamp = new Date().toISOString()
-    const signature = signMockHrisEvent(config.HC_EVENT_SECRET!, timestamp, body)
-    const accepted = await app.inject({
-      method: 'POST',
-      url: '/api/v1/integrations/mock-hris/hc-events',
-      headers: {
-        'x-hc-event-timestamp': timestamp,
-        'x-hc-event-signature': signature,
-      },
-      payload: body,
-    })
-    expect(accepted.statusCode).toBe(202)
-    expect(accepted.json()).toEqual({ accepted: true, duplicate: false })
-
-    const rejected = await app.inject({
-      method: 'POST',
-      url: '/api/v1/integrations/mock-hris/hc-events',
-      headers: {
-        'x-hc-event-timestamp': timestamp,
-        'x-hc-event-signature': 'bad',
-      },
-      payload: body,
-    })
-    expect(rejected.statusCode).toBe(401)
-    expect(rejected.json().error.code).toBe('HC_EVENT_UNAUTHORIZED')
-  })
-
-  it('未配置 HC 事件密钥时集成入口返回 503', async () => {
-    const unconfiguredApp = await buildApp(loadConfig({
-      NODE_ENV: 'test',
-      SESSION_SECRET: 'test-session-secret-that-is-long-enough',
-    }), { store: new MemoryStore(), harness: testHarness })
-    const response = await unconfiguredApp.inject({
-      method: 'POST',
-      url: '/api/v1/integrations/mock-hris/hc-events',
-      payload: {},
-    })
-    expect(response.statusCode).toBe(503)
-    expect(response.json().error.code).toBe('HC_EVENT_NOT_CONFIGURED')
-    await unconfiguredApp.close()
-  })
-
-  it('三个角色登录后读取十条有效 HC，经理敏感薪酬字段保持脱敏', async () => {
-    for (const userId of ['manager-demo', 'hr-demo', 'admin-demo'] as const) {
-      const cookie = await login(app, userId)
+  it('动态账号选择角色：新账号为空，同一账号恢复岗位，不同账号互相隔离', async () => {
+    const loginDynamic = async (accountId: string, displayName: string, role = 'MANAGER') => {
       const response = await app.inject({
-        method: 'GET',
-        url: '/api/v1/hc-approvals',
-        headers: { cookie },
+        method: 'POST',
+        url: '/api/v1/auth/login',
+        payload: {
+          workspace_id: 'acme-demo',
+          account_id: accountId,
+          display_name: displayName,
+          role,
+        },
       })
-      expect(response.statusCode).toBe(200)
-      expect(response.json().items).toHaveLength(10)
-      expect(response.json().items.every(
-        (item: { status: string; clarification_status: string; context: { request_id: string } }) =>
-          item.status === 'APPROVED' && Boolean(item.context.request_id) &&
-          ['NOT_STARTED', 'IN_PROGRESS', 'PROFILE_READY'].includes(item.clarification_status),
-      )).toBe(true)
-      expect(response.json().items.map((item: { title: string }) => item.title).sort())
-        .toEqual([
-          'AI 产品经理', '企业产品经理', '客户端工程师', '推荐算法工程师', '数据产品经理',
-          '数据工程师', '机器学习平台工程师', '测试开发工程师', '高级前端工程师', '高级后端工程师',
-        ].sort())
-      expect(new Set(response.json().items.map(
-        (item: { context: { job_basics: { recruitment_type: string } } }) =>
-          item.context.job_basics.recruitment_type,
-      ))).toEqual(new Set([
-        'NEW_HEADCOUNT',
-        'ATTRITION_REPLACEMENT',
-        'PERFORMANCE_REPLACEMENT',
-        'ORGANIZATION_ADJUSTMENT',
-        'OTHER',
-      ]))
-      expect(response.json().items.some(
-        (item: { context: { approved_reason: string } }) => item.context.approved_reason.includes('离职'),
-      )).toBe(true)
-      expect(response.json().items.some(
-        (item: { context: { approved_reason: string } }) => item.context.approved_reason.includes('汰换'),
-      )).toBe(true)
-      const salary = response.json().items[0].context.job_basics.salary_range
-      expect(salary).toBe(userId === 'manager-demo' ? '按权限可见' : '35K-50K·15薪')
+      return { response, cookie: response.statusCode === 200 ? cookieFrom(response) : '' }
     }
+
+    const first = await loginDynamic('zhangsan', '张三')
+    expect(first.response.statusCode).toBe(200)
+    expect(first.response.json()).toMatchObject({
+      is_new_account: true,
+      actor: { display_name: '张三', role: 'MANAGER' },
+    })
+    const initiallyEmpty = await app.inject({
+      method: 'GET',
+      url: '/api/v1/role-sessions',
+      headers: { cookie: first.cookie },
+    })
+    expect(initiallyEmpty.json().items).toEqual([])
+
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/v1/role-sessions',
+      headers: { cookie: first.cookie },
+      payload: { title: '增长负责人', department: '增长团队' },
+    })
+    expect(created.statusCode).toBe(201)
+
+    const sameAccount = await loginDynamic('zhangsan', '张三')
+    expect(sameAccount.response.json().is_new_account).toBe(false)
+    const restored = await app.inject({
+      method: 'GET',
+      url: '/api/v1/role-sessions',
+      headers: { cookie: sameAccount.cookie },
+    })
+    expect(restored.json().items).toHaveLength(1)
+
+    const second = await loginDynamic('lisi', '李四')
+    const isolated = await app.inject({
+      method: 'GET',
+      url: '/api/v1/role-sessions',
+      headers: { cookie: second.cookie },
+    })
+    expect(isolated.json().items).toEqual([])
+
+    const roleMismatch = await loginDynamic('zhangsan', '张三', 'HR')
+    expect(roleMismatch.response.statusCode).toBe(409)
+    expect(roleMismatch.response.json().error.code).toBe('ACCOUNT_ROLE_MISMATCH')
   })
 
-  it('HC 状态从待澄清到已提醒、进行中并在画像确认后完成', async () => {
-    const context = createMockHcContext({
-      hiringManagerUserId: 'manager-demo',
-      assignedHrUserId: 'hr-demo',
-    })
-    context.request_id = 'HC-LIFECYCLE-001'
-    context.approved_at = new Date().toISOString()
-    const event = {
-      event_id: 'evt-lifecycle-001',
-      event_type: 'HC_APPROVED' as const,
-      occurred_at: context.approved_at,
-      tenant_id: 'tenant-demo',
-      hc: {
-        request_id: context.request_id,
-        title: '企业产品经理',
-        department: '企业服务产品部',
-        hiring_manager_user_id: 'manager-demo',
-        assigned_hr_user_id: 'hr-demo',
-        context,
-      },
-    }
-    const timestamp = new Date().toISOString()
-    await app.inject({
+  it('空账号发送第一条消息后自动建立岗位并由 Agent 识别岗位名称', async () => {
+    const loginResponse = await app.inject({
       method: 'POST',
-      url: '/api/v1/integrations/mock-hris/hc-events',
-      headers: {
-        'x-hc-event-timestamp': timestamp,
-        'x-hc-event-signature': signMockHrisEvent(config.HC_EVENT_SECRET!, timestamp, event),
-      },
-      payload: event,
-    })
-    const [claimed] = await store.claimDueNotifications({
-      worker_id: 'test-worker',
-      now: timestamp,
-      locked_until: new Date(Date.parse(timestamp) + 30_000).toISOString(),
-      limit: 1,
-    })
-    await store.markNotificationSent(claimed!.id, 'test-worker', timestamp)
-
-    const managerCookie = await login(app, 'manager-demo')
-    const listHc = async () => (await app.inject({
-      method: 'GET',
-      url: '/api/v1/hc-approvals',
-      headers: { cookie: managerCookie },
-    })).json().items.find((item: { request_id: string }) => item.request_id === context.request_id)
-
-    expect(await listHc()).toMatchObject({
-      clarification_task: { status: 'OPEN', assignee_user_id: 'manager-demo' },
-      notification_delivery: { status: 'SENT', channel: 'FEISHU' },
-    })
-
-    const workspace = await app.inject({
-      method: 'POST',
-      url: `/api/v1/hc-approvals/${context.request_id}/workspace`,
-      headers: { cookie: managerCookie },
-    })
-    expect(workspace.statusCode).toBe(201)
-    const roleId = workspace.json().role.state.id as string
-    expect(await listHc()).toMatchObject({ clarification_task: { status: 'IN_PROGRESS' } })
-
-    const generated = await app.inject({
-      method: 'POST',
-      url: `/api/v1/role-sessions/${roleId}/artifacts/ROLE_PROFILE/generate`,
-      headers: { cookie: managerCookie },
-      payload: {},
-    })
-    expect(generated.statusCode).toBe(202)
-    for (let attempt = 0; attempt < 40; attempt += 1) {
-      const status = await app.inject({
-        method: 'GET',
-        url: `/api/v1/agent-runs/${generated.json().run_id}`,
-        headers: { cookie: managerCookie },
-      })
-      if (status.json().run.status === 'COMPLETED') break
-      await new Promise((resolve) => setTimeout(resolve, 10))
-    }
-    const detail = (await app.inject({
-      method: 'GET',
-      url: `/api/v1/role-sessions/${roleId}`,
-      headers: { cookie: managerCookie },
-    })).json()
-    const profile = detail.state.latest_artifacts.ROLE_PROFILE
-    const confirmed = await app.inject({
-      method: 'POST',
-      url: `/api/v1/role-sessions/${roleId}/artifacts/${profile.id}:confirm`,
-      headers: { cookie: managerCookie },
+      url: '/api/v1/auth/login',
       payload: {
-        content_hash: profile.content_hash,
-        expected_revision: detail.state.revision,
+        workspace_id: 'conversation-first-demo',
+        account_id: 'manager-one',
+        display_name: '对话经理',
+        role: 'MANAGER',
       },
     })
-    expect(confirmed.statusCode, confirmed.body).toBe(200)
-    expect(await listHc()).toMatchObject({ clarification_task: { status: 'COMPLETED' } })
-    const hrCookie = await login(app, 'hr-demo')
-    const hrApproval = (await app.inject({
-      method: 'GET',
-      url: '/api/v1/hc-approvals',
-      headers: { cookie: hrCookie },
-    })).json().items.find((item: { request_id: string }) => item.request_id === context.request_id)
-    expect(hrApproval).toMatchObject({
-      clarification_task: { status: 'COMPLETED' },
-      notification_delivery: { status: 'SENT' },
-    })
-
-    const messagesBeforeReopen = await app.inject({
-      method: 'GET',
-      url: `/api/v1/role-sessions/${roleId}/messages`,
-      headers: { cookie: managerCookie },
-    })
-    const reopened = await app.inject({
-      method: 'POST',
-      url: `/api/v1/hc-approvals/${context.request_id}/workspace`,
-      headers: { cookie: managerCookie },
-    })
-    expect(reopened.statusCode).toBe(200)
-    expect(reopened.json().role.state.id).toBe(roleId)
-    const messages = await app.inject({
-      method: 'GET',
-      url: `/api/v1/role-sessions/${roleId}/messages`,
-      headers: { cookie: managerCookie },
-    })
-    expect(messages.json().items).toHaveLength(messagesBeforeReopen.json().items.length)
-  })
-
-  it('选择 HC 后由 Agent 幂等发起首问，重复进入不会生成重复会话或消息', async () => {
-    const managerCookie = await login(app, 'manager-demo')
-    const first = await app.inject({
-      method: 'POST',
-      url: '/api/v1/hc-approvals/HC-2026-RD-002/workspace',
-      headers: { cookie: managerCookie },
-    })
-    expect(first.statusCode, first.body).toBe(201)
-    expect(first.json().created).toBe(true)
-    expect(first.json().role.state).toMatchObject({
-      title: '高级后端工程师',
-      department: '平台研发部',
-      stage: 'REASON_CLARIFYING',
-      hc_status: 'APPROVED',
-    })
-    const roleId = first.json().role.state.id
-    const approvalsAfterOpen = await app.inject({
-      method: 'GET',
-      url: '/api/v1/hc-approvals',
-      headers: { cookie: managerCookie },
-    })
-    const openedHc = approvalsAfterOpen.json().items.find(
-      (item: { request_id: string }) => item.request_id === 'HC-2026-RD-002',
-    )
-    expect(openedHc).toMatchObject({
-      role_session_id: roleId,
-      clarification_status: 'IN_PROGRESS',
-      role_stage: 'REASON_CLARIFYING',
-    })
-    const messages = await app.inject({
-      method: 'GET',
-      url: `/api/v1/role-sessions/${roleId}/messages`,
-      headers: { cookie: managerCookie },
-    })
-    expect(messages.statusCode).toBe(200)
-    expect(messages.json().items).toHaveLength(1)
-    expect(messages.json().items[0]).toMatchObject({
-      sender_type: 'AGENT',
-      sender_name: '画像澄清 Agent',
-      sequence: 1,
-      status: 'COMPLETED',
-      structured_content: {
-        kind: 'HC_OPENING_QUESTION',
-        hc_request_id: 'HC-2026-RD-002',
-      },
-    })
-    expect(messages.json().items[0].structured_content.question).toContain('入职 90 天后')
-
-    const second = await app.inject({
-      method: 'POST',
-      url: '/api/v1/hc-approvals/HC-2026-RD-002/workspace',
-      headers: { cookie: managerCookie },
-    })
-    expect(second.statusCode).toBe(200)
-    expect(second.json().created).toBe(false)
-    expect(second.json().role.state.id).toBe(roleId)
-
-    const repeatedMessages = await app.inject({
-      method: 'GET',
-      url: `/api/v1/role-sessions/${roleId}/messages`,
-      headers: { cookie: managerCookie },
-    })
-    expect(repeatedMessages.json().items).toHaveLength(1)
-
-    const hrCookie = await login(app, 'hr-demo')
-    const hrView = await app.inject({
-      method: 'POST',
-      url: '/api/v1/hc-approvals/HC-2026-RD-002/workspace',
-      headers: { cookie: hrCookie },
-    })
-    expect(hrView.statusCode).toBe(200)
-    expect(hrView.json().role.state.id).toBe(roleId)
-  })
-
-  it('预置经理发送第一条 intake 消息后自动建立岗位并由 Agent 识别岗位名称', async () => {
-    const cookie = await login(app, 'manager-demo')
+    const cookie = cookieFrom(loginResponse)
     const intake = await app.inject({
       method: 'POST',
       url: '/api/v1/intake/messages',
@@ -724,10 +354,8 @@ describe('Role Clarifier API', () => {
       url: '/api/v1/role-sessions',
       headers: { cookie },
     })
-    const createdRole = roles.json().items.find(
-      (item: { id: string }) => item.id === intake.json().role.state.id,
-    )
-    expect(createdRole?.title).toBe('企业产品经理')
+    expect(roles.json().items).toHaveLength(1)
+    expect(roles.json().items[0].title).toBe('企业产品经理')
     const messages = await app.inject({
       method: 'GET',
       url: `/api/v1/role-sessions/${intake.json().role.state.id}/messages`,
@@ -737,7 +365,7 @@ describe('Role Clarifier API', () => {
       .toEqual(['HUMAN', 'AGENT'])
   })
 
-  it('飞书事件可开启同一岗位澄清链路，待确认事实会引导经理回 Web 生效', async () => {
+  it('飞书事件可开启同一岗位澄清链路并回传 Agent 与岗位画像卡片', async () => {
     const cards: Array<{ chatId: string; card: Record<string, unknown> }> = []
     const texts: Array<{ chatId: string; text: string }> = []
     const feishuConfig = loadConfig({
@@ -748,17 +376,9 @@ describe('Role Clarifier API', () => {
       FEISHU_APP_SECRET: 'test-secret',
       FEISHU_VERIFICATION_TOKEN: 'verification-token',
       FEISHU_WORKSPACE_ID: 'conversation-first-demo',
-      FEISHU_USER_MAPPINGS_JSON: JSON.stringify({
-        ou_manager_one: {
-          account_id: 'manager-demo',
-          display_name: '用人经理 · 陈曦',
-          role: 'MANAGER',
-        },
-      }),
     })
-    const feishuStore = new MemoryStore()
     const feishuApp = await buildApp(feishuConfig, {
-      store: feishuStore,
+      store: new MemoryStore(),
       harness: testHarness,
       feishuClient: {
         configured: () => true,
@@ -768,14 +388,8 @@ describe('Role Clarifier API', () => {
         sendCard: async (chatId, card) => {
           cards.push({ chatId, card })
         },
-        sendCardToOpenId: async () => {},
       },
     })
-    expect(await feishuStore.getUserChannelBinding(
-      'tenant-demo',
-      'manager-demo',
-      'FEISHU',
-    )).toMatchObject({ recipient_id: 'ou_manager_one', status: 'ACTIVE' })
     const challenge = await feishuApp.inject({
       method: 'POST',
       url: '/api/v1/integrations/feishu/events',
@@ -828,12 +442,12 @@ describe('Role Clarifier API', () => {
       url: '/api/v1/integrations/feishu/events',
       payload: event('om_002', '生成岗位画像'),
     })
-    for (let attempt = 0; attempt < 60 && texts.length < 2; attempt += 1) {
+    for (let attempt = 0; attempt < 60 && cards.length < 1; attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 10))
     }
-    expect(cards).toHaveLength(0)
-    expect(texts[1]?.text).toContain('岗位事实待确认')
-    expect(texts[1]?.text).toContain('Web 工作台')
+    expect(cards).toHaveLength(1)
+    expect(JSON.stringify(cards[0]?.card)).toContain('岗位画像')
+    expect(JSON.stringify(cards[0]?.card)).not.toContain('"tag":"a"')
 
     const duplicate = await feishuApp.inject({
       method: 'POST',
@@ -862,7 +476,7 @@ describe('Role Clarifier API', () => {
     expect(payload.artifacts.some((item: { type: string }) => item.type === 'HR_RECRUITING_BRIEF')).toBe(false)
     expect(payload.state.latest_artifacts.HR_RECRUITING_BRIEF).toBeUndefined()
     expect(payload.state.hc_context).toMatchObject({
-      request_id: 'HC-2026-EP-001',
+      request_id: 'HC-2026-001',
       status: 'APPROVED',
       assigned_hr_user_id: 'hr-demo',
       job_basics: {
@@ -985,574 +599,6 @@ describe('Role Clarifier API', () => {
     expect(context.payload.task_state.current_user_role).toBe('HR')
   })
 
-  it('Agent Run 只把检索命中摘要与来源注入 Harness', async () => {
-    const managerCookie = await login(app, 'manager-demo')
-    const response = await app.inject({
-      method: 'POST',
-      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/messages`,
-      headers: { cookie: managerCookie },
-      payload: { content: '这个岗位半年成功标准是什么' },
-    })
-    for (let attempt = 0; attempt < 40; attempt += 1) {
-      const status = await app.inject({
-        method: 'GET',
-        url: `/api/v1/agent-runs/${response.json().run_id}`,
-        headers: { cookie: managerCookie },
-      })
-      if (status.json().run.status === 'COMPLETED') break
-      await new Promise((resolve) => setTimeout(resolve, 10))
-    }
-
-    expect(capturedHarnessRequests.at(-1)?.enterprise_context.hits[0]).toMatchObject({
-      knowledge_id: 'EK-ROLE-PM-001',
-      source_ref: 'mock://role-profile/enterprise-pm',
-    })
-    expect(JSON.stringify(capturedHarnessRequests.at(-1)?.enterprise_context)).not.toContain('候选人')
-  })
-
-  it('企业上下文检索失败时记录安全事件并使用空上下文继续 Run', async () => {
-    capturedHarnessRequests.length = 0
-    const failingApp = await buildApp(config, {
-      store: new MemoryStore(),
-      harness: testHarness,
-      enterpriseContextRetriever: {
-        retrieve: async () => { throw new Error('database unavailable with internal details') },
-      },
-    })
-    const managerCookie = await login(failingApp, 'manager-demo')
-    const submitted = await failingApp.inject({
-      method: 'POST',
-      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/messages`,
-      headers: { cookie: managerCookie },
-      payload: { content: '继续澄清' },
-    })
-    let runStatus = ''
-    for (let attempt = 0; attempt < 40; attempt += 1) {
-      const status = await failingApp.inject({
-        method: 'GET',
-        url: `/api/v1/agent-runs/${submitted.json().run_id}`,
-        headers: { cookie: managerCookie },
-      })
-      runStatus = status.json().run.status
-      if (runStatus === 'COMPLETED') break
-      await new Promise((resolve) => setTimeout(resolve, 10))
-    }
-    const adminCookie = await login(failingApp, 'admin-demo')
-    const trace = await failingApp.inject({
-      method: 'GET',
-      url: `/api/v1/agent-runs/${submitted.json().run_id}/trace`,
-      headers: { cookie: adminCookie },
-    })
-
-    expect(runStatus).toBe('COMPLETED')
-    expect(trace.json().events).toContainEqual(expect.objectContaining({
-      type: 'context.retrieval_failed',
-      payload: {
-        code: 'ENTERPRISE_CONTEXT_UNAVAILABLE',
-        task: 'CLARIFY_MESSAGE',
-      },
-    }))
-    expect(JSON.stringify(trace.json())).not.toContain('database unavailable')
-    expect(capturedHarnessRequests.at(-1)?.enterprise_context.hits).toEqual([])
-    await failingApp.close()
-  })
-
-  it('关闭企业上下文检索时不调用 Retriever，也不记录失败事件', async () => {
-    let retrievalCalls = 0
-    const disabledConfig = loadConfig({
-      NODE_ENV: 'test',
-      SESSION_SECRET: 'test-session-secret-that-is-long-enough',
-      ENTERPRISE_CONTEXT_RETRIEVAL_ENABLED: 'false',
-    })
-    const disabledApp = await buildApp(disabledConfig, {
-      store: new MemoryStore(),
-      harness: testHarness,
-      enterpriseContextRetriever: {
-        retrieve: async () => {
-          retrievalCalls += 1
-          throw new Error('must not run')
-        },
-      },
-    })
-    const managerCookie = await login(disabledApp, 'manager-demo')
-    const submitted = await disabledApp.inject({
-      method: 'POST',
-      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/messages`,
-      headers: { cookie: managerCookie },
-      payload: { content: '继续澄清' },
-    })
-    for (let attempt = 0; attempt < 40; attempt += 1) {
-      const status = await disabledApp.inject({
-        method: 'GET',
-        url: `/api/v1/agent-runs/${submitted.json().run_id}`,
-        headers: { cookie: managerCookie },
-      })
-      if (status.json().run.status === 'COMPLETED') break
-      await new Promise((resolve) => setTimeout(resolve, 10))
-    }
-    const adminCookie = await login(disabledApp, 'admin-demo')
-    const trace = await disabledApp.inject({
-      method: 'GET',
-      url: `/api/v1/agent-runs/${submitted.json().run_id}/trace`,
-      headers: { cookie: adminCookie },
-    })
-    expect(retrievalCalls).toBe(0)
-    expect(trace.json().events.map((event: { type: string }) => event.type))
-      .not.toContain('context.retrieval_failed')
-    await disabledApp.close()
-  })
-
-  it('caller 持久化事实时记录消息、Run 和提出人，并把 fact_id 写入 Agent 消息', async () => {
-    const managerCookie = await login(app, 'manager-demo')
-    const submitted = await app.inject({
-      method: 'POST',
-      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/messages`,
-      headers: { cookie: managerCookie },
-      payload: { content: '入职 90 天完成产品路线图' },
-    })
-    const runId = submitted.json().run_id
-    let completedRun: AgentRun | undefined
-    for (let attempt = 0; attempt < 40; attempt += 1) {
-      const status = await app.inject({
-        method: 'GET',
-        url: `/api/v1/agent-runs/${runId}`,
-        headers: { cookie: managerCookie },
-      })
-      completedRun = status.json().run
-      if (completedRun?.status === 'COMPLETED') break
-      await new Promise((resolve) => setTimeout(resolve, 10))
-    }
-    expect(completedRun?.status).toBe('COMPLETED')
-    if (!completedRun) throw new Error('Run did not complete')
-    const detail = (await app.inject({
-      method: 'GET',
-      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}`,
-      headers: { cookie: managerCookie },
-    })).json()
-    const conversation = (await app.inject({
-      method: 'GET',
-      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/messages`,
-      headers: { cookie: managerCookie },
-    })).json()
-    const facts = detail.state.facts.filter(
-      (item: { source_run_id: string | null }) => item.source_run_id === runId,
-    )
-    const output = conversation.items.find(
-      (item: { id: string }) => item.id === completedRun.output_message_id,
-    )
-
-    expect(facts).toHaveLength(1)
-    expect(facts[0]).toMatchObject({
-      source_message_id: completedRun.input_message_id,
-      proposed_by_user_id: 'manager-demo',
-      status: 'DRAFT',
-    })
-    expect(output.structured_content).toMatchObject({
-      fact_id: facts[0].id,
-      fact_category: facts[0].category,
-      fact_status: 'DRAFT',
-    })
-  })
-
-  it('工具已保存事实后的恢复结果只关联一条事实卡，不由 caller 重复写入', async () => {
-    const toolStore = new MemoryStore()
-    let toolApp: FastifyInstance
-    const toolPersistingHarness: HarnessAdapter = {
-      run: async (request) => {
-        const factDraft = {
-          category: 'SUCCESS_CRITERION' as const,
-          statement: '入职 90 天完成三个客户场景的标准化',
-          source_refs: ['mock://role-profile/enterprise-pm'],
-        }
-        const save = await toolApp.inject({
-          method: 'POST',
-          url: '/internal/v1/harness/tools/save_fact_draft',
-          headers: {
-            authorization: `Bearer ${config.ROLE_AGENT_TOOL_TOKEN}`,
-            'x-harness-session-id': `role-${request.role_state.id}`,
-          },
-          payload: factDraft,
-        })
-        expect(save.statusCode, save.body).toBe(200)
-        expect(save.json().fact_id).toEqual(expect.any(String))
-        return {
-          kind: 'CLARIFICATION',
-          persistence: 'TOOL',
-          answer: '已从成功的工具调用恢复本轮结果。',
-          question: '这个结果由谁验收？',
-          fact_draft: {
-            category: factDraft.category,
-            statement: factDraft.statement,
-          },
-        }
-      },
-    }
-    toolApp = await buildApp(config, { store: toolStore, harness: toolPersistingHarness })
-    const managerCookie = await login(toolApp, 'manager-demo')
-    const submitted = await toolApp.inject({
-      method: 'POST',
-      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/messages`,
-      headers: { cookie: managerCookie },
-      payload: { content: '请记录新的成功标准' },
-    })
-    const runId = submitted.json().run_id
-    let completedRun: AgentRun | undefined
-    for (let attempt = 0; attempt < 40; attempt += 1) {
-      const status = await toolApp.inject({
-        method: 'GET',
-        url: `/api/v1/agent-runs/${runId}`,
-        headers: { cookie: managerCookie },
-      })
-      completedRun = status.json().run
-      if (completedRun?.status === 'COMPLETED') break
-      await new Promise((resolve) => setTimeout(resolve, 10))
-    }
-    expect(completedRun?.status).toBe('COMPLETED')
-    if (!completedRun) throw new Error('Run did not complete')
-    const detail = (await toolApp.inject({
-      method: 'GET',
-      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}`,
-      headers: { cookie: managerCookie },
-    })).json()
-    const conversation = (await toolApp.inject({
-      method: 'GET',
-      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/messages`,
-      headers: { cookie: managerCookie },
-    })).json()
-    const facts = detail.state.facts.filter(
-      (item: { source_run_id: string | null }) => item.source_run_id === runId,
-    )
-    const output = conversation.items.find(
-      (item: { id: string }) => item.id === completedRun.output_message_id,
-    )
-
-    expect(facts).toHaveLength(1)
-    expect(output.structured_content.fact_id).toBe(facts[0].id)
-    await toolApp.close()
-  })
-
-  it('同一 Run 的事实工具重试保持幂等，并拒绝写入第二条不同事实', async () => {
-    const toolStore = new MemoryStore()
-    let toolApp: FastifyInstance
-    const toolPersistingHarness: HarnessAdapter = {
-      run: async (request) => {
-        const headers = {
-          authorization: `Bearer ${config.ROLE_AGENT_TOOL_TOKEN}`,
-          'x-harness-session-id': `role-${request.role_state.id}`,
-        }
-        const firstPayload = {
-          category: 'SUCCESS_CRITERION' as const,
-          statement: '入职 90 天完成三个客户场景的标准化',
-          source_refs: ['mock://role-profile/enterprise-pm'],
-        }
-        const first = await toolApp.inject({
-          method: 'POST',
-          url: '/internal/v1/harness/tools/save_fact_draft',
-          headers,
-          payload: firstPayload,
-        })
-        const repeated = await toolApp.inject({
-          method: 'POST',
-          url: '/internal/v1/harness/tools/save_fact_draft',
-          headers,
-          payload: firstPayload,
-        })
-        const conflicting = await toolApp.inject({
-          method: 'POST',
-          url: '/internal/v1/harness/tools/save_fact_draft',
-          headers,
-          payload: {
-            ...firstPayload,
-            statement: '同一轮不应再写入的第二条事实',
-          },
-        })
-
-        expect(first.statusCode, first.body).toBe(200)
-        expect(repeated.statusCode, repeated.body).toBe(200)
-        expect(repeated.json().fact_id).toBe(first.json().fact_id)
-        expect(conflicting.statusCode).toBe(409)
-        expect(conflicting.json().error.code).toBe('FACT_DRAFT_ALREADY_SAVED')
-        return {
-          kind: 'CLARIFICATION',
-          persistence: 'TOOL',
-          answer: '已记录本轮唯一事实。',
-          question: '这个结果由谁验收？',
-          fact_draft: {
-            category: firstPayload.category,
-            statement: firstPayload.statement,
-          },
-        }
-      },
-    }
-    toolApp = await buildApp(config, { store: toolStore, harness: toolPersistingHarness })
-    const managerCookie = await login(toolApp, 'manager-demo')
-    const submitted = await toolApp.inject({
-      method: 'POST',
-      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/messages`,
-      headers: { cookie: managerCookie },
-      payload: { content: '请记录唯一的成功标准' },
-    })
-    const runId = submitted.json().run_id
-    let finalStatus = ''
-    for (let attempt = 0; attempt < 40; attempt += 1) {
-      const status = await toolApp.inject({
-        method: 'GET',
-        url: `/api/v1/agent-runs/${runId}`,
-        headers: { cookie: managerCookie },
-      })
-      finalStatus = status.json().run.status
-      if (finalStatus === 'COMPLETED') break
-      await new Promise((resolve) => setTimeout(resolve, 10))
-    }
-    expect(finalStatus).toBe('COMPLETED')
-    const detail = (await toolApp.inject({
-      method: 'GET',
-      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}`,
-      headers: { cookie: managerCookie },
-    })).json()
-    expect(detail.state.facts.filter(
-      (item: { source_run_id: string | null }) => item.source_run_id === runId,
-    )).toHaveLength(1)
-    await toolApp.close()
-  })
-
-  it('内部产物工具拒绝与当前 Run 不匹配的类型，且不写入该草稿', async () => {
-    const toolStore = new MemoryStore()
-    let toolApp: FastifyInstance
-    let saveAttempt: { statusCode: number; json(): { error: { code: string } } } | undefined
-    const mismatchedArtifactHarness: HarnessAdapter = {
-      run: async (request) => {
-        saveAttempt = await toolApp.inject({
-          method: 'POST',
-          url: '/internal/v1/harness/tools/save_artifact_draft',
-          headers: {
-            authorization: `Bearer ${config.ROLE_AGENT_TOOL_TOKEN}`,
-            'x-harness-session-id': `role-${request.role_state.id}`,
-          },
-          payload: {
-            artifact_type: 'PUBLIC_JD',
-            content: {
-              title_and_basics: {
-                title: request.role_state.title,
-                location: '上海',
-                employment_type: '全职',
-                reporting_line: '产品负责人',
-              },
-              about_the_role: '错误类型不应写入。',
-              what_you_will_do: ['推动关键任务落地'],
-              what_we_look_for: ['具备结构化问题解决能力'],
-            },
-          },
-        })
-        throw new Error('测试在错误类型工具调用后停止本次 Run')
-      },
-    }
-    toolApp = await buildApp(config, { store: toolStore, harness: mismatchedArtifactHarness })
-    const managerCookie = await login(toolApp, 'manager-demo')
-    const before = (await toolApp.inject({
-      method: 'GET',
-      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}`,
-      headers: { cookie: managerCookie },
-    })).json()
-    const submitted = await toolApp.inject({
-      method: 'POST',
-      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/artifacts/ROLE_PROFILE/generate`,
-      headers: { cookie: managerCookie },
-      payload: {},
-    })
-    expect(submitted.statusCode, submitted.body).toBe(202)
-    const runId = submitted.json().run_id
-    for (let attempt = 0; attempt < 40; attempt += 1) {
-      const status = await toolApp.inject({
-        method: 'GET',
-        url: `/api/v1/agent-runs/${runId}`,
-        headers: { cookie: managerCookie },
-      })
-      if (status.json().run.status === 'FAILED') break
-      await new Promise((resolve) => setTimeout(resolve, 10))
-    }
-    expect(saveAttempt?.statusCode).toBe(409)
-    expect(saveAttempt?.json().error.code).toBe('HARNESS_ARTIFACT_TYPE_MISMATCH')
-    const after = (await toolApp.inject({
-      method: 'GET',
-      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}`,
-      headers: { cookie: managerCookie },
-    })).json()
-    expect(after.artifacts.filter((artifact: { type: string }) => artifact.type === 'PUBLIC_JD'))
-      .toHaveLength(before.artifacts.filter((artifact: { type: string }) => artifact.type === 'PUBLIC_JD').length)
-    await toolApp.close()
-  })
-
-  it('待确认事实阻断岗位画像生成，经理确认后正式生效并使旧产物失效', async () => {
-    const managerCookie = await login(app, 'manager-demo')
-    const created = await submitFactAndWait(app, managerCookie, '半年内完成三个客户场景标准化')
-    const blocked = await app.inject({
-      method: 'POST',
-      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/artifacts/ROLE_PROFILE/generate`,
-      headers: { cookie: managerCookie },
-      payload: {},
-    })
-    expect(blocked.statusCode).toBe(409)
-    expect(blocked.json().error).toMatchObject({
-      code: 'UNRESOLVED_FACTS_PENDING',
-      details: { fact_ids: [created.fact.id], count: 1 },
-    })
-    expect(JSON.stringify(blocked.json().error.details)).not.toContain(created.fact.statement)
-
-    const confirmed = await app.inject({
-      method: 'POST',
-      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/facts/${created.fact.id}:decide`,
-      headers: { cookie: managerCookie },
-      payload: { decision: 'CONFIRM', expected_revision: created.state.revision },
-    })
-    expect(confirmed.statusCode, confirmed.body).toBe(200)
-    expect(confirmed.json().fact).toMatchObject({ id: created.fact.id, status: 'CONFIRMED' })
-    expect(confirmed.json().state.latest_artifacts).toMatchObject({
-      ROLE_PROFILE: { status: 'INVALIDATED' },
-      ASSESSMENT_SCORECARD: { status: 'INVALIDATED' },
-    })
-    expect(confirmed.json().invalidated_artifact_ids).toHaveLength(2)
-
-    const allowed = await app.inject({
-      method: 'POST',
-      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/artifacts/ROLE_PROFILE/generate`,
-      headers: { cookie: managerCookie },
-      payload: {},
-    })
-    expect(allowed.statusCode, allowed.body).toBe(202)
-  })
-
-  it('事实修订保留来源链，驳回后旧事实不可再次决策', async () => {
-    const managerCookie = await login(app, 'manager-demo')
-    const created = await submitFactAndWait(app, managerCookie, '原始成功标准')
-    const revised = await app.inject({
-      method: 'POST',
-      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/facts/${created.fact.id}:decide`,
-      headers: { cookie: managerCookie },
-      payload: {
-        decision: 'REVISE',
-        expected_revision: created.state.revision,
-        reason: '补充可验收结果',
-        replacement: {
-          category: 'SUCCESS_CRITERION',
-          statement: '入职 90 天完成产品路线图并通过评审',
-        },
-      },
-    })
-    expect(revised.statusCode, revised.body).toBe(200)
-    expect(revised.json().fact).toMatchObject({
-      status: 'DRAFT',
-      supersedes_fact_id: created.fact.id,
-      statement: '入职 90 天完成产品路线图并通过评审',
-    })
-    expect(revised.json().state.facts.find(
-      (fact: { id: string }) => fact.id === created.fact.id,
-    ).status).toBe('STALE')
-
-    const rejected = await app.inject({
-      method: 'POST',
-      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/facts/${revised.json().fact.id}:decide`,
-      headers: { cookie: managerCookie },
-      payload: {
-        decision: 'REJECT',
-        expected_revision: revised.json().state.revision,
-        reason: '当前无法提供可靠验收口径',
-      },
-    })
-    expect(rejected.statusCode, rejected.body).toBe(200)
-    expect(rejected.json().fact).toMatchObject({
-      status: 'STALE',
-      decision_reason: '当前无法提供可靠验收口径',
-    })
-    const stale = await app.inject({
-      method: 'POST',
-      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/facts/${created.fact.id}:decide`,
-      headers: { cookie: managerCookie },
-      payload: { decision: 'CONFIRM', expected_revision: rejected.json().state.revision },
-    })
-    expect(stale.statusCode).toBe(409)
-    expect(stale.json().error.code).toBe('FACT_NOT_DECIDABLE')
-  })
-
-  it('事实决策只允许经理，管理员必须显式使用经理测试身份', async () => {
-    const managerCookie = await login(app, 'manager-demo')
-    const hrCookie = await login(app, 'hr-demo')
-    const adminCookie = await login(app, 'admin-demo')
-    const created = await submitFactAndWait(app, managerCookie, '补充一条待确认约束')
-    const url = `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/facts/${created.fact.id}:decide`
-
-    const hrAttempt = await app.inject({
-      method: 'POST', url, headers: { cookie: hrCookie },
-      payload: { decision: 'CONFIRM', expected_revision: created.state.revision },
-    })
-    expect(hrAttempt.statusCode).toBe(403)
-    const adminAttempt = await app.inject({
-      method: 'POST', url, headers: { cookie: adminCookie },
-      payload: { decision: 'CONFIRM', expected_revision: created.state.revision },
-    })
-    expect(adminAttempt.statusCode).toBe(403)
-    const spoofed = await app.inject({
-      method: 'POST', url, headers: { cookie: managerCookie },
-      payload: {
-        decision: 'CONFIRM',
-        expected_revision: created.state.revision,
-        test_role: 'MANAGER',
-      },
-    })
-    expect(spoofed.statusCode).toBe(403)
-    const adminAsManager = await app.inject({
-      method: 'POST', url, headers: { cookie: adminCookie },
-      payload: {
-        decision: 'CONFIRM',
-        expected_revision: created.state.revision,
-        test_role: 'MANAGER',
-      },
-    })
-    expect(adminAsManager.statusCode, adminAsManager.body).toBe(200)
-    expect(store.listDecisionsForTest()).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        actor_user_id: 'admin-demo',
-        action: 'FACT_CONFIRMED',
-        metadata: expect.objectContaining({
-          actual_actor_role: 'ADMIN',
-          effective_actor_role: 'MANAGER',
-        }),
-      }),
-    ]))
-  })
-
-  it('兼容批量确认接口保持单次 Revision，任一无效 ID 时不部分写入', async () => {
-    const managerCookie = await login(app, 'manager-demo')
-    const created = await submitFactAndWait(app, managerCookie, '需要批量确认的事实')
-    const failed = await app.inject({
-      method: 'POST',
-      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/facts:confirm`,
-      headers: { cookie: managerCookie },
-      payload: {
-        fact_ids: [created.fact.id, 'missing-fact'],
-        expected_revision: created.state.revision,
-      },
-    })
-    expect(failed.statusCode).toBe(404)
-    const afterFailure = (await app.inject({
-      method: 'GET',
-      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}`,
-      headers: { cookie: managerCookie },
-    })).json().state
-    expect(afterFailure.revision).toBe(created.state.revision)
-    expect(afterFailure.facts.find((fact: { id: string }) => fact.id === created.fact.id).status)
-      .toBe('DRAFT')
-
-    const confirmed = await app.inject({
-      method: 'POST',
-      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/facts:confirm`,
-      headers: { cookie: managerCookie },
-      payload: { fact_ids: [created.fact.id], expected_revision: created.state.revision },
-    })
-    expect(confirmed.statusCode, confirmed.body).toBe(200)
-    expect(confirmed.json().state.revision).toBe(created.state.revision + 1)
-  })
-
   it('消息接口立即落库并返回 202，企业管理员可读取完整执行 Trace', async () => {
     const cookie = await login(app, 'manager-demo')
     const response = await app.inject({
@@ -1598,15 +644,6 @@ describe('Role Clarifier API', () => {
     })
     expect(JSON.stringify(trace)).toContain('半年内要建立')
     expect(trace.events.map((event: { type: string }) => event.type)).toContain('context.snapshot')
-    const runPage = await app.inject({
-      method: 'GET',
-      url: '/api/v1/admin/agent-runs?page=1&page_size=1&q=企业产品经理',
-      headers: { cookie: adminCookie },
-    })
-    expect(runPage.statusCode).toBe(200)
-    expect(runPage.json()).toMatchObject({ page: 1, page_size: 1 })
-    expect(runPage.json().total).toBeGreaterThanOrEqual(1)
-    expect(runPage.json().items).toHaveLength(1)
     const contextEvent = trace.events.find(
       (event: { type: string }) => event.type === 'context.snapshot',
     )

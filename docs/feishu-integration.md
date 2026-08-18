@@ -8,8 +8,6 @@
 - 输入“生成岗位画像”“生成评估方案”“生成 JD”或“生成 HR 画像”，机器人会等待对应 Agent Run，并用飞书卡片返回结果。
 - 当前 MVP 只处理机器人单聊和文字消息。群聊会提示用户转到单聊，避免把不同成员的权限和岗位上下文混在一起。
 - 飞书事件以 `message_id` 去重，重复投递不会再次触发模型 Run。
-- HC 审批完成后，通知 Outbox 只向该 HC 的用人经理发送一张“请完成岗位画像澄清”卡片；HR 不接收重复催办，在 Web 站内查看“待澄清 / 已提醒 / 进行中 / 已完成”进度。
-- 主动提醒和机器人对话共用同一组飞书账号映射；没有有效映射时通知进入 `UNBOUND`，保留可审计状态，不会退化为向 HR 或其他成员发送。
 
 ## 飞书开放平台配置
 
@@ -41,12 +39,8 @@ FEISHU_APP_ID=cli_xxx
 FEISHU_APP_SECRET=xxx
 FEISHU_VERIFICATION_TOKEN=xxx
 FEISHU_WORKSPACE_ID=demo-enterprise
-FEISHU_API_BASE_URL=https://open.feishu.cn/open-apis
+FEISHU_API_BASE_URL=https://open.feishu.cn
 FEISHU_USER_MAPPINGS_JSON={}
-NOTIFICATION_DISPATCH_ENABLED=false
-NOTIFICATION_POLL_INTERVAL_MS=5000
-NOTIFICATION_BATCH_SIZE=20
-NOTIFICATION_LEASE_MS=30000
 ```
 
 `FEISHU_WORKSPACE_ID` 必须与用户在 Web 登录页填写的企业空间 ID 一致，才能落入同一租户。
@@ -70,10 +64,6 @@ NOTIFICATION_LEASE_MS=30000
 
 没有映射的飞书用户会获得稳定的独立账号，默认角色为 `MANAGER`；管理员应在正式试用前完成映射，避免默认角色不符合组织授权。
 
-主动 HC 提醒比普通机器人对话要求更严格：`FEISHU_USER_MAPPINGS_JSON` 中必须存在当前 Web 用人经理账号的 `open_id` 映射，后端才会建立可投递绑定。先保持 `NOTIFICATION_DISPATCH_ENABLED=false`，完成回调验证和 `manager-demo` 映射后再启用。Dispatcher 使用租约防止并发重复发送，失败按 1 分钟、5 分钟、30 分钟重试，最多四次；已经发送成功的 HC 不做每日重复提醒。
-
-HR 始终通过 Web 工作台查看任务状态并参与澄清，不作为通知兜底收件人。这样的边界既避免一件事多头催办，也保留经理对岗位事实的最终确认责任。
-
 ## 回调响应与安全边界
 
 URL 验证会同步返回 `challenge`。消息事件在校验 Verification Token、完成 `message_id` 去重后立即返回，Agent 运行和卡片回复异步执行，以满足飞书回调时限。
@@ -89,5 +79,3 @@ App Secret、Verification Token、模型密钥和内部服务令牌只放在 Rai
 3. 同一 `message_id` 重放两次，只产生一次 Agent Run 和一次卡片回复。
 4. 发送“生成岗位画像”，收到包含产物版本和 Web 链接的岗位画像卡片。
 5. 群聊、非文字消息、无效 Verification Token 和未配置凭据均不会进入模型。
-6. 发送一条有效 HC 审批事件后，只有映射的用人经理收到一次主动卡片；HR 在站内看到相同任务进度但不收到催办。
-7. 临时移除经理映射再发送一个新 HC，通知显示 `UNBOUND`，且不发送给 HR；恢复映射后用一个新的 HC 验证正常投递。

@@ -2,15 +2,12 @@ import { randomUUID } from 'node:crypto'
 import {
   ARTIFACT_VISIBILITY,
   CandidateEvidenceSchema,
-  type ConversationMessage,
-  generatedArtifactContentSchema,
+  PublicJDSchema,
   type ActorContext,
   type ArtifactEnvelope,
   type ArtifactType,
   type CandidateEvidence,
-  type Fact,
   type FactCategory,
-  type HcApproval,
   type RoleState,
 } from '@role-clarifier/contracts'
 import {
@@ -67,151 +64,6 @@ export class RoleService {
   async list(actor: ActorContext): Promise<RoleState[]> {
     const states = await this.store.listRoleStates(actor)
     return states.map((state) => this.filterState(state, actor))
-  }
-
-  async listApprovedHc(actor: ActorContext): Promise<HcApproval[]> {
-    const [approvals, roleStates] = await Promise.all([
-      this.store.listHcApprovals(actor),
-      this.store.listRoleStates(actor),
-    ])
-    const roleById = new Map(roleStates.map((state) => [state.id, state]))
-    return approvals.map((approval) => {
-      const hc = structuredClone(approval)
-      const role = hc.role_session_id ? roleById.get(hc.role_session_id) : undefined
-      if (actor.role === 'MANAGER') hc.context.job_basics.salary_range = '按权限可见'
-      return {
-        ...hc,
-        clarification_status: !role
-          ? 'NOT_STARTED'
-          : ['CREATED', 'CONTEXT_SYNCING', 'REASON_CLARIFYING', 'SUCCESS_CLARIFYING'].includes(role.stage)
-            ? 'IN_PROGRESS'
-            : 'PROFILE_READY',
-        role_stage: role?.stage ?? null,
-      }
-    })
-  }
-
-  async openApprovedHc(
-    requestId: string,
-    actor: ActorContext,
-  ): Promise<{ role: RoleView; created: boolean }> {
-    const hc = await this.store.getHcApproval(requestId, actor)
-    if (!hc) throw new DomainError('HC_APPROVAL_NOT_FOUND', '未找到可访问的已通过 HC', 404)
-    if (hc.role_session_id) {
-      await this.store.startClarificationTaskForExistingWorkspace({
-        tenant_id: hc.tenant_id,
-        hc_request_id: hc.request_id,
-        role_session_id: hc.role_session_id,
-        started_at: nowIso(),
-      })
-      await this.ensureHcOpeningQuestion(hc.role_session_id, hc, actor)
-      return { role: await this.get(hc.role_session_id, actor), created: false }
-    }
-
-    const timestamp = nowIso()
-    const state: RoleState = {
-      id: randomUUID(),
-      tenant_id: actor.tenant_id,
-      title: hc.title,
-      department: hc.department,
-      stage: 'REASON_CLARIFYING',
-      revision: 0,
-      hc_status: 'APPROVED',
-      hc_context: structuredClone(hc.context),
-      facts: [
-        {
-          id: randomUUID(),
-          category: 'BACKGROUND',
-          statement: hc.context.business_change,
-          source: `${hc.request_id} HC 审批`,
-          status: 'CONFIRMED',
-          evidence_refs: [`hc://${hc.request_id}`],
-          visible_to: 'ALL',
-          source_message_id: null,
-          source_run_id: null,
-          proposed_by_user_id: null,
-          confirmed_by_user_id: hc.context.hiring_manager_user_id,
-          confirmed_at: hc.context.approved_at,
-          supersedes_fact_id: null,
-          decision_reason: null,
-          updated_at: timestamp,
-        },
-        {
-          id: randomUUID(),
-          category: 'HIRING_REASON',
-          statement: hc.context.approved_reason,
-          source: `${hc.request_id} HC 审批`,
-          status: 'CONFIRMED',
-          evidence_refs: [`hc://${hc.request_id}`],
-          visible_to: 'ALL',
-          source_message_id: null,
-          source_run_id: null,
-          proposed_by_user_id: null,
-          confirmed_by_user_id: hc.context.hiring_manager_user_id,
-          confirmed_at: hc.context.approved_at,
-          supersedes_fact_id: null,
-          decision_reason: null,
-          updated_at: timestamp,
-        },
-      ],
-      conflicts: [],
-      latest_artifacts: {},
-      candidate_count: 0,
-      candidate_channels: [],
-      calibration_status: 'OBSERVING',
-      created_at: timestamp,
-      updated_at: timestamp,
-    }
-    const aggregate: RoleAggregate = {
-      state,
-      member_ids: [
-        hc.context.hiring_manager_user_id,
-        ...(hc.context.assigned_hr_user_id ? [hc.context.assigned_hr_user_id] : []),
-      ],
-      artifacts: [],
-      candidates: [],
-      calibration_signals: [],
-      manager_tasks: [],
-    }
-    const result = await this.store.createRoleAggregateForHc(hc.request_id, aggregate)
-    await this.ensureHcOpeningQuestion(result.roleSessionId, hc, actor)
-    return {
-      role: await this.get(result.roleSessionId, actor),
-      created: result.created,
-    }
-  }
-
-  private async ensureHcOpeningQuestion(
-    roleSessionId: string,
-    hc: HcApproval,
-    actor: ActorContext,
-  ): Promise<void> {
-    const existing = await this.store.listConversationMessages(roleSessionId)
-    if (existing.length > 0) return
-
-    const timestamp = nowIso()
-    const message: ConversationMessage = {
-      id: roleSessionId,
-      tenant_id: actor.tenant_id,
-      role_session_id: roleSessionId,
-      run_id: null,
-      clarification_round_id: null,
-      sender_type: 'AGENT',
-      sender_user_id: null,
-      sender_role: null,
-      sender_name: '画像澄清 Agent',
-      content: `这条「${hc.title}」HC 已通过审批。我会主动带你完成岗位澄清，你只需要逐题回答；审批材料会作为已确认背景，不需要重复填写。`,
-      structured_content: {
-        kind: 'HC_OPENING_QUESTION',
-        hc_request_id: hc.request_id,
-        question: `先从最关键的结果开始：这位${hc.title}入职 90 天后，针对“${hc.context.organization_gap}”，必须交付什么可验证的结果，才说明这个人招对了？`,
-      },
-      status: 'COMPLETED',
-      sequence: 1,
-      created_at: timestamp,
-      completed_at: timestamp,
-    }
-    await this.store.appendConversationMessageIfAbsent(message)
   }
 
   async get(roleSessionId: string, actor: ActorContext): Promise<RoleView> {
@@ -364,13 +216,6 @@ export class RoleService {
           status: 'DRAFT',
           evidence_refs: ['mock://hc/S-01'],
           visible_to: 'ALL',
-          source_message_id: null,
-          source_run_id: null,
-          proposed_by_user_id: null,
-          confirmed_by_user_id: null,
-          confirmed_at: null,
-          supersedes_fact_id: null,
-          decision_reason: null,
           updated_at: timestamp,
         },
         {
@@ -381,13 +226,6 @@ export class RoleService {
           status: 'DRAFT',
           evidence_refs: ['mock://constraint/S-02'],
           visible_to: 'ALL',
-          source_message_id: null,
-          source_run_id: null,
-          proposed_by_user_id: null,
-          confirmed_by_user_id: null,
-          confirmed_at: null,
-          supersedes_fact_id: null,
-          decision_reason: null,
           updated_at: timestamp,
         },
       ],
@@ -400,38 +238,18 @@ export class RoleService {
   async saveFactDraft(
     roleSessionId: string,
     actor: ActorContext,
-    input: {
-      statement: string
-      category: FactCategory
-      source_message_id: string | null
-      source_run_id: string
-      proposed_by_user_id: string
-      evidence_refs?: string[]
-    },
-  ): Promise<{ state: RoleState; fact: Fact }> {
+    statement: string,
+    category: FactCategory,
+  ): Promise<RoleState> {
     const aggregate = await this.requireAggregate(roleSessionId, actor)
     if (aggregate.state.hc_status !== 'APPROVED') {
       throw new DomainError('HC_NOT_APPROVED', 'HC 未审批，不能进入岗位澄清', 409)
-    }
-    const existing = aggregate.state.facts.find(
-      (fact) => fact.source_run_id === input.source_run_id,
-    )
-    if (existing) {
-      if (existing.category === input.category && existing.statement === input.statement) {
-        return { state: this.filterState(aggregate.state, actor), fact: structuredClone(existing) }
-      }
-      throw new DomainError(
-        'FACT_DRAFT_ALREADY_SAVED',
-        '同一 Agent Run 已经保存过岗位事实',
-        409,
-        { fact_id: existing.id },
-      )
     }
     const timestamp = nowIso()
     const state: RoleState = {
       ...aggregate.state,
       stage:
-        input.category === 'SUCCESS_CRITERION'
+        category === 'SUCCESS_CRITERION'
           ? 'SUCCESS_CLARIFYING'
           : aggregate.state.stage === 'CONTEXT_SYNCING'
             ? 'REASON_CLARIFYING'
@@ -441,28 +259,42 @@ export class RoleService {
         ...aggregate.state.facts,
         {
           id: randomUUID(),
-          category: input.category,
-          statement: input.statement,
+          category,
+          statement,
           source: 'Agent 从本轮对话提取，待人工确认',
           status: 'DRAFT',
-          evidence_refs: input.evidence_refs ?? [],
+          evidence_refs: [],
           visible_to: 'ALL',
-          source_message_id: input.source_message_id,
-          source_run_id: input.source_run_id,
-          proposed_by_user_id: input.proposed_by_user_id,
-          confirmed_by_user_id: null,
-          confirmed_at: null,
-          supersedes_fact_id: null,
-          decision_reason: null,
           updated_at: timestamp,
         },
       ],
       updated_at: timestamp,
     }
     await this.persistState(state, aggregate.state.revision)
-    const fact = state.facts.at(-1)
-    if (!fact) throw new Error('Fact draft was not appended')
-    return { state: this.filterState(state, actor), fact }
+    return this.filterState(state, actor)
+  }
+
+  async confirmFacts(
+    roleSessionId: string,
+    actor: ActorContext,
+    factIds: string[],
+    expectedRevision: number,
+  ): Promise<RoleState> {
+    const aggregate = await this.requireAggregate(roleSessionId, actor)
+    if (!['MANAGER', 'ADMIN'].includes(actor.role)) throw new DomainError('FORBIDDEN', '仅用人经理或企业管理员可确认岗位事实', 403)
+    assertRevision(aggregate.state.revision, expectedRevision)
+    const ids = new Set(factIds)
+    const timestamp = nowIso()
+    const state: RoleState = {
+      ...aggregate.state,
+      revision: aggregate.state.revision + 1,
+      facts: aggregate.state.facts.map((fact) =>
+        ids.has(fact.id) ? { ...fact, status: 'CONFIRMED' as const, updated_at: timestamp } : fact,
+      ),
+      updated_at: timestamp,
+    }
+    await this.persistState(state, aggregate.state.revision)
+    return this.filterState(state, actor)
   }
 
   async assertArtifactGenerationAllowed(
@@ -480,20 +312,6 @@ export class RoleService {
     }
     if (artifactType !== 'HR_RECRUITING_BRIEF' && !['MANAGER', 'ADMIN'].includes(effectiveRole)) {
       throw new DomainError('FORBIDDEN', '该产物需要由用人经理生成', 403)
-    }
-    if (artifactType === 'ROLE_PROFILE') {
-      const pending = aggregate.state.facts.filter((fact) =>
-        fact.visible_to !== 'HR_ONLY'
-        && (fact.status === 'DRAFT' || fact.status === 'CONFLICTED'),
-      )
-      if (pending.length > 0) {
-        throw new DomainError(
-          'UNRESOLVED_FACTS_PENDING',
-          `还有 ${pending.length} 条岗位事实待确认`,
-          409,
-          { fact_ids: pending.map((fact) => fact.id), count: pending.length },
-        )
-      }
     }
     const missing = artifactDependencies[artifactType].filter(
       (dependency) => aggregate.state.latest_artifacts[dependency]?.status !== 'CONFIRMED',
@@ -515,23 +333,7 @@ export class RoleService {
   ): Promise<ArtifactEnvelope<T>> {
     const aggregate = await this.requireAggregate(roleSessionId, actor)
     assertArtifactAccess(actor, type)
-    const contentSchema = generatedArtifactContentSchema(type)
-    let validatedContent = content
-    if (contentSchema) {
-      const validation = contentSchema.safeParse(content)
-      if (!validation.success) {
-        const issueSummary = validation.error.issues
-          .slice(0, 5)
-          .map((issue) => `${issue.path.join('.') || 'content'}：${issue.message}`)
-          .join('；')
-        throw new DomainError(
-          'ARTIFACT_CONTENT_INVALID',
-          `${artifactNames[type]}结构不符合前端展示契约：${issueSummary}`,
-          422,
-        )
-      }
-      validatedContent = validation.data as T
-    }
+    if (type === 'PUBLIC_JD') PublicJDSchema.parse(content)
     const version =
       Math.max(
         0,
@@ -546,7 +348,7 @@ export class RoleService {
       roleSessionId,
       type,
       version,
-      content: validatedContent,
+      content,
       createdBy: actor.user_id,
       basedOnHash: previous?.content_hash ?? null,
     })

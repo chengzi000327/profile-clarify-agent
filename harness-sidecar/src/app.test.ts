@@ -6,11 +6,8 @@ import {
   HarnessExecutor,
   maxTokensForTask,
   recoverResultFromTool,
-  terminalToolForTask,
-  timeoutMsForTask,
 } from './executor.js'
 import { buildContextSnapshot, buildTaskPrompt } from './prompts.js'
-import { isExpectedTerminalToolResult, trackSuccessfulToolResult } from './protocol-client.js'
 import { parseHarnessResult, type HarnessRequest } from './schemas.js'
 
 const state: RoleState = {
@@ -51,26 +48,6 @@ const request: HarnessRequest = {
     agent_run_id: 'run-demo',
     trace_id: 'trace-demo',
   },
-  enterprise_context: {
-    query: {
-      role_session_id: state.id,
-      task: 'CLARIFY_MESSAGE',
-      department: state.department,
-      job_family: '产品',
-      query_terms: ['产品', '成功标准'],
-    },
-    hits: [{
-      knowledge_id: 'EK-ROLE-PM-001',
-      category: 'ROLE_PROFILE_CASE',
-      title: '企业产品经理成功画像案例',
-      summary: '成功画像案例摘要。',
-      source_ref: 'mock://role-profile/enterprise-pm',
-      source_version: '2026.08',
-      relevance_score: 120,
-      match_reasons: ['任务类别匹配', '岗位族一致'],
-    }],
-    truncated: false,
-  },
   maximum_transitions: 10,
   structured_output_repair_attempts: 1,
 }
@@ -103,40 +80,10 @@ describe('Harness sidecar', () => {
       role: { title: '商业化产品负责人' },
       state_revision: 1,
     })
-    expect(context.long_term_memory.enterprise_context).toEqual(request.enterprise_context)
     expect(context.task_state).toMatchObject({
       task: 'CLARIFY_MESSAGE',
       current_user_role: 'MANAGER',
     })
-  })
-
-  it('adds traceable enterprise knowledge as advisory context rather than confirmed facts', () => {
-    const prompt = buildTaskPrompt(request)
-    expect(prompt).toContain('<enterprise_context>')
-    expect(prompt).toContain('mock://role-profile/enterprise-pm')
-    expect(prompt).toContain('2026.08')
-    expect(prompt).toContain('任务类别匹配')
-    expect(prompt).toContain('企业知识只用于提供背景与建议')
-    expect(prompt).toContain('source_ref 写入 evidence_refs')
-    expect(prompt).toContain('不得把它自动标记为已确认岗位事实')
-  })
-
-  it('loads only the core and current task prompt', () => {
-    const clarification = buildContextSnapshot(request)
-    expect(clarification.system_prompt.content).toContain('<P-01')
-    expect(clarification.system_prompt.content).not.toContain('<P-02')
-    expect(clarification.task_state.orchestration_instructions).toContain('<P-02')
-    expect(clarification.task_state.orchestration_instructions).not.toContain('<P-03')
-
-    const jd = buildContextSnapshot({
-      ...request,
-      task: 'GENERATE_JD',
-      message: undefined,
-      conversation_context: undefined,
-    })
-    expect(jd.system_prompt.content).toContain('<P-01')
-    expect(jd.task_state.orchestration_instructions).toContain('<P-05')
-    expect(jd.task_state.orchestration_instructions).not.toContain('<P-07')
   })
 
   it('repairs fenced model JSON into the typed result', () => {
@@ -173,22 +120,9 @@ describe('Harness sidecar', () => {
   it('sends greetings and capability questions through the model prompt', () => {
     const prompt = buildTaskPrompt({ ...request, message: '你好，你可以做什么？' })
     expect(prompt).toContain('你好，你可以做什么？')
-    expect(prompt).toContain('<P-02')
-    expect(prompt).not.toContain('<P-03')
-    expect(prompt).toContain('CONVERSATION 不调用工具')
+    expect(prompt).toContain('不要套用固定模板')
+    expect(prompt).toContain('不要调用 read_role_state 或其他领域工具')
     expect(prompt).toContain('"kind":"CONVERSATION"')
-  })
-
-  it('puts an explicit user reply constraint ahead of contextual capability guidance', () => {
-    const prompt = buildTaskPrompt({
-      ...request,
-      message: '请只回复：我可以协助澄清岗位。',
-    })
-
-    expect(prompt).toContain('请只回复：我可以协助澄清岗位。')
-    expect(prompt).toContain('必须严格遵守该输出约束')
-    expect(prompt).toContain('不得补充岗位名称、当前状态、历史事实、下一步建议或寒暄')
-    expect(prompt).toContain('指定了输出格式时，以用户的格式要求为准')
   })
 
   it('keeps artifact content out of the initial model prompt and only exposes references', () => {
@@ -217,78 +151,6 @@ describe('Harness sidecar', () => {
     expect(maxTokensForTask('CLARIFY_MESSAGE', 16_384)).toBe(4_096)
     expect(maxTokensForTask('EXTRACT_CANDIDATES', 16_384)).toBe(8_192)
     expect(maxTokensForTask('GENERATE_JD', 16_384)).toBe(16_384)
-  })
-
-  it('extends only role profile generation beyond the default run timeout', () => {
-    expect(timeoutMsForTask('GENERATE_ROLE_PROFILE', 90_000, 240_000)).toBe(240_000)
-    expect(timeoutMsForTask('CLARIFY_MESSAGE', 90_000, 240_000)).toBe(90_000)
-    expect(timeoutMsForTask('GENERATE_JD', 90_000, 240_000)).toBe(90_000)
-  })
-
-  it('treats authoritative non-conversation writes as terminal, but keeps clarification conversational', () => {
-    expect(terminalToolForTask('GENERATE_ROLE_PROFILE')).toBe('save_artifact_draft')
-    expect(terminalToolForTask('GENERATE_ASSESSMENT')).toBe('save_artifact_draft')
-    expect(terminalToolForTask('EXTRACT_CANDIDATES')).toBe('save_candidate_evidence')
-    expect(terminalToolForTask('CLARIFY_MESSAGE')).toBeUndefined()
-  })
-
-  it('settles only after the authoritative tool result succeeds', () => {
-    const calls = new Map<string, { name: string; arguments: unknown }>()
-    expect(trackSuccessfulToolResult({
-      method: 'session.event',
-      params: {
-        event: {
-          type: 'tool/call',
-          data: {
-            callId: 'artifact-call',
-            name: 'save_artifact_draft',
-            arguments: JSON.stringify({ artifact_type: 'PUBLIC_JD' }),
-          },
-        },
-      },
-    }, calls)).toBeUndefined()
-    expect(trackSuccessfulToolResult({
-      method: 'session.event',
-      params: {
-        event: {
-          type: 'tool/result',
-          data: {
-            message: {
-              source: { callId: 'artifact-call' },
-              content: [{ type: 'tool-result', isError: true }],
-            },
-          },
-        },
-      },
-    }, calls)).toBeUndefined()
-    const successfulArtifact = trackSuccessfulToolResult({
-      method: 'session.event',
-      params: {
-        event: {
-          type: 'tool/result',
-          data: {
-            message: {
-              source: { callId: 'artifact-call' },
-              content: [{ type: 'tool-result', isError: false }],
-            },
-          },
-        },
-      },
-    }, calls)
-    expect(successfulArtifact).toMatchObject({
-      name: 'save_artifact_draft',
-      arguments: { artifact_type: 'PUBLIC_JD' },
-    })
-    expect(isExpectedTerminalToolResult(
-      successfulArtifact,
-      'save_artifact_draft',
-      'ROLE_PROFILE',
-    )).toBe(false)
-    expect(isExpectedTerminalToolResult(
-      { name: 'save_artifact_draft', arguments: { artifact_type: 'ROLE_PROFILE' } },
-      'save_artifact_draft',
-      'ROLE_PROFILE',
-    )).toBe(true)
   })
 
   it('does not fabricate a canned conversation when model output is invalid', () => {
@@ -350,21 +212,6 @@ describe('Harness sidecar', () => {
     )
     expect(result.kind).toBe('ARTIFACT')
   })
-
-  it.each([
-    ['GENERATE_ROLE_PROFILE', 'PUBLIC_JD'],
-    ['GENERATE_ASSESSMENT', 'ROLE_PROFILE'],
-    ['GENERATE_JD', 'ROLE_PROFILE'],
-    ['GENERATE_HR_BRIEF', 'PUBLIC_JD'],
-  ] as const)(
-    'refuses to recover %s from a saved %s artifact',
-    (task, artifactType) => {
-      expect(() => recoverResultFromTool(
-        { ...request, task, message: undefined },
-        [{ name: 'save_artifact_draft', arguments: { artifact_type: artifactType, content: {} } }],
-      )).toThrow('does not match')
-    },
-  )
 
   it('protects the run endpoint and returns executor output', async () => {
     const executor: ExecutorLike = {

@@ -1,7 +1,6 @@
 import {
   ArtifactTypeSchema,
   CandidateEvidenceSchema,
-  EnterpriseContextBundleSchema,
   FactCategorySchema,
   RoleStateSchema,
   ToolExecutionContextSchema,
@@ -28,7 +27,6 @@ const CandidateImportItemSchema = z.object({
 export const HarnessRequestSchema = z.object({
   task: HarnessTaskSchema,
   role_state: RoleStateSchema,
-  enterprise_context: EnterpriseContextBundleSchema,
   message: z.string().optional(),
   conversation_context: z.object({
     current_user_role: z.enum(['MANAGER', 'HR', 'ADMIN']),

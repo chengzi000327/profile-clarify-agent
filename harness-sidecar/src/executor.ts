@@ -2,7 +2,6 @@ import { existsSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { artifactTypeForTask } from '@role-clarifier/contracts'
 import type { SidecarConfig } from './config.js'
 import { buildContextSnapshot, buildRepairPrompt, buildTaskPrompt } from './prompts.js'
 import { JsonRpcHarnessRuntime, type RuntimeTurn } from './protocol-client.js'
@@ -50,17 +49,6 @@ export const maxTokensForTask = (task: HarnessTask, configuredMaximum: number): 
   return configuredMaximum
 }
 
-export const timeoutMsForTask = (
-  task: HarnessTask,
-  configuredDefault: number,
-  configuredRoleProfile: number,
-): number => task === 'GENERATE_ROLE_PROFILE'
-  ? configuredRoleProfile
-  : configuredDefault
-
-export const terminalToolForTask = (task: HarnessTask): string | undefined =>
-  task === 'CLARIFY_MESSAGE' ? undefined : requiredSaveTool(task)
-
 const combineTurns = (turns: RuntimeTurn[]) => ({
   tools: turns.flatMap((turn) => turn.toolNames),
   successfulTools: turns.flatMap((turn) => turn.successfulToolNames),
@@ -83,14 +71,6 @@ const lastSuccessfulCall = (
   return undefined
 }
 
-const isExpectedArtifactCall = (
-  call: { name: string; arguments: unknown } | undefined,
-  expectedArtifactType: string | undefined,
-): boolean => call?.name === 'save_artifact_draft' && (
-  expectedArtifactType === undefined
-  || (isRecord(call.arguments) && call.arguments.artifact_type === expectedArtifactType)
-)
-
 export const recoverResultFromTool = (
   request: HarnessRequest,
   calls: Array<{ name: string; arguments: unknown }>,
@@ -104,10 +84,6 @@ export const recoverResultFromTool = (
     throw new Error(`Cannot recover structured result from ${toolName}`)
   }
   const args = call.arguments
-  const expectedArtifactType = artifactTypeForTask(request.task)
-  if (expectedArtifactType && args.artifact_type !== expectedArtifactType) {
-    throw new Error(`Saved artifact type ${String(args.artifact_type)} does not match ${request.task}`)
-  }
   if (request.task === 'CLARIFY_MESSAGE') {
     const identityCall = lastSuccessfulCall(calls, 'update_role_identity_draft')
     const roleIdentity = identityCall && isRecord(identityCall.arguments)
@@ -178,11 +154,6 @@ export class HarnessExecutor {
     const model = request.task === 'CLARIFY_MESSAGE' || request.task === 'EXTRACT_CANDIDATES'
       ? this.config.DEEPSEEK_FLASH_MODEL
       : this.config.DEEPSEEK_PRO_MODEL
-    const timeoutMs = timeoutMsForTask(
-      request.task,
-      this.config.DSH_RUN_TIMEOUT_MS,
-      this.config.DSH_ROLE_PROFILE_TIMEOUT_MS,
-    )
     const sessionRoot = await mkdtemp(join(tmpdir(), 'role-clarifier-dsh-'))
     const runtime = new JsonRpcHarnessRuntime({
       runtimeBin: this.config.DSH_RUNTIME_BIN,
@@ -199,7 +170,7 @@ export class HarnessExecutor {
       model,
       provider: 'deepseek-official',
       maxTokens: maxTokensForTask(request.task, this.config.DSH_MAX_TOKENS),
-      requestTimeoutMs: timeoutMs,
+      requestTimeoutMs: this.config.DSH_RUN_TIMEOUT_MS,
     })
     const sessionId = `role-${request.execution_context.role_session_id}`
     const turns: RuntimeTurn[] = []
@@ -208,35 +179,24 @@ export class HarnessExecutor {
     let recoveredFromTool = false
     const runSignal = AbortSignal.any([
       signal,
-      AbortSignal.timeout(timeoutMs),
+      AbortSignal.timeout(this.config.DSH_RUN_TIMEOUT_MS),
     ])
     try {
       const initialPrompt = buildTaskPrompt(request)
       modelEvents.push({ type: 'model.request', value: initialPrompt, attempt: 'initial' })
-      const terminalTool = terminalToolForTask(request.task)
-      const terminalArtifactType = artifactTypeForTask(request.task)
       const initial = await runtime.runTurn(
         sessionId,
         initialPrompt,
         runSignal,
         request.maximum_transitions,
-        terminalTool,
-        terminalArtifactType,
       )
       turns.push(initial)
       modelEvents.push({ type: 'model.response', value: initial.finalResponse, attempt: 'initial' })
-      let result: HarnessResult
-      const initialPersisted = terminalTool !== undefined
-        && (terminalArtifactType === undefined
-          ? initial.successfulToolNames.includes(terminalTool)
-          : initial.successfulToolCalls.some((call) => isExpectedArtifactCall(call, terminalArtifactType)))
       if (initial.finishReason !== 'completed') {
-        if (!initialPersisted) {
-          throw new Error(`Harness turn ended with ${initial.finishReason ?? 'unknown reason'}`)
-        }
-        result = recoverResultFromTool(request, initial.successfulToolCalls)
-        recoveredFromTool = true
-      } else try {
+        throw new Error(`Harness turn ended with ${initial.finishReason ?? 'unknown reason'}`)
+      }
+      let result: HarnessResult
+      try {
         result = parseHarnessResult(initial.finalResponse)
       } catch (error) {
         repaired = true
@@ -250,16 +210,10 @@ export class HarnessExecutor {
           repairPrompt,
           runSignal,
           Math.max(0, request.maximum_transitions - initial.toolNames.length),
-          terminalTool,
-          terminalArtifactType,
         )
         turns.push(repair)
         modelEvents.push({ type: 'model.response', value: repair.finalResponse, attempt: 'repair' })
-        const repairPersisted = terminalTool !== undefined
-          && (terminalArtifactType === undefined
-            ? repair.successfulToolNames.includes(terminalTool)
-            : repair.successfulToolCalls.some((call) => isExpectedArtifactCall(call, terminalArtifactType)))
-        if (repair.finishReason !== 'completed' && !repairPersisted) {
+        if (repair.finishReason !== 'completed') {
           throw new Error(`Harness repair turn ended with ${repair.finishReason ?? 'unknown reason'}`)
         }
         try {

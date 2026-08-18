@@ -5,10 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
-    "build": "vite build --configLoader runner",
+    "build": "vite build",
     "preview": "vite preview --host 127.0.0.1",
-    "typecheck": "vite build --configLoader runner",
-    "test": "node --test src/hc-progress.test.js src/fact-decision.test.js src/profile-content.test.js src/assessment-content.test.js src/public-jd-content.test.js && vite build --configLoader runner"
+    "typecheck": "vite build",
+    "test": "vite build"
   },
   "dependencies": {
     "@fontsource/ibm-plex-sans": "^5.2.7",

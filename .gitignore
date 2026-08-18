@@ -20,9 +20,3 @@ pnpm-debug.log*
 
 # Exact-commit DeepSeek Harness source/build cache
 .harness/
-
-# Local Superpowers visual brainstorming sessions
-.superpowers/
-
-# Local isolated feature worktrees
-.worktrees/

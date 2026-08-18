@@ -1,17 +1,10 @@
 import {
   and,
   asc,
-  count,
   desc,
   eq,
   gt,
-  ilike,
   inArray,
-  isNull,
-  lt,
-  lte,
-  or,
-  sql,
 } from 'drizzle-orm'
 import { drizzle, type PostgresJsDatabase } from 'drizzle-orm/postgres-js'
 import postgres, { type Sql } from 'postgres'
@@ -24,19 +17,14 @@ import type {
   ClarificationPolicy,
   ClarificationRound,
   ConversationMessage,
-  EnterpriseKnowledgeItem,
-  HcApproval,
   RoleState,
 } from '@role-clarifier/contracts'
 import * as schema from '../db/schema.js'
 import type {
   AdminRunRecord,
-  AdminRunFilters,
-  AdminRunPage,
   ApplicationStore,
   CalibrationSignalRecord,
   DecisionRecord,
-  EnterpriseKnowledgeQuery,
   EventSubscriber,
   ManagerTaskRecord,
   RoleAggregate,
@@ -45,24 +33,11 @@ import type {
   StoredUser,
   TraceAccessAuditRecord,
 } from './types.js'
-import type {
-  ApprovedHcIngestion,
-  NotificationClaim,
-  NotificationFailureUpdate,
-  NotificationOutboxRecord,
-  NotificationRetryUpdate,
-  UserChannelBindingRecord,
-} from './closure-types.js'
 
 const iso = (value: Date | string): string =>
   value instanceof Date ? value.toISOString() : new Date(value).toISOString()
 
 type RoleSessionRow = typeof schema.roleSessions.$inferSelect
-type HcApprovalRow = typeof schema.hcApprovals.$inferSelect
-type RoleClarificationTaskRow = typeof schema.roleClarificationTasks.$inferSelect
-type EnterpriseKnowledgeRow = typeof schema.enterpriseKnowledgeItems.$inferSelect
-type NotificationOutboxRow = typeof schema.notificationOutbox.$inferSelect
-type UserChannelBindingRow = typeof schema.userChannelBindings.$inferSelect
 type ArtifactRow = typeof schema.artifacts.$inferSelect
 type AgentRunRow = typeof schema.agentRuns.$inferSelect
 type AgentEventRow = typeof schema.agentRunEvents.$inferSelect
@@ -93,89 +68,6 @@ const roleStateFromRow = (row: RoleSessionRow): RoleState => ({
   stage: row.stage as RoleState['stage'],
   revision: row.revision,
   created_at: iso(row.createdAt),
-  updated_at: iso(row.updatedAt),
-})
-
-const hcApprovalFromRow = (
-  row: HcApprovalRow,
-  task?: RoleClarificationTaskRow,
-  notification?: NotificationOutboxRow,
-): HcApproval => ({
-  request_id: row.requestId,
-  tenant_id: row.tenantId,
-  title: row.title,
-  department: row.department,
-  status: row.status,
-  context: row.context,
-  role_session_id: row.roleSessionId,
-  clarification_task: task
-    ? {
-        id: task.id,
-        status: task.status,
-        assignee_user_id: task.assigneeUserId,
-        started_at: task.startedAt ? iso(task.startedAt) : null,
-        completed_at: task.completedAt ? iso(task.completedAt) : null,
-      }
-    : null,
-  notification_delivery: notification
-    ? {
-        channel: notification.channel,
-        status: notification.status,
-        sent_at: notification.sentAt ? iso(notification.sentAt) : null,
-        last_error_code: notification.lastErrorCode,
-      }
-    : null,
-  created_at: iso(row.createdAt),
-  updated_at: iso(row.updatedAt),
-})
-
-const enterpriseKnowledgeFromRow = (row: EnterpriseKnowledgeRow): EnterpriseKnowledgeItem => ({
-  id: row.id,
-  tenant_id: row.tenantId,
-  category: row.category,
-  title: row.title,
-  content: row.content,
-  summary: row.summary,
-  department: row.department,
-  job_family: row.jobFamily,
-  tags: row.tags,
-  visible_to: row.visibleTo,
-  source_ref: row.sourceRef,
-  source_version: row.sourceVersion,
-  status: row.status,
-  valid_from: iso(row.validFrom),
-  valid_to: row.validTo ? iso(row.validTo) : null,
-  updated_at: iso(row.updatedAt),
-})
-
-const notificationFromRow = (row: NotificationOutboxRow): NotificationOutboxRecord => ({
-  id: row.id,
-  tenant_id: row.tenantId,
-  task_id: row.taskId,
-  dedupe_key: row.dedupeKey,
-  channel: row.channel,
-  recipient_user_id: row.recipientUserId,
-  template: row.template,
-  payload: row.payload,
-  status: row.status,
-  attempt_count: row.attemptCount,
-  next_attempt_at: iso(row.nextAttemptAt),
-  locked_by: row.lockedBy,
-  locked_until: row.lockedUntil ? iso(row.lockedUntil) : null,
-  last_error_code: row.lastErrorCode,
-  sent_at: row.sentAt ? iso(row.sentAt) : null,
-  created_at: iso(row.createdAt),
-  updated_at: iso(row.updatedAt),
-})
-
-const userChannelBindingFromRow = (row: UserChannelBindingRow): UserChannelBindingRecord => ({
-  tenant_id: row.tenantId,
-  user_id: row.userId,
-  channel: row.channel,
-  recipient_type: row.recipientType,
-  recipient_id: row.recipientId,
-  status: row.status,
-  verified_at: iso(row.verifiedAt),
   updated_at: iso(row.updatedAt),
 })
 
@@ -344,325 +236,6 @@ export class PostgresStore implements ApplicationStore {
     return rows.length === 1
   }
 
-  async ingestApprovedHcClosure(input: ApprovedHcIngestion): Promise<{ inserted: boolean }> {
-    return this.db.transaction(async (tx) => {
-      const receipts = await tx
-        .insert(schema.externalEventReceipts)
-        .values({
-          channel: input.external_event_channel,
-          eventId: input.external_event_id,
-          receivedAt: new Date(input.approval.updated_at),
-        })
-        .onConflictDoNothing()
-        .returning({ eventId: schema.externalEventReceipts.eventId })
-      if (receipts.length === 0) return { inserted: false }
-
-      await tx
-        .insert(schema.hcApprovals)
-        .values({
-          requestId: input.approval.request_id,
-          tenantId: input.approval.tenant_id,
-          title: input.approval.title,
-          department: input.approval.department,
-          status: 'APPROVED',
-          context: input.approval.context,
-          hiringManagerUserId: input.approval.context.hiring_manager_user_id,
-          assignedHrUserId: input.approval.context.assigned_hr_user_id,
-          roleSessionId: input.approval.role_session_id,
-          createdAt: new Date(input.approval.created_at),
-          updatedAt: new Date(input.approval.updated_at),
-        })
-        .onConflictDoUpdate({
-          target: [schema.hcApprovals.tenantId, schema.hcApprovals.requestId],
-          set: {
-            title: input.approval.title,
-            department: input.approval.department,
-            status: 'APPROVED',
-            context: input.approval.context,
-            hiringManagerUserId: input.approval.context.hiring_manager_user_id,
-            assignedHrUserId: input.approval.context.assigned_hr_user_id,
-            updatedAt: new Date(input.approval.updated_at),
-          },
-        })
-
-      await tx
-        .insert(schema.roleClarificationTasks)
-        .values({
-          id: input.task.id,
-          tenantId: input.task.tenant_id,
-          hcRequestId: input.task.hc_request_id,
-          roleSessionId: input.task.role_session_id,
-          assigneeUserId: input.task.assignee_user_id,
-          status: input.task.status,
-          dueAt: input.task.due_at ? new Date(input.task.due_at) : null,
-          startedAt: input.task.started_at ? new Date(input.task.started_at) : null,
-          completedAt: input.task.completed_at ? new Date(input.task.completed_at) : null,
-          createdAt: new Date(input.task.created_at),
-          updatedAt: new Date(input.task.updated_at),
-        })
-        .onConflictDoNothing({
-          target: [schema.roleClarificationTasks.tenantId, schema.roleClarificationTasks.hcRequestId],
-        })
-      const [task] = await tx
-        .select({ id: schema.roleClarificationTasks.id })
-        .from(schema.roleClarificationTasks)
-        .where(and(
-          eq(schema.roleClarificationTasks.tenantId, input.task.tenant_id),
-          eq(schema.roleClarificationTasks.hcRequestId, input.task.hc_request_id),
-        ))
-        .limit(1)
-      if (!task) throw new Error('HC_CLARIFICATION_TASK_NOT_FOUND')
-
-      await tx
-        .insert(schema.notificationOutbox)
-        .values({
-          id: input.notification.id,
-          tenantId: input.notification.tenant_id,
-          taskId: task.id,
-          dedupeKey: input.notification.dedupe_key,
-          channel: input.notification.channel,
-          recipientUserId: input.notification.recipient_user_id,
-          template: input.notification.template,
-          payload: input.notification.payload,
-          status: input.notification.status,
-          attemptCount: input.notification.attempt_count,
-          nextAttemptAt: new Date(input.notification.next_attempt_at),
-          lockedBy: input.notification.locked_by,
-          lockedUntil: input.notification.locked_until
-            ? new Date(input.notification.locked_until)
-            : null,
-          lastErrorCode: input.notification.last_error_code,
-          sentAt: input.notification.sent_at ? new Date(input.notification.sent_at) : null,
-          createdAt: new Date(input.notification.created_at),
-          updatedAt: new Date(input.notification.updated_at),
-        })
-        .onConflictDoNothing({ target: schema.notificationOutbox.dedupeKey })
-      return { inserted: true }
-    })
-  }
-
-  async claimDueNotifications(input: NotificationClaim): Promise<NotificationOutboxRecord[]> {
-    return this.db.transaction(async (tx) => {
-      const now = new Date(input.now)
-      const rows = await tx
-        .select()
-        .from(schema.notificationOutbox)
-        .where(or(
-          and(
-            inArray(schema.notificationOutbox.status, ['PENDING', 'RETRY']),
-            lte(schema.notificationOutbox.nextAttemptAt, now),
-          ),
-          and(
-            eq(schema.notificationOutbox.status, 'PROCESSING'),
-            lt(schema.notificationOutbox.lockedUntil, now),
-          ),
-        ))
-        .orderBy(
-          asc(schema.notificationOutbox.nextAttemptAt),
-          asc(schema.notificationOutbox.createdAt),
-          asc(schema.notificationOutbox.id),
-        )
-        .limit(input.limit)
-        .for('update', { skipLocked: true })
-      const claimed: NotificationOutboxRecord[] = []
-      for (const row of rows) {
-        const [updated] = await tx
-          .update(schema.notificationOutbox)
-          .set({
-            status: 'PROCESSING',
-            attemptCount: row.attemptCount + 1,
-            lockedBy: input.worker_id,
-            lockedUntil: new Date(input.locked_until),
-            updatedAt: now,
-          })
-          .where(eq(schema.notificationOutbox.id, row.id))
-          .returning()
-        if (updated) claimed.push(notificationFromRow(updated))
-      }
-      return claimed
-    })
-  }
-
-  async getNotification(id: string): Promise<NotificationOutboxRecord | null> {
-    const row = await this.db.query.notificationOutbox.findFirst({
-      where: eq(schema.notificationOutbox.id, id),
-    })
-    return row ? notificationFromRow(row) : null
-  }
-
-  async getUserChannelBinding(
-    tenantId: string,
-    userId: string,
-    channel: 'FEISHU',
-  ): Promise<UserChannelBindingRecord | null> {
-    const row = await this.db.query.userChannelBindings.findFirst({
-      where: and(
-        eq(schema.userChannelBindings.tenantId, tenantId),
-        eq(schema.userChannelBindings.userId, userId),
-        eq(schema.userChannelBindings.channel, channel),
-      ),
-    })
-    return row ? userChannelBindingFromRow(row) : null
-  }
-
-  async upsertUserChannelBinding(binding: UserChannelBindingRecord): Promise<void> {
-    await this.db
-      .insert(schema.userChannelBindings)
-      .values({
-        tenantId: binding.tenant_id,
-        userId: binding.user_id,
-        channel: binding.channel,
-        recipientType: binding.recipient_type,
-        recipientId: binding.recipient_id,
-        status: binding.status,
-        verifiedAt: new Date(binding.verified_at),
-        updatedAt: new Date(binding.updated_at),
-      })
-      .onConflictDoUpdate({
-        target: [
-          schema.userChannelBindings.tenantId,
-          schema.userChannelBindings.userId,
-          schema.userChannelBindings.channel,
-        ],
-        set: {
-          recipientType: binding.recipient_type,
-          recipientId: binding.recipient_id,
-          status: binding.status,
-          verifiedAt: new Date(binding.verified_at),
-          updatedAt: new Date(binding.updated_at),
-        },
-      })
-  }
-
-  async requeueUnboundNotificationsForUser(
-    tenantId: string,
-    userId: string,
-    nextAttemptAt: string,
-  ): Promise<number> {
-    const rows = await this.db
-      .update(schema.notificationOutbox)
-      .set({
-        status: 'PENDING',
-        attemptCount: 0,
-        nextAttemptAt: new Date(nextAttemptAt),
-        lockedBy: null,
-        lockedUntil: null,
-        lastErrorCode: null,
-        updatedAt: new Date(nextAttemptAt),
-      })
-      .where(and(
-        eq(schema.notificationOutbox.tenantId, tenantId),
-        eq(schema.notificationOutbox.recipientUserId, userId),
-        eq(schema.notificationOutbox.status, 'UNBOUND'),
-      ))
-      .returning({ id: schema.notificationOutbox.id })
-    return rows.length
-  }
-
-  async markNotificationSent(id: string, workerId: string, sentAt: string): Promise<void> {
-    await this.updateClaimedNotification(id, workerId, {
-      status: 'SENT',
-      sentAt: new Date(sentAt),
-      lockedBy: null,
-      lockedUntil: null,
-      lastErrorCode: null,
-      updatedAt: new Date(sentAt),
-    })
-  }
-
-  async markNotificationRetry(input: NotificationRetryUpdate): Promise<void> {
-    await this.updateClaimedNotification(input.id, input.worker_id, {
-      status: 'RETRY',
-      nextAttemptAt: new Date(input.next_attempt_at),
-      lockedBy: null,
-      lockedUntil: null,
-      lastErrorCode: input.error_code,
-      updatedAt: new Date(input.updated_at),
-    })
-  }
-
-  async markNotificationUnbound(id: string, workerId: string, updatedAt: string): Promise<void> {
-    await this.updateClaimedNotification(id, workerId, {
-      status: 'UNBOUND',
-      lockedBy: null,
-      lockedUntil: null,
-      lastErrorCode: null,
-      updatedAt: new Date(updatedAt),
-    })
-  }
-
-  async markNotificationDead(input: NotificationFailureUpdate): Promise<void> {
-    await this.updateClaimedNotification(input.id, input.worker_id, {
-      status: 'DEAD',
-      lockedBy: null,
-      lockedUntil: null,
-      lastErrorCode: input.error_code,
-      updatedAt: new Date(input.updated_at),
-    })
-  }
-
-  async listEnterpriseKnowledge(
-    input: EnterpriseKnowledgeQuery,
-  ): Promise<EnterpriseKnowledgeItem[]> {
-    if (input.categories.length === 0 || input.visible_to.length === 0) return []
-    const now = new Date(input.now)
-    const rows = await this.db
-      .select()
-      .from(schema.enterpriseKnowledgeItems)
-      .where(and(
-        eq(schema.enterpriseKnowledgeItems.tenantId, input.tenant_id),
-        eq(schema.enterpriseKnowledgeItems.status, 'ACTIVE'),
-        inArray(schema.enterpriseKnowledgeItems.visibleTo, input.visible_to),
-        inArray(schema.enterpriseKnowledgeItems.category, input.categories),
-        lte(schema.enterpriseKnowledgeItems.validFrom, now),
-        or(
-          isNull(schema.enterpriseKnowledgeItems.validTo),
-          gt(schema.enterpriseKnowledgeItems.validTo, now),
-        ),
-      ))
-    return rows.map(enterpriseKnowledgeFromRow)
-  }
-
-  async listHcApprovals(actor: ActorContext): Promise<HcApproval[]> {
-    const access = actor.role === 'ADMIN'
-      ? and(
-          eq(schema.hcApprovals.tenantId, actor.tenant_id),
-          eq(schema.hcApprovals.status, 'APPROVED'),
-        )
-      : and(
-          eq(schema.hcApprovals.tenantId, actor.tenant_id),
-          eq(schema.hcApprovals.status, 'APPROVED'),
-          actor.role === 'MANAGER'
-            ? eq(schema.hcApprovals.hiringManagerUserId, actor.user_id)
-            : eq(schema.hcApprovals.assignedHrUserId, actor.user_id),
-        )
-    const rows = await this.db
-      .select()
-      .from(schema.hcApprovals)
-      .where(access)
-      .orderBy(desc(schema.hcApprovals.createdAt))
-    return this.hcApprovalsWithSummaries(rows)
-  }
-
-  async getHcApproval(requestId: string, actor: ActorContext): Promise<HcApproval | null> {
-    const access = actor.role === 'ADMIN'
-      ? and(
-          eq(schema.hcApprovals.requestId, requestId),
-          eq(schema.hcApprovals.tenantId, actor.tenant_id),
-        )
-      : and(
-          eq(schema.hcApprovals.requestId, requestId),
-          eq(schema.hcApprovals.tenantId, actor.tenant_id),
-          actor.role === 'MANAGER'
-            ? eq(schema.hcApprovals.hiringManagerUserId, actor.user_id)
-            : eq(schema.hcApprovals.assignedHrUserId, actor.user_id),
-        )
-    const [row] = await this.db.select().from(schema.hcApprovals).where(access).limit(1)
-    if (!row) return null
-    const [approval] = await this.hcApprovalsWithSummaries([row])
-    return approval ?? null
-  }
-
   async listRoleStates(actor: ActorContext): Promise<RoleState[]> {
     if (actor.role === 'ADMIN') {
       const rows = await this.db
@@ -820,211 +393,33 @@ export class PostgresStore implements ApplicationStore {
     })
   }
 
-  async createRoleAggregateForHc(
-    hcRequestId: string,
-    aggregate: RoleAggregate,
-  ): Promise<{ roleSessionId: string; created: boolean }> {
-    return this.db.transaction(async (tx) => {
-      const [hc] = await tx
-        .select({ roleSessionId: schema.hcApprovals.roleSessionId })
-        .from(schema.hcApprovals)
-        .where(
-          and(
-            eq(schema.hcApprovals.requestId, hcRequestId),
-            eq(schema.hcApprovals.tenantId, aggregate.state.tenant_id),
-          ),
-        )
-        .for('update')
-        .limit(1)
-      if (!hc) throw new Error('HC_APPROVAL_NOT_FOUND')
-      if (hc.roleSessionId) {
-        await tx
-          .update(schema.roleClarificationTasks)
-          .set({
-            roleSessionId: hc.roleSessionId,
-            status: 'IN_PROGRESS',
-            startedAt: new Date(aggregate.state.updated_at),
-            updatedAt: new Date(aggregate.state.updated_at),
-          })
-          .where(and(
-            eq(schema.roleClarificationTasks.tenantId, aggregate.state.tenant_id),
-            eq(schema.roleClarificationTasks.hcRequestId, hcRequestId),
-            eq(schema.roleClarificationTasks.status, 'OPEN'),
-          ))
-        return { roleSessionId: hc.roleSessionId, created: false }
-      }
-
-      const memberIds = [...new Set([
-        ...aggregate.member_ids,
-        ...(aggregate.state.hc_context?.assigned_hr_user_id
-          ? [aggregate.state.hc_context.assigned_hr_user_id]
-          : []),
-      ])]
-      const policy = this.makeDefaultPolicy(aggregate.state.id)
-      await tx.insert(schema.roleSessions).values({
-        id: aggregate.state.id,
-        tenantId: aggregate.state.tenant_id,
-        title: aggregate.state.title,
-        department: aggregate.state.department,
-        stage: aggregate.state.stage,
-        revision: aggregate.state.revision,
-        businessState: roleBusinessState(aggregate.state),
-        ...this.toPolicyColumns(policy),
-        createdAt: new Date(aggregate.state.created_at),
-        updatedAt: new Date(aggregate.state.updated_at),
-      })
-      if (memberIds.length > 0) {
-        await tx.insert(schema.roleMembers).values(
-          memberIds.map((userId) => ({ roleSessionId: aggregate.state.id, userId })),
-        )
-      }
-      await tx
-        .update(schema.hcApprovals)
-        .set({
-          roleSessionId: aggregate.state.id,
-          updatedAt: new Date(aggregate.state.updated_at),
-        })
-        .where(
-          and(
-            eq(schema.hcApprovals.requestId, hcRequestId),
-            eq(schema.hcApprovals.tenantId, aggregate.state.tenant_id),
-          ),
-        )
-      await tx
-        .update(schema.roleClarificationTasks)
-        .set({
-          roleSessionId: aggregate.state.id,
-          status: 'IN_PROGRESS',
-          startedAt: new Date(aggregate.state.updated_at),
-          updatedAt: new Date(aggregate.state.updated_at),
-        })
-        .where(and(
-          eq(schema.roleClarificationTasks.tenantId, aggregate.state.tenant_id),
-          eq(schema.roleClarificationTasks.hcRequestId, hcRequestId),
-          eq(schema.roleClarificationTasks.status, 'OPEN'),
-        ))
-      return { roleSessionId: aggregate.state.id, created: true }
-    })
-  }
-
-  async startClarificationTaskForExistingWorkspace(input: {
-    tenant_id: string
-    hc_request_id: string
-    role_session_id: string
-    started_at: string
-  }): Promise<void> {
-    await this.db
-      .update(schema.roleClarificationTasks)
-      .set({
-        roleSessionId: input.role_session_id,
-        status: 'IN_PROGRESS',
-        startedAt: new Date(input.started_at),
-        updatedAt: new Date(input.started_at),
-      })
-      .where(and(
-        eq(schema.roleClarificationTasks.tenantId, input.tenant_id),
-        eq(schema.roleClarificationTasks.hcRequestId, input.hc_request_id),
-        eq(schema.roleClarificationTasks.status, 'OPEN'),
-      ))
-  }
-
   async saveRoleState(state: RoleState, expectedRevision: number): Promise<boolean> {
-    return this.db.transaction(async (tx) => {
-      const rows = await tx
-        .update(schema.roleSessions)
-        .set({
-          title: state.title,
-          department: state.department,
-          stage: state.stage,
-          revision: state.revision,
-          businessState: roleBusinessState(state),
-          updatedAt: new Date(state.updated_at),
-        })
-        .where(
-          and(
-            eq(schema.roleSessions.id, state.id),
-            eq(schema.roleSessions.revision, expectedRevision),
-          ),
-        )
-        .returning({ id: schema.roleSessions.id })
-      if (rows.length !== 1) return false
-      const assignedHr = state.hc_context?.assigned_hr_user_id
-      if (assignedHr) {
-        await tx
-          .insert(schema.roleMembers)
-          .values({ roleSessionId: state.id, userId: assignedHr })
-          .onConflictDoNothing()
-      }
-      if (state.stage === 'PROFILE_CONFIRMED') {
-        await tx
-          .update(schema.roleClarificationTasks)
-          .set({
-            status: 'COMPLETED',
-            completedAt: new Date(state.updated_at),
-            updatedAt: new Date(state.updated_at),
-          })
-          .where(and(
-            eq(schema.roleClarificationTasks.roleSessionId, state.id),
-            inArray(schema.roleClarificationTasks.status, ['OPEN', 'IN_PROGRESS']),
-          ))
-      }
-      return true
-    })
-  }
-
-  async commitFactDecision(input: {
-    role_session_id: string
-    tenant_id: string
-    expected_revision: number
-    state: RoleState
-    artifacts: ArtifactEnvelope[]
-    decisions: DecisionRecord[]
-  }): Promise<boolean> {
-    return this.db.transaction(async (tx) => {
-      const rows = await tx
-        .update(schema.roleSessions)
-        .set({
-          title: input.state.title,
-          department: input.state.department,
-          stage: input.state.stage,
-          revision: input.state.revision,
-          businessState: roleBusinessState(input.state),
-          updatedAt: new Date(input.state.updated_at),
-        })
-        .where(and(
-          eq(schema.roleSessions.id, input.role_session_id),
-          eq(schema.roleSessions.tenantId, input.tenant_id),
-          eq(schema.roleSessions.revision, input.expected_revision),
-        ))
-        .returning({ id: schema.roleSessions.id })
-      if (rows.length !== 1) return false
-
-      for (const artifact of input.artifacts) {
-        const updated = await tx
-          .update(schema.artifacts)
-          .set({ status: artifact.status })
-          .where(and(
-            eq(schema.artifacts.id, artifact.id),
-            eq(schema.artifacts.roleSessionId, input.role_session_id),
-          ))
-          .returning({ id: schema.artifacts.id })
-        if (updated.length !== 1) throw new Error('Missing artifact in atomic fact decision')
-      }
-      if (input.decisions.length > 0) {
-        await tx.insert(schema.auditLogs).values(input.decisions.map((record) => ({
-          id: record.id,
-          tenantId: input.tenant_id,
-          roleSessionId: record.role_session_id,
-          actorUserId: record.actor_user_id,
-          action: record.action,
-          targetType: record.target_type,
-          targetId: record.target_id,
-          metadata: { ...record.metadata, audit_kind: 'HUMAN_DECISION' },
-          createdAt: new Date(record.created_at),
-        })))
-      }
-      return true
-    })
+    const rows = await this.db
+      .update(schema.roleSessions)
+      .set({
+        title: state.title,
+        department: state.department,
+        stage: state.stage,
+        revision: state.revision,
+        businessState: roleBusinessState(state),
+        updatedAt: new Date(state.updated_at),
+      })
+      .where(
+        and(
+          eq(schema.roleSessions.id, state.id),
+          eq(schema.roleSessions.revision, expectedRevision),
+        ),
+      )
+      .returning({ id: schema.roleSessions.id })
+    if (rows.length !== 1) return false
+    const assignedHr = state.hc_context?.assigned_hr_user_id
+    if (assignedHr) {
+      await this.db
+        .insert(schema.roleMembers)
+        .values({ roleSessionId: state.id, userId: assignedHr })
+        .onConflictDoNothing()
+    }
+    return true
   }
 
   async insertArtifact(artifact: ArtifactEnvelope): Promise<void> {
@@ -1322,28 +717,6 @@ export class PostgresStore implements ApplicationStore {
     })
   }
 
-  async appendConversationMessageIfAbsent(message: ConversationMessage): Promise<boolean> {
-    const rows = await this.db.insert(schema.conversationMessages).values({
-      id: message.id,
-      tenantId: message.tenant_id,
-      roleSessionId: message.role_session_id,
-      runId: message.run_id,
-      clarificationRoundId: message.clarification_round_id,
-      senderKind: message.sender_type === 'HUMAN'
-        ? message.sender_role ?? 'HUMAN'
-        : message.sender_type,
-      senderUserId: message.sender_user_id,
-      senderName: message.sender_name,
-      content: message.content,
-      structuredContent: message.structured_content,
-      status: message.status,
-      sequence: message.sequence,
-      createdAt: new Date(message.created_at),
-      completedAt: message.completed_at ? new Date(message.completed_at) : null,
-    }).onConflictDoNothing().returning({ id: schema.conversationMessages.id })
-    return rows.length > 0
-  }
-
   async updateConversationMessage(message: ConversationMessage): Promise<void> {
     await this.db
       .update(schema.conversationMessages)
@@ -1411,30 +784,8 @@ export class PostgresStore implements ApplicationStore {
       .where(eq(schema.clarificationRounds.id, round.id))
   }
 
-  async listRunsForTenant(
-    tenantId: string,
-    filters: AdminRunFilters,
-  ): Promise<AdminRunPage> {
-    const conditions = [eq(schema.roleSessions.tenantId, tenantId)]
-    if (filters.status) conditions.push(eq(schema.agentRuns.status, filters.status))
-    if (filters.model_tier) conditions.push(eq(schema.agentRuns.modelTier, filters.model_tier))
-    if (filters.role_session_id) {
-      conditions.push(eq(schema.agentRuns.roleSessionId, filters.role_session_id))
-    }
-    const keyword = filters.query?.trim()
-    if (keyword) {
-      const pattern = `%${keyword}%`
-      const search = or(
-        ilike(schema.roleSessions.title, pattern),
-        ilike(schema.users.displayName, pattern),
-        ilike(schema.agentRuns.modelName, pattern),
-        sql<boolean>`${schema.agentRuns.id}::text ILIKE ${pattern}`,
-      )
-      if (search) conditions.push(search)
-    }
-    const where = and(...conditions)
-    const [rows, totals] = await Promise.all([
-      this.db
+  async listRunsForTenant(tenantId: string): Promise<AdminRunRecord[]> {
+    const rows = await this.db
       .select({
         run: schema.agentRuns,
         cancelRequested: schema.agentRuns.cancelRequested,
@@ -1444,30 +795,17 @@ export class PostgresStore implements ApplicationStore {
       })
       .from(schema.agentRuns)
       .innerJoin(schema.roleSessions, eq(schema.agentRuns.roleSessionId, schema.roleSessions.id))
-      .leftJoin(schema.users, eq(schema.agentRuns.actorUserId, schema.users.id))
-      .where(where)
+      .innerJoin(schema.users, eq(schema.agentRuns.actorUserId, schema.users.id))
+      .where(eq(schema.roleSessions.tenantId, tenantId))
       .orderBy(desc(schema.agentRuns.createdAt))
-      .limit(filters.page_size)
-      .offset((filters.page - 1) * filters.page_size),
-      this.db
-        .select({ value: count() })
-        .from(schema.agentRuns)
-        .innerJoin(schema.roleSessions, eq(schema.agentRuns.roleSessionId, schema.roleSessions.id))
-        .leftJoin(schema.users, eq(schema.agentRuns.actorUserId, schema.users.id))
-        .where(where),
-    ])
-    return {
-      items: rows.map((row) => ({
-        run: agentRunFromRow(row.run),
-        cancel_requested: row.cancelRequested,
-        role_title: row.roleTitle,
-        actor_display_name: row.actorDisplayName ?? row.run.actorUserId,
-        actor_role: row.actorRole ?? row.run.effectiveActorRole,
-      })),
-      total: Number(totals[0]?.value ?? 0),
-      page: filters.page,
-      page_size: filters.page_size,
-    }
+      .limit(200)
+    return rows.map((row) => ({
+      run: agentRunFromRow(row.run),
+      cancel_requested: row.cancelRequested,
+      role_title: row.roleTitle,
+      actor_display_name: row.actorDisplayName,
+      actor_role: row.actorRole,
+    }))
   }
 
   async appendTraceAccessAudit(record: TraceAccessAuditRecord): Promise<void> {
@@ -1510,54 +848,6 @@ export class PostgresStore implements ApplicationStore {
       reason: typeof row.metadata.reason === 'string' ? row.metadata.reason : null,
       created_at: iso(row.createdAt),
     }))
-  }
-
-  private async updateClaimedNotification(
-    id: string,
-    workerId: string,
-    values: Partial<typeof schema.notificationOutbox.$inferInsert>,
-  ): Promise<void> {
-    await this.db
-      .update(schema.notificationOutbox)
-      .set(values)
-      .where(and(
-        eq(schema.notificationOutbox.id, id),
-        eq(schema.notificationOutbox.status, 'PROCESSING'),
-        eq(schema.notificationOutbox.lockedBy, workerId),
-      ))
-  }
-
-  private async hcApprovalsWithSummaries(rows: HcApprovalRow[]): Promise<HcApproval[]> {
-    if (rows.length === 0) return []
-    const tenantId = rows[0]!.tenantId
-    const tasks = await this.db
-      .select()
-      .from(schema.roleClarificationTasks)
-      .where(and(
-        eq(schema.roleClarificationTasks.tenantId, tenantId),
-        inArray(
-          schema.roleClarificationTasks.hcRequestId,
-          rows.map((row) => row.requestId),
-        ),
-      ))
-    const taskByHc = new Map(tasks.map((task) => [task.hcRequestId, task]))
-    const notifications = tasks.length > 0
-      ? await this.db
-          .select()
-          .from(schema.notificationOutbox)
-          .where(inArray(schema.notificationOutbox.taskId, tasks.map((task) => task.id)))
-          .orderBy(desc(schema.notificationOutbox.createdAt))
-      : []
-    const notificationByTask = new Map<string, NotificationOutboxRow>()
-    for (const notification of notifications) {
-      if (!notificationByTask.has(notification.taskId)) {
-        notificationByTask.set(notification.taskId, notification)
-      }
-    }
-    return rows.map((row) => {
-      const task = taskByHc.get(row.requestId)
-      return hcApprovalFromRow(row, task, task ? notificationByTask.get(task.id) : undefined)
-    })
   }
 
   private makeDefaultPolicy(roleSessionId: string): ClarificationPolicy {

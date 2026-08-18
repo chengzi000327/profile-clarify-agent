@@ -38,7 +38,6 @@ const ConfigSchema = z.object({
   ),
   DSH_MAX_TOKENS: z.coerce.number().int().positive().max(65_536).default(16_384),
   DSH_RUN_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(300_000).default(90_000),
-  DSH_ROLE_PROFILE_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(300_000).default(240_000),
   SIDECAR_CONCURRENCY: z.coerce.number().int().min(1).max(16).default(4),
 })
 

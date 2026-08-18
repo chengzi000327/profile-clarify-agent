@@ -1,12 +1,11 @@
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? '';
 
 export class ApiError extends Error {
-  constructor(code, message, status, details) {
+  constructor(code, message, status) {
     super(message);
     this.name = 'ApiError';
     this.code = code;
     this.status = status;
-    this.details = details;
   }
 }
 
@@ -25,7 +24,6 @@ async function request(path, options = {}) {
       payload?.error?.code ?? 'REQUEST_FAILED',
       payload?.error?.message ?? `请求失败（${response.status}）`,
       response.status,
-      payload?.error?.details,
     );
   }
   return payload;
@@ -43,14 +41,6 @@ export const api = {
   },
   me() {
     return request('/api/v1/auth/me');
-  },
-  listHcApprovals() {
-    return request('/api/v1/hc-approvals');
-  },
-  openHcWorkspace(requestId) {
-    return request(`/api/v1/hc-approvals/${encodeURIComponent(requestId)}/workspace`, {
-      method: 'POST',
-    });
   },
   listRoleSessions() {
     return request('/api/v1/role-sessions');
@@ -87,12 +77,6 @@ export const api = {
     return request(`/api/v1/role-sessions/${id}/clarification:extend`, {
       method: 'POST',
       body: JSON.stringify({ reason }),
-    });
-  },
-  decideFact(id, factId, payload) {
-    return request(`/api/v1/role-sessions/${id}/facts/${encodeURIComponent(factId)}:decide`, {
-      method: 'POST',
-      body: JSON.stringify(payload),
     });
   },
   listAdminRuns(filters = {}) {
@@ -136,7 +120,6 @@ export const api = {
       'agent.status',
       'message.accepted',
       'context.snapshot',
-      'context.retrieval_failed',
       'assistant.delta',
       'assistant.completed',
       'tool.started',
