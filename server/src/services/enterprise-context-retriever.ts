@@ -17,11 +17,11 @@ export interface EnterpriseContextRetrievalInput {
 
 const categoriesByTask: Record<HarnessTask, EnterpriseKnowledgeItem['category'][]> = {
   CLARIFY_MESSAGE: [
+    'ROLE_PROFILE_CASE',
     'ORGANIZATION',
     'JOB_FAMILY',
     'LEVEL_FRAMEWORK',
     'HISTORICAL_JD',
-    'ROLE_PROFILE_CASE',
     'RECRUITING_POLICY',
     'INTERVIEW_STANDARD',
   ],
@@ -47,6 +47,21 @@ const inferJobFamily = (title: string): string | null => {
   if (title.includes('工程师') || title.includes('研发')) return '研发'
   return null
 }
+
+export const emptyEnterpriseContextBundle = (
+  role: RoleState,
+  task: HarnessTask,
+): EnterpriseContextBundle => ({
+  query: {
+    role_session_id: role.id,
+    task,
+    department: role.department,
+    job_family: inferJobFamily(role.title),
+    query_terms: [],
+  },
+  hits: [],
+  truncated: false,
+})
 
 const buildQueryTerms = (input: EnterpriseContextRetrievalInput, jobFamily: string | null) => {
   const sources = [
@@ -115,17 +130,7 @@ export class EnterpriseContextRetriever {
   async retrieve(input: EnterpriseContextRetrievalInput): Promise<EnterpriseContextBundle> {
     const jobFamily = inferJobFamily(input.role.title)
     if (categoriesByTask[input.task].length === 0) {
-      return {
-        query: {
-          role_session_id: input.role.id,
-          task: input.task,
-          department: input.role.department,
-          job_family: jobFamily,
-          query_terms: [],
-        },
-        hits: [],
-        truncated: false,
-      }
+      return emptyEnterpriseContextBundle(input.role, input.task)
     }
     const queryTerms = buildQueryTerms(input, jobFamily)
     const items = await this.store.listEnterpriseKnowledge({

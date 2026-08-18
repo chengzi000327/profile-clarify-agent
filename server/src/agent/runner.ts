@@ -14,6 +14,10 @@ import { ROLE_CLARIFIER_PROMPT_VERSION } from '@role-clarifier/contracts'
 import { DomainError } from '@role-clarifier/domain'
 import type { AppConfig } from '../config.js'
 import { RoleService } from '../services/role-service.js'
+import {
+  emptyEnterpriseContextBundle,
+  type EnterpriseContextRetriever,
+} from '../services/enterprise-context-retriever.js'
 import type { ApplicationStore } from '../store/index.js'
 import type {
   CandidateImportItem,
@@ -56,6 +60,7 @@ export class AgentRunner {
     private readonly roleService: RoleService,
     private readonly harness: HarnessAdapter,
     private readonly config: AppConfig,
+    private readonly enterpriseContextRetriever: Pick<EnterpriseContextRetriever, 'retrieve'>,
   ) {}
 
   async submitMessage(
@@ -283,6 +288,23 @@ export class AgentRunner {
 
     try {
       const view = await this.roleService.get(run.role_session_id, pending.actor)
+      let enterpriseContext = emptyEnterpriseContextBundle(view.state, pending.task)
+      if (this.config.ENTERPRISE_CONTEXT_RETRIEVAL_ENABLED) {
+        try {
+          enterpriseContext = await this.enterpriseContextRetriever.retrieve({
+            actor: pending.actor,
+            effective_role: pending.effectiveRole,
+            task: pending.task,
+            role: view.state,
+            message: pending.task === 'CLARIFY_MESSAGE' ? pending.message ?? null : null,
+          })
+        } catch {
+          await emit('context.retrieval_failed', {
+            code: 'ENTERPRISE_CONTEXT_UNAVAILABLE',
+            task: pending.task,
+          })
+        }
+      }
       const executionContext: ToolExecutionContext = {
         tenant_id: pending.actor.tenant_id,
         actor_user_id: pending.actor.user_id,
@@ -297,6 +319,7 @@ export class AgentRunner {
       const request: HarnessRequest = {
         task: pending.task,
         role_state: view.state,
+        enterprise_context: enterpriseContext,
         execution_context: executionContext,
         maximum_transitions: 10,
         structured_output_repair_attempts: 1,

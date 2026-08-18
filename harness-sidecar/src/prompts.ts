@@ -125,7 +125,7 @@ export const buildContextSnapshot = (request: HarnessRequest): AgentContextSnaps
     long_term_memory: {
       source: 'BUSINESS_DATABASE',
       role_state: projectInitialRoleState(request),
-      enterprise_context: null,
+      enterprise_context: request.enterprise_context,
     },
     task_state: {
       task: request.task,
@@ -167,6 +167,10 @@ export const buildTaskPrompt = (request: HarnessRequest): string => {
       role_state: context.long_term_memory.role_state,
     }),
     '</long_term_memory>',
+    '<enterprise_context>',
+    JSON.stringify(context.long_term_memory.enterprise_context),
+    '</enterprise_context>',
+    '企业知识只用于提供背景与建议。引用时必须把 source_ref 写入 evidence_refs；不得把它自动标记为已确认岗位事实。',
     '<task_state>',
     JSON.stringify({
       task: context.task_state.task,

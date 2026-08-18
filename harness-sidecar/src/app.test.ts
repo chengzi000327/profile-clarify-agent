@@ -49,6 +49,26 @@ const request: HarnessRequest = {
     agent_run_id: 'run-demo',
     trace_id: 'trace-demo',
   },
+  enterprise_context: {
+    query: {
+      role_session_id: state.id,
+      task: 'CLARIFY_MESSAGE',
+      department: state.department,
+      job_family: '产品',
+      query_terms: ['产品', '成功标准'],
+    },
+    hits: [{
+      knowledge_id: 'EK-ROLE-PM-001',
+      category: 'ROLE_PROFILE_CASE',
+      title: '企业产品经理成功画像案例',
+      summary: '成功画像案例摘要。',
+      source_ref: 'mock://role-profile/enterprise-pm',
+      source_version: '2026.08',
+      relevance_score: 120,
+      match_reasons: ['任务类别匹配', '岗位族一致'],
+    }],
+    truncated: false,
+  },
   maximum_transitions: 10,
   structured_output_repair_attempts: 1,
 }
@@ -81,10 +101,22 @@ describe('Harness sidecar', () => {
       role: { title: '商业化产品负责人' },
       state_revision: 1,
     })
+    expect(context.long_term_memory.enterprise_context).toEqual(request.enterprise_context)
     expect(context.task_state).toMatchObject({
       task: 'CLARIFY_MESSAGE',
       current_user_role: 'MANAGER',
     })
+  })
+
+  it('adds traceable enterprise knowledge as advisory context rather than confirmed facts', () => {
+    const prompt = buildTaskPrompt(request)
+    expect(prompt).toContain('<enterprise_context>')
+    expect(prompt).toContain('mock://role-profile/enterprise-pm')
+    expect(prompt).toContain('2026.08')
+    expect(prompt).toContain('任务类别匹配')
+    expect(prompt).toContain('企业知识只用于提供背景与建议')
+    expect(prompt).toContain('source_ref 写入 evidence_refs')
+    expect(prompt).toContain('不得把它自动标记为已确认岗位事实')
   })
 
   it('loads only the core and current task prompt', () => {

@@ -23,8 +23,11 @@ const config = loadConfig({
   HC_EVENT_SECRET: 'test-hc-event-secret-that-is-at-least-32-characters',
 })
 
+const capturedHarnessRequests: HarnessRequest[] = []
+
 class TestHarnessStub implements HarnessAdapter {
   async run(request: HarnessRequest, hooks: HarnessHooks): Promise<HarnessResult> {
+    capturedHarnessRequests.push(structuredClone(request))
     const { tenant_id: _tenantId, ...roleState } = request.role_state
     let toolCount = 0
     const tool = async (name: string, args: unknown, result: unknown): Promise<void> => {
@@ -72,7 +75,7 @@ class TestHarnessStub implements HarnessAdapter {
       long_term_memory: {
         source: 'BUSINESS_DATABASE',
         role_state: roleState,
-        enterprise_context: null,
+        enterprise_context: request.enterprise_context,
       },
       task_state: {
         task: request.task,
@@ -271,6 +274,7 @@ describe('Role Clarifier API', () => {
   let store: MemoryStore
 
   beforeEach(async () => {
+    capturedHarnessRequests.length = 0
     store = new MemoryStore()
     app = await buildApp(config, { store, harness: testHarness })
   })
@@ -938,6 +942,123 @@ describe('Role Clarifier API', () => {
     })
     const context = trace.events.find((event: { type: string }) => event.type === 'context.snapshot')
     expect(context.payload.task_state.current_user_role).toBe('HR')
+  })
+
+  it('Agent Run 只把检索命中摘要与来源注入 Harness', async () => {
+    const managerCookie = await login(app, 'manager-demo')
+    const response = await app.inject({
+      method: 'POST',
+      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/messages`,
+      headers: { cookie: managerCookie },
+      payload: { content: '这个岗位半年成功标准是什么' },
+    })
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const status = await app.inject({
+        method: 'GET',
+        url: `/api/v1/agent-runs/${response.json().run_id}`,
+        headers: { cookie: managerCookie },
+      })
+      if (status.json().run.status === 'COMPLETED') break
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+
+    expect(capturedHarnessRequests.at(-1)?.enterprise_context.hits[0]).toMatchObject({
+      knowledge_id: 'EK-ROLE-PM-001',
+      source_ref: 'mock://role-profile/enterprise-pm',
+    })
+    expect(JSON.stringify(capturedHarnessRequests.at(-1)?.enterprise_context)).not.toContain('候选人')
+  })
+
+  it('企业上下文检索失败时记录安全事件并使用空上下文继续 Run', async () => {
+    capturedHarnessRequests.length = 0
+    const failingApp = await buildApp(config, {
+      store: new MemoryStore(),
+      harness: testHarness,
+      enterpriseContextRetriever: {
+        retrieve: async () => { throw new Error('database unavailable with internal details') },
+      },
+    })
+    const managerCookie = await login(failingApp, 'manager-demo')
+    const submitted = await failingApp.inject({
+      method: 'POST',
+      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/messages`,
+      headers: { cookie: managerCookie },
+      payload: { content: '继续澄清' },
+    })
+    let runStatus = ''
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const status = await failingApp.inject({
+        method: 'GET',
+        url: `/api/v1/agent-runs/${submitted.json().run_id}`,
+        headers: { cookie: managerCookie },
+      })
+      runStatus = status.json().run.status
+      if (runStatus === 'COMPLETED') break
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    const adminCookie = await login(failingApp, 'admin-demo')
+    const trace = await failingApp.inject({
+      method: 'GET',
+      url: `/api/v1/agent-runs/${submitted.json().run_id}/trace`,
+      headers: { cookie: adminCookie },
+    })
+
+    expect(runStatus).toBe('COMPLETED')
+    expect(trace.json().events).toContainEqual(expect.objectContaining({
+      type: 'context.retrieval_failed',
+      payload: {
+        code: 'ENTERPRISE_CONTEXT_UNAVAILABLE',
+        task: 'CLARIFY_MESSAGE',
+      },
+    }))
+    expect(JSON.stringify(trace.json())).not.toContain('database unavailable')
+    expect(capturedHarnessRequests.at(-1)?.enterprise_context.hits).toEqual([])
+    await failingApp.close()
+  })
+
+  it('关闭企业上下文检索时不调用 Retriever，也不记录失败事件', async () => {
+    let retrievalCalls = 0
+    const disabledConfig = loadConfig({
+      NODE_ENV: 'test',
+      SESSION_SECRET: 'test-session-secret-that-is-long-enough',
+      ENTERPRISE_CONTEXT_RETRIEVAL_ENABLED: 'false',
+    })
+    const disabledApp = await buildApp(disabledConfig, {
+      store: new MemoryStore(),
+      harness: testHarness,
+      enterpriseContextRetriever: {
+        retrieve: async () => {
+          retrievalCalls += 1
+          throw new Error('must not run')
+        },
+      },
+    })
+    const managerCookie = await login(disabledApp, 'manager-demo')
+    const submitted = await disabledApp.inject({
+      method: 'POST',
+      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/messages`,
+      headers: { cookie: managerCookie },
+      payload: { content: '继续澄清' },
+    })
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const status = await disabledApp.inject({
+        method: 'GET',
+        url: `/api/v1/agent-runs/${submitted.json().run_id}`,
+        headers: { cookie: managerCookie },
+      })
+      if (status.json().run.status === 'COMPLETED') break
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    const adminCookie = await login(disabledApp, 'admin-demo')
+    const trace = await disabledApp.inject({
+      method: 'GET',
+      url: `/api/v1/agent-runs/${submitted.json().run_id}/trace`,
+      headers: { cookie: adminCookie },
+    })
+    expect(retrievalCalls).toBe(0)
+    expect(trace.json().events.map((event: { type: string }) => event.type))
+      .not.toContain('context.retrieval_failed')
+    await disabledApp.close()
   })
 
   it('消息接口立即落库并返回 202，企业管理员可读取完整执行 Trace', async () => {

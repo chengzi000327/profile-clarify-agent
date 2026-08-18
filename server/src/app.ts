@@ -50,6 +50,7 @@ import {
 } from './integrations/mock-hris.js'
 import { HcEventService } from './services/hc-event-service.js'
 import { NotificationOutboxDispatcher } from './services/notification-outbox-dispatcher.js'
+import { EnterpriseContextRetriever } from './services/enterprise-context-retriever.js'
 
 const IdParamsSchema = z.object({ id: z.string().uuid() })
 const HcParamsSchema = z.object({ request_id: z.string().min(1).max(100) })
@@ -120,6 +121,7 @@ export interface AppDependencies {
   store?: ApplicationStore
   feishuClient?: FeishuClientLike
   harness?: HarnessAdapter
+  enterpriseContextRetriever?: Pick<EnterpriseContextRetriever, 'retrieve'>
 }
 
 const recoverInterruptedRuns = async (store: ApplicationStore): Promise<void> => {
@@ -210,11 +212,14 @@ export const buildApp = async (
   await recoverInterruptedRuns(store)
   const roleService = new RoleService(store)
   const hcEventService = new HcEventService(store)
+  const enterpriseContextRetriever = dependencies.enterpriseContextRetriever
+    ?? new EnterpriseContextRetriever(store)
   const runner = new AgentRunner(
     store,
     roleService,
     dependencies.harness ?? new SidecarHarnessAdapter(config),
     config,
+    enterpriseContextRetriever,
   )
   const feishuClient = dependencies.feishuClient ?? new FeishuOpenApiClient(config)
   const feishu = new FeishuGateway(

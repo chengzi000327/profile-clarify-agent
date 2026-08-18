@@ -28,6 +28,10 @@ const ConfigSchema = z.object({
   DEEPSEEK_PRO_MODEL: z.string().default('deepseek-v4-pro'),
   AGENT_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(4),
   TOOL_TIMEOUT_MS: z.coerce.number().int().min(100).default(5_000),
+  ENTERPRISE_CONTEXT_RETRIEVAL_ENABLED: z.preprocess(
+    (value) => value === undefined ? true : value === true || value === 'true' || value === '1',
+    z.boolean(),
+  ),
   HC_EVENT_SECRET: z.string().min(32).optional(),
   HC_EVENT_MAX_SKEW_SECONDS: z.coerce.number().int().min(30).max(900).default(300),
   NOTIFICATION_DISPATCH_ENABLED: z.preprocess(
