@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import AdminTraceConsole from './AdminTraceConsole.jsx';
 import ClarifierMark from './ClarifierMark.jsx';
+import { hcProgress } from '../hc-progress.js';
 
 const roleLabel = { MANAGER: '用人经理', HR: 'HR 招聘负责人', ADMIN: '企业管理员' };
 const recruitmentLabel = {
@@ -13,20 +14,6 @@ const recruitmentLabel = {
   ORGANIZATION_ADJUSTMENT: '组织调整', OTHER: '其他补充',
 };
 const formatDate = (value) => new Date(value).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' });
-const hcProgress = (hc) => {
-  if (hc.clarification_status === 'PROFILE_READY') {
-    return {
-      status: hc.role_stage === 'PROFILE_DRAFT' ? '画像待确认' : '画像已生成',
-      action: '查看并继续',
-      tone: 'ready',
-    };
-  }
-  if (hc.clarification_status === 'IN_PROGRESS' || hc.role_session_id) {
-    return { status: '澄清中', action: '进入原会话', tone: 'continue' };
-  }
-  return { status: '待开始', action: '开始澄清', tone: 'new' };
-};
-
 export default function HcApprovalLanding({
   actor, approvals, loading, error, activeView, onOpenHc,
   onOpenApprovals, onOpenProfile, onOpenTrace, onLogout,

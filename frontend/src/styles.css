@@ -2043,6 +2043,7 @@ textarea:focus-visible {
 
 .hc-choice-action strong { color: var(--blue); font-size: 10px; }
 .hc-choice-action.continue strong { color: #16815d; }
+.hc-choice-action.reminded strong { color: #0d78a8; }
 .hc-choice-action.ready strong { color: #7b4bb7; }
 .hc-choice-action svg { position: absolute; top: 50%; right: 0; color: var(--blue); transform: translateY(-50%); }
 
