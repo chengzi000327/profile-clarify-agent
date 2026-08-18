@@ -49,6 +49,7 @@ import {
   verifyMockHrisEvent,
 } from './integrations/mock-hris.js'
 import { HcEventService } from './services/hc-event-service.js'
+import { NotificationOutboxDispatcher } from './services/notification-outbox-dispatcher.js'
 
 const IdParamsSchema = z.object({ id: z.string().uuid() })
 const HcParamsSchema = z.object({ request_id: z.string().min(1).max(100) })
@@ -215,14 +216,22 @@ export const buildApp = async (
     dependencies.harness ?? new SidecarHarnessAdapter(config),
     config,
   )
+  const feishuClient = dependencies.feishuClient ?? new FeishuOpenApiClient(config)
   const feishu = new FeishuGateway(
     config,
     store,
     roleService,
     runner,
-    dependencies.feishuClient ?? new FeishuOpenApiClient(config),
+    feishuClient,
     (error) => app.log.error({ err: error }, 'Feishu message processing failed'),
   )
+  await feishu.initializeBindings()
+  const notificationDispatcher = new NotificationOutboxDispatcher(
+    store,
+    feishuClient,
+    config,
+  )
+  notificationDispatcher.start()
 
   await app.register(cookie, {
     secret: config.SESSION_SECRET,
@@ -997,6 +1006,7 @@ export const buildApp = async (
   }))
 
   app.addHook('onClose', async () => {
+    notificationDispatcher.stop()
     await store.close()
   })
 

@@ -577,9 +577,17 @@ describe('Role Clarifier API', () => {
       FEISHU_APP_SECRET: 'test-secret',
       FEISHU_VERIFICATION_TOKEN: 'verification-token',
       FEISHU_WORKSPACE_ID: 'conversation-first-demo',
+      FEISHU_USER_MAPPINGS_JSON: JSON.stringify({
+        ou_manager_one: {
+          account_id: 'manager-demo',
+          display_name: '用人经理 · 陈曦',
+          role: 'MANAGER',
+        },
+      }),
     })
+    const feishuStore = new MemoryStore()
     const feishuApp = await buildApp(feishuConfig, {
-      store: new MemoryStore(),
+      store: feishuStore,
       harness: testHarness,
       feishuClient: {
         configured: () => true,
@@ -589,8 +597,14 @@ describe('Role Clarifier API', () => {
         sendCard: async (chatId, card) => {
           cards.push({ chatId, card })
         },
+        sendCardToOpenId: async () => {},
       },
     })
+    expect(await feishuStore.getUserChannelBinding(
+      'tenant-demo',
+      'manager-demo',
+      'FEISHU',
+    )).toMatchObject({ recipient_id: 'ou_manager_one', status: 'ACTIVE' })
     const challenge = await feishuApp.inject({
       method: 'POST',
       url: '/api/v1/integrations/feishu/events',

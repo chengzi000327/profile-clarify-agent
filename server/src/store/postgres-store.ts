@@ -8,6 +8,7 @@ import {
   ilike,
   inArray,
   isNull,
+  lt,
   lte,
   or,
   sql,
@@ -44,7 +45,14 @@ import type {
   StoredUser,
   TraceAccessAuditRecord,
 } from './types.js'
-import type { ApprovedHcIngestion } from './closure-types.js'
+import type {
+  ApprovedHcIngestion,
+  NotificationClaim,
+  NotificationFailureUpdate,
+  NotificationOutboxRecord,
+  NotificationRetryUpdate,
+  UserChannelBindingRecord,
+} from './closure-types.js'
 
 const iso = (value: Date | string): string =>
   value instanceof Date ? value.toISOString() : new Date(value).toISOString()
@@ -52,6 +60,8 @@ const iso = (value: Date | string): string =>
 type RoleSessionRow = typeof schema.roleSessions.$inferSelect
 type HcApprovalRow = typeof schema.hcApprovals.$inferSelect
 type EnterpriseKnowledgeRow = typeof schema.enterpriseKnowledgeItems.$inferSelect
+type NotificationOutboxRow = typeof schema.notificationOutbox.$inferSelect
+type UserChannelBindingRow = typeof schema.userChannelBindings.$inferSelect
 type ArtifactRow = typeof schema.artifacts.$inferSelect
 type AgentRunRow = typeof schema.agentRuns.$inferSelect
 type AgentEventRow = typeof schema.agentRunEvents.$inferSelect
@@ -115,6 +125,37 @@ const enterpriseKnowledgeFromRow = (row: EnterpriseKnowledgeRow): EnterpriseKnow
   status: row.status,
   valid_from: iso(row.validFrom),
   valid_to: row.validTo ? iso(row.validTo) : null,
+  updated_at: iso(row.updatedAt),
+})
+
+const notificationFromRow = (row: NotificationOutboxRow): NotificationOutboxRecord => ({
+  id: row.id,
+  tenant_id: row.tenantId,
+  task_id: row.taskId,
+  dedupe_key: row.dedupeKey,
+  channel: row.channel,
+  recipient_user_id: row.recipientUserId,
+  template: row.template,
+  payload: row.payload,
+  status: row.status,
+  attempt_count: row.attemptCount,
+  next_attempt_at: iso(row.nextAttemptAt),
+  locked_by: row.lockedBy,
+  locked_until: row.lockedUntil ? iso(row.lockedUntil) : null,
+  last_error_code: row.lastErrorCode,
+  sent_at: row.sentAt ? iso(row.sentAt) : null,
+  created_at: iso(row.createdAt),
+  updated_at: iso(row.updatedAt),
+})
+
+const userChannelBindingFromRow = (row: UserChannelBindingRow): UserChannelBindingRecord => ({
+  tenant_id: row.tenantId,
+  user_id: row.userId,
+  channel: row.channel,
+  recipient_type: row.recipientType,
+  recipient_id: row.recipientId,
+  status: row.status,
+  verified_at: iso(row.verifiedAt),
   updated_at: iso(row.updatedAt),
 })
 
@@ -377,6 +418,166 @@ export class PostgresStore implements ApplicationStore {
         })
         .onConflictDoNothing({ target: schema.notificationOutbox.dedupeKey })
       return { inserted: true }
+    })
+  }
+
+  async claimDueNotifications(input: NotificationClaim): Promise<NotificationOutboxRecord[]> {
+    return this.db.transaction(async (tx) => {
+      const now = new Date(input.now)
+      const rows = await tx
+        .select()
+        .from(schema.notificationOutbox)
+        .where(or(
+          and(
+            inArray(schema.notificationOutbox.status, ['PENDING', 'RETRY']),
+            lte(schema.notificationOutbox.nextAttemptAt, now),
+          ),
+          and(
+            eq(schema.notificationOutbox.status, 'PROCESSING'),
+            lt(schema.notificationOutbox.lockedUntil, now),
+          ),
+        ))
+        .orderBy(
+          asc(schema.notificationOutbox.nextAttemptAt),
+          asc(schema.notificationOutbox.createdAt),
+          asc(schema.notificationOutbox.id),
+        )
+        .limit(input.limit)
+        .for('update', { skipLocked: true })
+      const claimed: NotificationOutboxRecord[] = []
+      for (const row of rows) {
+        const [updated] = await tx
+          .update(schema.notificationOutbox)
+          .set({
+            status: 'PROCESSING',
+            attemptCount: row.attemptCount + 1,
+            lockedBy: input.worker_id,
+            lockedUntil: new Date(input.locked_until),
+            updatedAt: now,
+          })
+          .where(eq(schema.notificationOutbox.id, row.id))
+          .returning()
+        if (updated) claimed.push(notificationFromRow(updated))
+      }
+      return claimed
+    })
+  }
+
+  async getNotification(id: string): Promise<NotificationOutboxRecord | null> {
+    const row = await this.db.query.notificationOutbox.findFirst({
+      where: eq(schema.notificationOutbox.id, id),
+    })
+    return row ? notificationFromRow(row) : null
+  }
+
+  async getUserChannelBinding(
+    tenantId: string,
+    userId: string,
+    channel: 'FEISHU',
+  ): Promise<UserChannelBindingRecord | null> {
+    const row = await this.db.query.userChannelBindings.findFirst({
+      where: and(
+        eq(schema.userChannelBindings.tenantId, tenantId),
+        eq(schema.userChannelBindings.userId, userId),
+        eq(schema.userChannelBindings.channel, channel),
+      ),
+    })
+    return row ? userChannelBindingFromRow(row) : null
+  }
+
+  async upsertUserChannelBinding(binding: UserChannelBindingRecord): Promise<void> {
+    await this.db
+      .insert(schema.userChannelBindings)
+      .values({
+        tenantId: binding.tenant_id,
+        userId: binding.user_id,
+        channel: binding.channel,
+        recipientType: binding.recipient_type,
+        recipientId: binding.recipient_id,
+        status: binding.status,
+        verifiedAt: new Date(binding.verified_at),
+        updatedAt: new Date(binding.updated_at),
+      })
+      .onConflictDoUpdate({
+        target: [
+          schema.userChannelBindings.tenantId,
+          schema.userChannelBindings.userId,
+          schema.userChannelBindings.channel,
+        ],
+        set: {
+          recipientType: binding.recipient_type,
+          recipientId: binding.recipient_id,
+          status: binding.status,
+          verifiedAt: new Date(binding.verified_at),
+          updatedAt: new Date(binding.updated_at),
+        },
+      })
+  }
+
+  async requeueUnboundNotificationsForUser(
+    tenantId: string,
+    userId: string,
+    nextAttemptAt: string,
+  ): Promise<number> {
+    const rows = await this.db
+      .update(schema.notificationOutbox)
+      .set({
+        status: 'PENDING',
+        attemptCount: 0,
+        nextAttemptAt: new Date(nextAttemptAt),
+        lockedBy: null,
+        lockedUntil: null,
+        lastErrorCode: null,
+        updatedAt: new Date(nextAttemptAt),
+      })
+      .where(and(
+        eq(schema.notificationOutbox.tenantId, tenantId),
+        eq(schema.notificationOutbox.recipientUserId, userId),
+        eq(schema.notificationOutbox.status, 'UNBOUND'),
+      ))
+      .returning({ id: schema.notificationOutbox.id })
+    return rows.length
+  }
+
+  async markNotificationSent(id: string, workerId: string, sentAt: string): Promise<void> {
+    await this.updateClaimedNotification(id, workerId, {
+      status: 'SENT',
+      sentAt: new Date(sentAt),
+      lockedBy: null,
+      lockedUntil: null,
+      lastErrorCode: null,
+      updatedAt: new Date(sentAt),
+    })
+  }
+
+  async markNotificationRetry(input: NotificationRetryUpdate): Promise<void> {
+    await this.updateClaimedNotification(input.id, input.worker_id, {
+      status: 'RETRY',
+      nextAttemptAt: new Date(input.next_attempt_at),
+      lockedBy: null,
+      lockedUntil: null,
+      lastErrorCode: input.error_code,
+      updatedAt: new Date(input.updated_at),
+    })
+  }
+
+  async markNotificationUnbound(id: string, workerId: string, updatedAt: string): Promise<void> {
+    await this.updateClaimedNotification(id, workerId, {
+      status: 'UNBOUND',
+      lockedBy: null,
+      lockedUntil: null,
+      lastErrorCode: null,
+      updatedAt: new Date(updatedAt),
+    })
+  }
+
+  async markNotificationDead(input: NotificationFailureUpdate): Promise<void> {
+    await this.updateClaimedNotification(input.id, input.worker_id, {
+      status: 'DEAD',
+      lockedBy: null,
+      lockedUntil: null,
+      lastErrorCode: input.error_code,
+      updatedAt: new Date(input.updated_at),
     })
   }
 
@@ -1165,6 +1366,21 @@ export class PostgresStore implements ApplicationStore {
       reason: typeof row.metadata.reason === 'string' ? row.metadata.reason : null,
       created_at: iso(row.createdAt),
     }))
+  }
+
+  private async updateClaimedNotification(
+    id: string,
+    workerId: string,
+    values: Partial<typeof schema.notificationOutbox.$inferInsert>,
+  ): Promise<void> {
+    await this.db
+      .update(schema.notificationOutbox)
+      .set(values)
+      .where(and(
+        eq(schema.notificationOutbox.id, id),
+        eq(schema.notificationOutbox.status, 'PROCESSING'),
+        eq(schema.notificationOutbox.lockedBy, workerId),
+      ))
   }
 
   private makeDefaultPolicy(roleSessionId: string): ClarificationPolicy {

@@ -29,8 +29,12 @@ import type {
 } from './types.js'
 import type {
   ApprovedHcIngestion,
+  NotificationClaim,
+  NotificationFailureUpdate,
   NotificationOutboxRecord,
+  NotificationRetryUpdate,
   RoleClarificationTaskRecord,
+  UserChannelBindingRecord,
 } from './closure-types.js'
 import { createDemoAggregate, demoHcApprovals, demoUsers } from './seed.js'
 import { demoEnterpriseKnowledge } from './enterprise-knowledge-seed.js'
@@ -54,6 +58,7 @@ export class MemoryStore implements ApplicationStore {
   private readonly enterpriseKnowledge = new Map<string, EnterpriseKnowledgeItem>()
   private readonly clarificationTasks = new Map<string, RoleClarificationTaskRecord>()
   private readonly notifications = new Map<string, NotificationOutboxRecord>()
+  private readonly userChannelBindings = new Map<string, UserChannelBindingRecord>()
 
   constructor(
     private readonly initialEnterpriseKnowledge: readonly EnterpriseKnowledgeItem[] = demoEnterpriseKnowledge,
@@ -137,6 +142,130 @@ export class MemoryStore implements ApplicationStore {
 
   async listNotificationsForTest(): Promise<NotificationOutboxRecord[]> {
     return clone([...this.notifications.values()])
+  }
+
+  async claimDueNotifications(input: NotificationClaim): Promise<NotificationOutboxRecord[]> {
+    const due = [...this.notifications.values()]
+      .filter((notification) =>
+        (
+          ['PENDING', 'RETRY'].includes(notification.status) &&
+          notification.next_attempt_at <= input.now
+        ) || (
+          notification.status === 'PROCESSING' &&
+          notification.locked_until !== null &&
+          notification.locked_until < input.now
+        ),
+      )
+      .sort((left, right) =>
+        left.next_attempt_at.localeCompare(right.next_attempt_at) ||
+        left.created_at.localeCompare(right.created_at) ||
+        left.id.localeCompare(right.id),
+      )
+      .slice(0, input.limit)
+    return due.map((notification) => {
+      const claimed: NotificationOutboxRecord = {
+        ...notification,
+        status: 'PROCESSING',
+        attempt_count: notification.attempt_count + 1,
+        locked_by: input.worker_id,
+        locked_until: input.locked_until,
+        updated_at: input.now,
+      }
+      this.notifications.set(notification.dedupe_key, claimed)
+      return clone(claimed)
+    })
+  }
+
+  async getNotification(id: string): Promise<NotificationOutboxRecord | null> {
+    return clone(this.findNotification(id)?.record ?? null)
+  }
+
+  async getUserChannelBinding(
+    tenantId: string,
+    userId: string,
+    channel: 'FEISHU',
+  ): Promise<UserChannelBindingRecord | null> {
+    return clone(this.userChannelBindings.get(`${tenantId}:${userId}:${channel}`) ?? null)
+  }
+
+  async upsertUserChannelBinding(binding: UserChannelBindingRecord): Promise<void> {
+    this.userChannelBindings.set(
+      `${binding.tenant_id}:${binding.user_id}:${binding.channel}`,
+      clone(binding),
+    )
+  }
+
+  async requeueUnboundNotificationsForUser(
+    tenantId: string,
+    userId: string,
+    nextAttemptAt: string,
+  ): Promise<number> {
+    let updated = 0
+    for (const [key, notification] of this.notifications) {
+      if (
+        notification.tenant_id !== tenantId ||
+        notification.recipient_user_id !== userId ||
+        notification.status !== 'UNBOUND'
+      ) continue
+      this.notifications.set(key, {
+        ...notification,
+        status: 'PENDING',
+        attempt_count: 0,
+        next_attempt_at: nextAttemptAt,
+        locked_by: null,
+        locked_until: null,
+        last_error_code: null,
+        updated_at: nextAttemptAt,
+      })
+      updated += 1
+    }
+    return updated
+  }
+
+  async markNotificationSent(id: string, workerId: string, sentAt: string): Promise<void> {
+    this.updateClaimedNotification(id, workerId, (notification) => ({
+      ...notification,
+      status: 'SENT',
+      sent_at: sentAt,
+      locked_by: null,
+      locked_until: null,
+      last_error_code: null,
+      updated_at: sentAt,
+    }))
+  }
+
+  async markNotificationRetry(input: NotificationRetryUpdate): Promise<void> {
+    this.updateClaimedNotification(input.id, input.worker_id, (notification) => ({
+      ...notification,
+      status: 'RETRY',
+      next_attempt_at: input.next_attempt_at,
+      locked_by: null,
+      locked_until: null,
+      last_error_code: input.error_code,
+      updated_at: input.updated_at,
+    }))
+  }
+
+  async markNotificationUnbound(id: string, workerId: string, updatedAt: string): Promise<void> {
+    this.updateClaimedNotification(id, workerId, (notification) => ({
+      ...notification,
+      status: 'UNBOUND',
+      locked_by: null,
+      locked_until: null,
+      last_error_code: null,
+      updated_at: updatedAt,
+    }))
+  }
+
+  async markNotificationDead(input: NotificationFailureUpdate): Promise<void> {
+    this.updateClaimedNotification(input.id, input.worker_id, (notification) => ({
+      ...notification,
+      status: 'DEAD',
+      locked_by: null,
+      locked_until: null,
+      last_error_code: input.error_code,
+      updated_at: input.updated_at,
+    }))
   }
 
   async listEnterpriseKnowledge(
@@ -497,5 +626,24 @@ export class MemoryStore implements ApplicationStore {
   private replaceMap<K, V>(target: Map<K, V>, replacement: Map<K, V>): void {
     target.clear()
     for (const [key, value] of replacement) target.set(key, value)
+  }
+
+  private findNotification(
+    id: string,
+  ): { key: string; record: NotificationOutboxRecord } | null {
+    for (const [key, record] of this.notifications) {
+      if (record.id === id) return { key, record }
+    }
+    return null
+  }
+
+  private updateClaimedNotification(
+    id: string,
+    workerId: string,
+    update: (record: NotificationOutboxRecord) => NotificationOutboxRecord,
+  ): void {
+    const found = this.findNotification(id)
+    if (!found || found.record.status !== 'PROCESSING' || found.record.locked_by !== workerId) return
+    this.notifications.set(found.key, update(found.record))
   }
 }

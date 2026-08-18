@@ -30,6 +30,13 @@ const ConfigSchema = z.object({
   TOOL_TIMEOUT_MS: z.coerce.number().int().min(100).default(5_000),
   HC_EVENT_SECRET: z.string().min(32).optional(),
   HC_EVENT_MAX_SKEW_SECONDS: z.coerce.number().int().min(30).max(900).default(300),
+  NOTIFICATION_DISPATCH_ENABLED: z.preprocess(
+    (value) => value === true || value === 'true' || value === '1',
+    z.boolean().default(false),
+  ),
+  NOTIFICATION_POLL_INTERVAL_MS: z.coerce.number().int().min(100).default(5_000),
+  NOTIFICATION_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(20),
+  NOTIFICATION_LEASE_MS: z.coerce.number().int().min(1_000).default(30_000),
   FEISHU_ENABLED: z.preprocess(
     (value) => value === true || value === 'true' || value === '1',
     z.boolean().default(false),

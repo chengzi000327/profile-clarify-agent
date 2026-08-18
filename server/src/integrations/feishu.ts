@@ -50,12 +50,13 @@ const UserMappingSchema = z.record(
   }),
 )
 
-type FeishuCard = Record<string, unknown>
+export type FeishuCard = Record<string, unknown>
 
 export interface FeishuClientLike {
   configured(): boolean
   sendText?(chatId: string, text: string): Promise<void>
   sendCard(chatId: string, card: FeishuCard): Promise<void>
+  sendCardToOpenId(openId: string, card: FeishuCard): Promise<void>
 }
 
 export class FeishuOpenApiClient implements FeishuClientLike {
@@ -76,18 +77,23 @@ export class FeishuOpenApiClient implements FeishuClientLike {
     await this.sendMessage(chatId, 'interactive', JSON.stringify(card))
   }
 
+  async sendCardToOpenId(openId: string, card: FeishuCard): Promise<void> {
+    await this.sendMessage(openId, 'interactive', JSON.stringify(card), 'open_id')
+  }
+
   async sendText(chatId: string, text: string): Promise<void> {
     await this.sendMessage(chatId, 'text', JSON.stringify({ text: text.slice(0, 20_000) }))
   }
 
   private async sendMessage(
-    chatId: string,
+    receiveId: string,
     messageType: 'text' | 'interactive',
     content: string,
+    receiveIdType: 'chat_id' | 'open_id' = 'chat_id',
   ): Promise<void> {
     const token = await this.getTenantAccessToken()
     const response = await fetch(
-      `${this.config.FEISHU_API_BASE_URL}/im/v1/messages?receive_id_type=chat_id`,
+      `${this.config.FEISHU_API_BASE_URL}/im/v1/messages?receive_id_type=${receiveIdType}`,
       {
         method: 'POST',
         headers: {
@@ -95,7 +101,7 @@ export class FeishuOpenApiClient implements FeishuClientLike {
           'content-type': 'application/json; charset=utf-8',
         },
         body: JSON.stringify({
-          receive_id: chatId,
+          receive_id: receiveId,
           msg_type: messageType,
           content,
         }),
@@ -103,7 +109,14 @@ export class FeishuOpenApiClient implements FeishuClientLike {
     )
     const payload = await response.json() as { code?: number; msg?: string }
     if (!response.ok || payload.code !== 0) {
-      throw new Error(`Feishu send failed (${response.status}): ${payload.msg ?? 'unknown error'}`)
+      const code = response.status === 429
+        ? 'FEISHU_RATE_LIMITED'
+        : [401, 403].includes(response.status)
+          ? 'FEISHU_AUTH_FAILED'
+          : response.status >= 500
+            ? 'FEISHU_UNAVAILABLE'
+            : 'UNKNOWN_DELIVERY_ERROR'
+      throw Object.assign(new Error('Feishu message delivery failed'), { code })
     }
   }
 
@@ -132,7 +145,12 @@ export class FeishuOpenApiClient implements FeishuClientLike {
       expire?: number
     }
     if (!response.ok || payload.code !== 0 || !payload.tenant_access_token) {
-      throw new Error(`Feishu token failed (${response.status}): ${payload.msg ?? 'unknown error'}`)
+      const code = [401, 403].includes(response.status)
+        ? 'FEISHU_AUTH_FAILED'
+        : response.status >= 500
+          ? 'FEISHU_UNAVAILABLE'
+          : 'UNKNOWN_DELIVERY_ERROR'
+      throw Object.assign(new Error('Feishu access token request failed'), { code })
     }
     this.accessToken = {
       value: payload.tenant_access_token,
@@ -286,21 +304,70 @@ export class FeishuGateway {
     return { ok: true }
   }
 
+  async initializeBindings(): Promise<void> {
+    const now = new Date().toISOString()
+    for (const [openId, mapping] of Object.entries(this.mappings)) {
+      const user = await this.store.getUser(mapping.account_id)
+      if (!user?.active) continue
+      await this.store.upsertUserChannelBinding({
+        tenant_id: user.tenant_id,
+        user_id: user.user_id,
+        channel: 'FEISHU',
+        recipient_type: 'OPEN_ID',
+        recipient_id: openId,
+        status: 'ACTIVE',
+        verified_at: now,
+        updated_at: now,
+      })
+      await this.store.requeueUnboundNotificationsForUser(
+        user.tenant_id,
+        user.user_id,
+        now,
+      )
+    }
+  }
+
   private verifyToken(token: string): void {
     if (!this.config.FEISHU_VERIFICATION_TOKEN || token !== this.config.FEISHU_VERIFICATION_TOKEN) {
       throw new Error('Feishu verification token is invalid')
     }
   }
 
-  private actorFor(openId: string): ActorContext {
-    const tenantId = stableId('tenant', this.config.FEISHU_WORKSPACE_ID.trim().toLowerCase())
+  private async actorFor(openId: string): Promise<ActorContext> {
     const mapping = this.mappings[openId]
-    const accountId = mapping?.account_id ?? `feishu-${openId}`
+    if (mapping) {
+      const user = await this.store.getUser(mapping.account_id)
+      if (!user?.active) throw new Error('Mapped Feishu user is unavailable')
+      const now = new Date().toISOString()
+      await this.store.upsertUserChannelBinding({
+        tenant_id: user.tenant_id,
+        user_id: user.user_id,
+        channel: 'FEISHU',
+        recipient_type: 'OPEN_ID',
+        recipient_id: openId,
+        status: 'ACTIVE',
+        verified_at: now,
+        updated_at: now,
+      })
+      await this.store.requeueUnboundNotificationsForUser(
+        user.tenant_id,
+        user.user_id,
+        now,
+      )
+      return {
+        tenant_id: user.tenant_id,
+        user_id: user.user_id,
+        role: user.role,
+        display_name: user.display_name,
+      }
+    }
+    const tenantId = stableId('tenant', this.config.FEISHU_WORKSPACE_ID.trim().toLowerCase())
+    const accountId = `feishu-${openId}`
     return {
       tenant_id: tenantId,
       user_id: stableId('user', `${tenantId}\u0000${accountId.trim().toLowerCase()}`),
-      role: (mapping?.role ?? 'MANAGER') as ActorRole,
-      display_name: mapping?.display_name ?? `飞书用户${openId.slice(-4)}`,
+      role: 'MANAGER' as ActorRole,
+      display_name: `飞书用户${openId.slice(-4)}`,
     }
   }
 
@@ -351,7 +418,7 @@ export class FeishuGateway {
     }
     const text = parseTextMessage(message.content)
     if (!text) return
-    const actor = this.actorFor(sender.sender_id.open_id)
+    const actor = await this.actorFor(sender.sender_id.open_id)
     await this.store.saveUser({ ...actor, active: true })
 
     if (/^(新岗位|新建岗位|\/new)$/i.test(text)) {

@@ -65,6 +65,23 @@ export interface NotificationClaim {
   limit: number
 }
 
+export type NotificationDeliveryErrorCode =
+  | 'FEISHU_RATE_LIMITED'
+  | 'FEISHU_AUTH_FAILED'
+  | 'FEISHU_UNAVAILABLE'
+  | 'UNKNOWN_DELIVERY_ERROR'
+
+export interface NotificationFailureUpdate {
+  id: string
+  worker_id: string
+  error_code: NotificationDeliveryErrorCode
+  updated_at: string
+}
+
+export interface NotificationRetryUpdate extends NotificationFailureUpdate {
+  next_attempt_at: string
+}
+
 export interface FactDecisionCommit {
   role_session_id: string
   tenant_id: string

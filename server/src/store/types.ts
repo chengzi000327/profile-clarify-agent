@@ -11,7 +11,14 @@ import type {
   HcApproval,
   RoleState,
 } from '@role-clarifier/contracts'
-import type { ApprovedHcIngestion } from './closure-types.js'
+import type {
+  ApprovedHcIngestion,
+  NotificationClaim,
+  NotificationFailureUpdate,
+  NotificationOutboxRecord,
+  NotificationRetryUpdate,
+  UserChannelBindingRecord,
+} from './closure-types.js'
 
 export interface StoredUser extends ActorContext {
   active: boolean
@@ -122,6 +129,23 @@ export interface ApplicationStore {
   saveUser(user: StoredUser): Promise<void>
   claimExternalEvent(channel: string, eventId: string): Promise<boolean>
   ingestApprovedHcClosure(input: ApprovedHcIngestion): Promise<{ inserted: boolean }>
+  claimDueNotifications(input: NotificationClaim): Promise<NotificationOutboxRecord[]>
+  getNotification(id: string): Promise<NotificationOutboxRecord | null>
+  getUserChannelBinding(
+    tenantId: string,
+    userId: string,
+    channel: 'FEISHU',
+  ): Promise<UserChannelBindingRecord | null>
+  upsertUserChannelBinding(binding: UserChannelBindingRecord): Promise<void>
+  requeueUnboundNotificationsForUser(
+    tenantId: string,
+    userId: string,
+    nextAttemptAt: string,
+  ): Promise<number>
+  markNotificationSent(id: string, workerId: string, sentAt: string): Promise<void>
+  markNotificationRetry(input: NotificationRetryUpdate): Promise<void>
+  markNotificationUnbound(id: string, workerId: string, updatedAt: string): Promise<void>
+  markNotificationDead(input: NotificationFailureUpdate): Promise<void>
   listEnterpriseKnowledge(input: EnterpriseKnowledgeQuery): Promise<EnterpriseKnowledgeItem[]>
   listHcApprovals(actor: ActorContext): Promise<HcApproval[]>
   getHcApproval(requestId: string, actor: ActorContext): Promise<HcApproval | null>
