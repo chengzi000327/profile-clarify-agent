@@ -7,7 +7,7 @@ interface PendingRequest {
   timeout: NodeJS.Timeout
 }
 
-interface JsonRpcFrame {
+export interface JsonRpcFrame {
   jsonrpc?: string
   id?: number
   method?: string
@@ -39,6 +39,11 @@ export interface RuntimeTurn {
   inputTokens: number
   outputTokens: number
   finishReason: string | null
+}
+
+export interface SuccessfulToolCall {
+  name: string
+  arguments: unknown
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -100,6 +105,44 @@ const toolResultSucceeded = (event: Record<string, unknown>): boolean => {
   return content.some((block) => isRecord(block) && block.type === 'tool-result' && block.isError !== true)
 }
 
+const parseToolArguments = (value: unknown): unknown => {
+  if (typeof value !== 'string') return value
+  try {
+    return JSON.parse(value)
+  } catch {
+    return value
+  }
+}
+
+export const trackSuccessfulToolResult = (
+  frame: JsonRpcFrame,
+  calls: Map<string, SuccessfulToolCall>,
+): SuccessfulToolCall | undefined => {
+  const event = eventOf(frame)
+  if (!event) return undefined
+  const data = eventData(event)
+  if (event.type === 'tool/call' && typeof data.name === 'string') {
+    const callId = typeof data.callId === 'string' ? data.callId : `anonymous-${calls.size}`
+    calls.set(callId, { name: data.name, arguments: parseToolArguments(data.arguments) })
+    return undefined
+  }
+  if (event.type !== 'tool/result' || !toolResultSucceeded(event)) return undefined
+  const message = data.message
+  const source = isRecord(message) ? message.source : undefined
+  const callId = isRecord(source) && typeof source.callId === 'string' ? source.callId : ''
+  return calls.get(callId)
+}
+
+export const isExpectedTerminalToolResult = (
+  call: SuccessfulToolCall | undefined,
+  toolName: string | undefined,
+  expectedArtifactType: string | undefined,
+): boolean => {
+  if (!call || call.name !== toolName) return false
+  return expectedArtifactType === undefined
+    || (isRecord(call.arguments) && call.arguments.artifact_type === expectedArtifactType)
+}
+
 export class JsonRpcHarnessRuntime {
   private child: ChildProcessWithoutNullStreams | undefined
   private serial = 0
@@ -148,6 +191,8 @@ export class JsonRpcHarnessRuntime {
     prompt: string,
     signal: AbortSignal,
     maximumToolCalls = 10,
+    terminalToolName?: string,
+    terminalArtifactType?: string,
   ): Promise<RuntimeTurn> {
     await this.start()
     const frames: JsonRpcFrame[] = []
@@ -156,6 +201,7 @@ export class JsonRpcHarnessRuntime {
     let settled = false
     let resolveIdle!: () => void
     let rejectIdle!: (error: Error) => void
+    const streamedCalls = new Map<string, SuccessfulToolCall>()
     const idle = new Promise<void>((resolve, reject) => {
       resolveIdle = resolve
       rejectIdle = reject
@@ -174,6 +220,16 @@ export class JsonRpcHarnessRuntime {
           this.child?.kill('SIGTERM')
           return
         }
+      }
+      const successfulToolCall = trackSuccessfulToolResult(frame, streamedCalls)
+      if (isExpectedTerminalToolResult(
+        successfulToolCall,
+        terminalToolName,
+        terminalArtifactType,
+      ) && !settled) {
+        settled = true
+        resolveIdle()
+        return
       }
       if (!receiptSeen && expectedMessageId && event && isReceipt(event, expectedMessageId)) {
         receiptSeen = true

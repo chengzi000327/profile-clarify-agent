@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { artifactTypeForTask } from '@role-clarifier/contracts'
 import type { SidecarConfig } from './config.js'
 import { buildContextSnapshot, buildRepairPrompt, buildTaskPrompt } from './prompts.js'
 import { JsonRpcHarnessRuntime, type RuntimeTurn } from './protocol-client.js'
@@ -57,6 +58,9 @@ export const timeoutMsForTask = (
   ? configuredRoleProfile
   : configuredDefault
 
+export const terminalToolForTask = (task: HarnessTask): string | undefined =>
+  task === 'CLARIFY_MESSAGE' ? undefined : requiredSaveTool(task)
+
 const combineTurns = (turns: RuntimeTurn[]) => ({
   tools: turns.flatMap((turn) => turn.toolNames),
   successfulTools: turns.flatMap((turn) => turn.successfulToolNames),
@@ -79,6 +83,14 @@ const lastSuccessfulCall = (
   return undefined
 }
 
+const isExpectedArtifactCall = (
+  call: { name: string; arguments: unknown } | undefined,
+  expectedArtifactType: string | undefined,
+): boolean => call?.name === 'save_artifact_draft' && (
+  expectedArtifactType === undefined
+  || (isRecord(call.arguments) && call.arguments.artifact_type === expectedArtifactType)
+)
+
 export const recoverResultFromTool = (
   request: HarnessRequest,
   calls: Array<{ name: string; arguments: unknown }>,
@@ -92,6 +104,10 @@ export const recoverResultFromTool = (
     throw new Error(`Cannot recover structured result from ${toolName}`)
   }
   const args = call.arguments
+  const expectedArtifactType = artifactTypeForTask(request.task)
+  if (expectedArtifactType && args.artifact_type !== expectedArtifactType) {
+    throw new Error(`Saved artifact type ${String(args.artifact_type)} does not match ${request.task}`)
+  }
   if (request.task === 'CLARIFY_MESSAGE') {
     const identityCall = lastSuccessfulCall(calls, 'update_role_identity_draft')
     const roleIdentity = identityCall && isRecord(identityCall.arguments)
@@ -197,19 +213,30 @@ export class HarnessExecutor {
     try {
       const initialPrompt = buildTaskPrompt(request)
       modelEvents.push({ type: 'model.request', value: initialPrompt, attempt: 'initial' })
+      const terminalTool = terminalToolForTask(request.task)
+      const terminalArtifactType = artifactTypeForTask(request.task)
       const initial = await runtime.runTurn(
         sessionId,
         initialPrompt,
         runSignal,
         request.maximum_transitions,
+        terminalTool,
+        terminalArtifactType,
       )
       turns.push(initial)
       modelEvents.push({ type: 'model.response', value: initial.finalResponse, attempt: 'initial' })
-      if (initial.finishReason !== 'completed') {
-        throw new Error(`Harness turn ended with ${initial.finishReason ?? 'unknown reason'}`)
-      }
       let result: HarnessResult
-      try {
+      const initialPersisted = terminalTool !== undefined
+        && (terminalArtifactType === undefined
+          ? initial.successfulToolNames.includes(terminalTool)
+          : initial.successfulToolCalls.some((call) => isExpectedArtifactCall(call, terminalArtifactType)))
+      if (initial.finishReason !== 'completed') {
+        if (!initialPersisted) {
+          throw new Error(`Harness turn ended with ${initial.finishReason ?? 'unknown reason'}`)
+        }
+        result = recoverResultFromTool(request, initial.successfulToolCalls)
+        recoveredFromTool = true
+      } else try {
         result = parseHarnessResult(initial.finalResponse)
       } catch (error) {
         repaired = true
@@ -223,10 +250,16 @@ export class HarnessExecutor {
           repairPrompt,
           runSignal,
           Math.max(0, request.maximum_transitions - initial.toolNames.length),
+          terminalTool,
+          terminalArtifactType,
         )
         turns.push(repair)
         modelEvents.push({ type: 'model.response', value: repair.finalResponse, attempt: 'repair' })
-        if (repair.finishReason !== 'completed') {
+        const repairPersisted = terminalTool !== undefined
+          && (terminalArtifactType === undefined
+            ? repair.successfulToolNames.includes(terminalTool)
+            : repair.successfulToolCalls.some((call) => isExpectedArtifactCall(call, terminalArtifactType)))
+        if (repair.finishReason !== 'completed' && !repairPersisted) {
           throw new Error(`Harness repair turn ended with ${repair.finishReason ?? 'unknown reason'}`)
         }
         try {

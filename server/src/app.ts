@@ -5,6 +5,7 @@ import sensible from '@fastify/sensible'
 import Fastify, { type FastifyInstance } from 'fastify'
 import { ZodError, z } from 'zod'
 import {
+  artifactTypeForTask,
   ArtifactTypeSchema,
   ArtifactGenerateRequestSchema,
   ActorContextSchema,
@@ -495,6 +496,19 @@ export const buildApp = async (
         })
         .strict()
         .parse(body)
+      const expectedArtifactType = artifactTypeForTask(activeRun.run.task)
+      if (expectedArtifactType !== input.artifact_type) {
+        throw new DomainError(
+          'HARNESS_ARTIFACT_TYPE_MISMATCH',
+          '当前 Agent Run 不允许保存该产物类型',
+          409,
+          {
+            task: activeRun.run.task,
+            expected_artifact_type: expectedArtifactType ?? null,
+            actual_artifact_type: input.artifact_type,
+          },
+        )
+      }
       const artifact = await roleService.saveArtifactDraft(
         roleSessionId,
         actor,

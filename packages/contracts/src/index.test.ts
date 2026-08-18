@@ -8,6 +8,7 @@ import {
   FactCategorySchema,
   FactSchema,
   HcApprovalSchema,
+  artifactTypeForTask,
   PublicJDSchema,
   ROLE_CLARIFIER_PROMPT_VERSION,
   ROLE_CLARIFIER_SYSTEM_PROMPT,
@@ -74,6 +75,15 @@ describe('共享 Agent 规范', () => {
       'SUCCESS_CRITERION',
       'CONSTRAINT',
     ])
+  })
+
+  it.each([
+    ['GENERATE_ROLE_PROFILE', 'ROLE_PROFILE'],
+    ['GENERATE_ASSESSMENT', 'ASSESSMENT_SCORECARD'],
+    ['GENERATE_JD', 'PUBLIC_JD'],
+    ['GENERATE_HR_BRIEF', 'HR_RECRUITING_BRIEF'],
+  ] as const)('将 %s 映射为唯一的 %s 产物类型', (task, artifactType) => {
+    expect(artifactTypeForTask(task)).toBe(artifactType)
   })
 })
 

@@ -1316,6 +1316,73 @@ describe('Role Clarifier API', () => {
     await toolApp.close()
   })
 
+  it('内部产物工具拒绝与当前 Run 不匹配的类型，且不写入该草稿', async () => {
+    const toolStore = new MemoryStore()
+    let toolApp: FastifyInstance
+    let saveAttempt: { statusCode: number; json(): { error: { code: string } } } | undefined
+    const mismatchedArtifactHarness: HarnessAdapter = {
+      run: async (request) => {
+        saveAttempt = await toolApp.inject({
+          method: 'POST',
+          url: '/internal/v1/harness/tools/save_artifact_draft',
+          headers: {
+            authorization: `Bearer ${config.ROLE_AGENT_TOOL_TOKEN}`,
+            'x-harness-session-id': `role-${request.role_state.id}`,
+          },
+          payload: {
+            artifact_type: 'PUBLIC_JD',
+            content: {
+              title_and_basics: {
+                title: request.role_state.title,
+                location: '上海',
+                employment_type: '全职',
+                reporting_line: '产品负责人',
+              },
+              about_the_role: '错误类型不应写入。',
+              what_you_will_do: ['推动关键任务落地'],
+              what_we_look_for: ['具备结构化问题解决能力'],
+            },
+          },
+        })
+        throw new Error('测试在错误类型工具调用后停止本次 Run')
+      },
+    }
+    toolApp = await buildApp(config, { store: toolStore, harness: mismatchedArtifactHarness })
+    const managerCookie = await login(toolApp, 'manager-demo')
+    const before = (await toolApp.inject({
+      method: 'GET',
+      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}`,
+      headers: { cookie: managerCookie },
+    })).json()
+    const submitted = await toolApp.inject({
+      method: 'POST',
+      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/artifacts/ROLE_PROFILE/generate`,
+      headers: { cookie: managerCookie },
+      payload: {},
+    })
+    expect(submitted.statusCode, submitted.body).toBe(202)
+    const runId = submitted.json().run_id
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const status = await toolApp.inject({
+        method: 'GET',
+        url: `/api/v1/agent-runs/${runId}`,
+        headers: { cookie: managerCookie },
+      })
+      if (status.json().run.status === 'FAILED') break
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    expect(saveAttempt?.statusCode).toBe(409)
+    expect(saveAttempt?.json().error.code).toBe('HARNESS_ARTIFACT_TYPE_MISMATCH')
+    const after = (await toolApp.inject({
+      method: 'GET',
+      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}`,
+      headers: { cookie: managerCookie },
+    })).json()
+    expect(after.artifacts.filter((artifact: { type: string }) => artifact.type === 'PUBLIC_JD'))
+      .toHaveLength(before.artifacts.filter((artifact: { type: string }) => artifact.type === 'PUBLIC_JD').length)
+    await toolApp.close()
+  })
+
   it('待确认事实阻断岗位画像生成，经理确认后正式生效并使旧产物失效', async () => {
     const managerCookie = await login(app, 'manager-demo')
     const created = await submitFactAndWait(app, managerCookie, '半年内完成三个客户场景标准化')

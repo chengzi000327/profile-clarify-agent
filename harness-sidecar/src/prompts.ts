@@ -1,16 +1,10 @@
 import {
+  artifactTypeForTask,
   ROLE_CLARIFIER_SYSTEM_PROMPT,
   taskPromptForTask,
   type AgentContextSnapshot,
 } from '@role-clarifier/contracts'
-import type { HarnessRequest, HarnessTask } from './schemas.js'
-
-const artifactByTask: Partial<Record<HarnessTask, string>> = {
-  GENERATE_ROLE_PROFILE: 'ROLE_PROFILE',
-  GENERATE_ASSESSMENT: 'ASSESSMENT_SCORECARD',
-  GENERATE_JD: 'PUBLIC_JD',
-  GENERATE_HR_BRIEF: 'HR_RECRUITING_BRIEF',
-}
+import type { HarnessRequest } from './schemas.js'
 
 const projectInitialRoleState = (request: HarnessRequest): Record<string, unknown> => {
   const state = request.role_state
@@ -88,7 +82,7 @@ const taskInstructions = (request: HarnessRequest): string => {
       '最后返回 CALIBRATION_ADVICE JSON。',
     ].join('\n')
   }
-  const artifactType = artifactByTask[request.task]
+  const artifactType = artifactTypeForTask(request.task)
   return [
     `按当前 P-0x 任务规则生成 ${artifactType} 草稿；先调用 read_role_state。`,
     '随后调用 save_artifact_draft，artifact_type 与任务保持一致。',

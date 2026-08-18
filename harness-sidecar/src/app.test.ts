@@ -6,9 +6,11 @@ import {
   HarnessExecutor,
   maxTokensForTask,
   recoverResultFromTool,
+  terminalToolForTask,
   timeoutMsForTask,
 } from './executor.js'
 import { buildContextSnapshot, buildTaskPrompt } from './prompts.js'
+import { isExpectedTerminalToolResult, trackSuccessfulToolResult } from './protocol-client.js'
 import { parseHarnessResult, type HarnessRequest } from './schemas.js'
 
 const state: RoleState = {
@@ -223,6 +225,72 @@ describe('Harness sidecar', () => {
     expect(timeoutMsForTask('GENERATE_JD', 90_000, 240_000)).toBe(90_000)
   })
 
+  it('treats authoritative non-conversation writes as terminal, but keeps clarification conversational', () => {
+    expect(terminalToolForTask('GENERATE_ROLE_PROFILE')).toBe('save_artifact_draft')
+    expect(terminalToolForTask('GENERATE_ASSESSMENT')).toBe('save_artifact_draft')
+    expect(terminalToolForTask('EXTRACT_CANDIDATES')).toBe('save_candidate_evidence')
+    expect(terminalToolForTask('CLARIFY_MESSAGE')).toBeUndefined()
+  })
+
+  it('settles only after the authoritative tool result succeeds', () => {
+    const calls = new Map<string, { name: string; arguments: unknown }>()
+    expect(trackSuccessfulToolResult({
+      method: 'session.event',
+      params: {
+        event: {
+          type: 'tool/call',
+          data: {
+            callId: 'artifact-call',
+            name: 'save_artifact_draft',
+            arguments: JSON.stringify({ artifact_type: 'PUBLIC_JD' }),
+          },
+        },
+      },
+    }, calls)).toBeUndefined()
+    expect(trackSuccessfulToolResult({
+      method: 'session.event',
+      params: {
+        event: {
+          type: 'tool/result',
+          data: {
+            message: {
+              source: { callId: 'artifact-call' },
+              content: [{ type: 'tool-result', isError: true }],
+            },
+          },
+        },
+      },
+    }, calls)).toBeUndefined()
+    const successfulArtifact = trackSuccessfulToolResult({
+      method: 'session.event',
+      params: {
+        event: {
+          type: 'tool/result',
+          data: {
+            message: {
+              source: { callId: 'artifact-call' },
+              content: [{ type: 'tool-result', isError: false }],
+            },
+          },
+        },
+      },
+    }, calls)
+    expect(successfulArtifact).toMatchObject({
+      name: 'save_artifact_draft',
+      arguments: { artifact_type: 'PUBLIC_JD' },
+    })
+    expect(isExpectedTerminalToolResult(
+      successfulArtifact,
+      'save_artifact_draft',
+      'ROLE_PROFILE',
+    )).toBe(false)
+    expect(isExpectedTerminalToolResult(
+      { name: 'save_artifact_draft', arguments: { artifact_type: 'ROLE_PROFILE' } },
+      'save_artifact_draft',
+      'ROLE_PROFILE',
+    )).toBe(true)
+  })
+
   it('does not fabricate a canned conversation when model output is invalid', () => {
     expect(() => recoverResultFromTool({ ...request, message: '你能做什么？' }, []))
       .toThrow('Cannot recover a model-generated conversation')
@@ -282,6 +350,21 @@ describe('Harness sidecar', () => {
     )
     expect(result.kind).toBe('ARTIFACT')
   })
+
+  it.each([
+    ['GENERATE_ROLE_PROFILE', 'PUBLIC_JD'],
+    ['GENERATE_ASSESSMENT', 'ROLE_PROFILE'],
+    ['GENERATE_JD', 'ROLE_PROFILE'],
+    ['GENERATE_HR_BRIEF', 'PUBLIC_JD'],
+  ] as const)(
+    'refuses to recover %s from a saved %s artifact',
+    (task, artifactType) => {
+      expect(() => recoverResultFromTool(
+        { ...request, task, message: undefined },
+        [{ name: 'save_artifact_draft', arguments: { artifact_type: artifactType, content: {} } }],
+      )).toThrow('does not match')
+    },
+  )
 
   it('protects the run endpoint and returns executor output', async () => {
     const executor: ExecutorLike = {

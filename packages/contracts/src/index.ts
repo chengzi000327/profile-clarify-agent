@@ -376,6 +376,13 @@ export const ArtifactTypeSchema = z.enum([
 ])
 export type ArtifactType = z.infer<typeof ArtifactTypeSchema>
 
+export const artifactTypeForTask = (task: string): ArtifactType | undefined => ({
+  GENERATE_ROLE_PROFILE: 'ROLE_PROFILE',
+  GENERATE_ASSESSMENT: 'ASSESSMENT_SCORECARD',
+  GENERATE_JD: 'PUBLIC_JD',
+  GENERATE_HR_BRIEF: 'HR_RECRUITING_BRIEF',
+} as const)[task as 'GENERATE_ROLE_PROFILE' | 'GENERATE_ASSESSMENT' | 'GENERATE_JD' | 'GENERATE_HR_BRIEF']
+
 export const generatedArtifactContentSchema = (
   type: ArtifactType,
 ): typeof RoleProfileContentSchema | typeof AssessmentScorecardSchema | typeof PublicJDSchema | null => {
