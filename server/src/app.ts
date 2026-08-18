@@ -17,6 +17,7 @@ import {
   ClarificationPolicySchema,
   ConversationMessageSchema,
   FactCategorySchema,
+  FactDecisionRequestSchema,
   HumanDecisionSchema,
   HcApprovalSchema,
   LoginRequestSchema,
@@ -51,6 +52,7 @@ import {
 import { HcEventService } from './services/hc-event-service.js'
 import { NotificationOutboxDispatcher } from './services/notification-outbox-dispatcher.js'
 import { EnterpriseContextRetriever } from './services/enterprise-context-retriever.js'
+import { FactDecisionService } from './services/fact-decision-service.js'
 
 const IdParamsSchema = z.object({ id: z.string().uuid() })
 const HcParamsSchema = z.object({ request_id: z.string().min(1).max(100) })
@@ -211,6 +213,7 @@ export const buildApp = async (
   await store.initialize()
   await recoverInterruptedRuns(store)
   const roleService = new RoleService(store)
+  const factDecisionService = new FactDecisionService(store, roleService)
   const hcEventService = new HcEventService(store)
   const enterpriseContextRetriever = dependencies.enterpriseContextRetriever
     ?? new EnterpriseContextRetriever(store)
@@ -341,7 +344,12 @@ export const buildApp = async (
   app.setErrorHandler((error, request, reply) => {
     if (error instanceof DomainError) {
       return reply.status(error.statusCode).send({
-        error: { code: error.code, message: error.message, request_id: request.id },
+        error: {
+          code: error.code,
+          message: error.message,
+          ...(error.details ? { details: error.details } : {}),
+          request_id: request.id,
+        },
       })
     }
     if (error instanceof ZodError) {
@@ -671,22 +679,34 @@ export const buildApp = async (
     }
   })
 
+  app.post('/api/v1/role-sessions/:id/facts/:fact_id:decide', async (request) => {
+    const { id } = IdParamsSchema.parse(request.params)
+    const factId = z.string().min(1).max(200).parse(
+      suffixedParam(request.params, 'fact_id', 'decide'),
+    )
+    const body = FactDecisionRequestSchema.parse(request.body)
+    const effectiveActor = resolveTestActor(request.actor, body.test_role)
+    return factDecisionService.decide(id, factId, request.actor, effectiveActor, body)
+  })
+
   app.post('/api/v1/role-sessions/:id/facts:confirm', async (request) => {
     const { id } = IdParamsSchema.parse(request.params)
     const body = z
       .object({
         fact_ids: z.array(z.string()).min(1),
         expected_revision: z.number().int().nonnegative(),
+        test_role: AdminTestRoleSchema.optional(),
       })
+      .strict()
       .parse(request.body)
-    return {
-      state: await roleService.confirmFacts(
-        id,
-        request.actor,
-        body.fact_ids,
-        body.expected_revision,
-      ),
-    }
+    const effectiveActor = resolveTestActor(request.actor, body.test_role)
+    return factDecisionService.confirmBatch(
+      id,
+      body.fact_ids,
+      request.actor,
+      effectiveActor,
+      body.expected_revision,
+    )
   })
 
   app.post('/api/v1/role-sessions/:id/messages', async (request, reply) => {

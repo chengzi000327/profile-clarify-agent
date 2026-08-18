@@ -451,29 +451,6 @@ export class RoleService {
     return { state: this.filterState(state, actor), fact }
   }
 
-  async confirmFacts(
-    roleSessionId: string,
-    actor: ActorContext,
-    factIds: string[],
-    expectedRevision: number,
-  ): Promise<RoleState> {
-    const aggregate = await this.requireAggregate(roleSessionId, actor)
-    if (!['MANAGER', 'ADMIN'].includes(actor.role)) throw new DomainError('FORBIDDEN', '仅用人经理或企业管理员可确认岗位事实', 403)
-    assertRevision(aggregate.state.revision, expectedRevision)
-    const ids = new Set(factIds)
-    const timestamp = nowIso()
-    const state: RoleState = {
-      ...aggregate.state,
-      revision: aggregate.state.revision + 1,
-      facts: aggregate.state.facts.map((fact) =>
-        ids.has(fact.id) ? { ...fact, status: 'CONFIRMED' as const, updated_at: timestamp } : fact,
-      ),
-      updated_at: timestamp,
-    }
-    await this.persistState(state, aggregate.state.revision)
-    return this.filterState(state, actor)
-  }
-
   async assertArtifactGenerationAllowed(
     roleSessionId: string,
     actor: ActorContext,
@@ -489,6 +466,20 @@ export class RoleService {
     }
     if (artifactType !== 'HR_RECRUITING_BRIEF' && !['MANAGER', 'ADMIN'].includes(effectiveRole)) {
       throw new DomainError('FORBIDDEN', '该产物需要由用人经理生成', 403)
+    }
+    if (artifactType === 'ROLE_PROFILE') {
+      const pending = aggregate.state.facts.filter((fact) =>
+        fact.visible_to !== 'HR_ONLY'
+        && (fact.status === 'DRAFT' || fact.status === 'CONFLICTED'),
+      )
+      if (pending.length > 0) {
+        throw new DomainError(
+          'UNRESOLVED_FACTS_PENDING',
+          `还有 ${pending.length} 条岗位事实待确认`,
+          409,
+          { fact_ids: pending.map((fact) => fact.id), count: pending.length },
+        )
+      }
     }
     const missing = artifactDependencies[artifactType].filter(
       (dependency) => aggregate.state.latest_artifacts[dependency]?.status !== 'CONFIRMED',

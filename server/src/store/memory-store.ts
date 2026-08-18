@@ -423,6 +423,38 @@ export class MemoryStore implements ApplicationStore {
     return true
   }
 
+  async commitFactDecision(input: {
+    role_session_id: string
+    tenant_id: string
+    expected_revision: number
+    state: RoleState
+    artifacts: ArtifactEnvelope[]
+    decisions: DecisionRecord[]
+  }): Promise<boolean> {
+    const current = this.roles.get(input.role_session_id)
+    if (
+      !current
+      || current.state.tenant_id !== input.tenant_id
+      || current.state.revision !== input.expected_revision
+    ) return false
+
+    const next = clone(current)
+    next.state = clone(input.state)
+    for (const artifact of input.artifacts) {
+      const index = next.artifacts.findIndex((item) => item.id === artifact.id)
+      if (index < 0) throw new Error('Missing artifact in atomic fact decision')
+      next.artifacts[index] = clone(artifact)
+    }
+    const nextDecisions = [...this.decisions.map(clone), ...input.decisions.map(clone)]
+    this.roles.set(input.role_session_id, next)
+    this.decisions.splice(0, this.decisions.length, ...nextDecisions)
+    return true
+  }
+
+  listDecisionsForTest(): DecisionRecord[] {
+    return clone(this.decisions)
+  }
+
   async insertArtifact(artifact: ArtifactEnvelope): Promise<void> {
     const aggregate = this.roles.get(artifact.role_session_id)
     if (!aggregate) throw new Error('Missing role aggregate')

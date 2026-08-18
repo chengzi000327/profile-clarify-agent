@@ -7,6 +7,7 @@ import type {
   ArtifactType,
   ConversationMessage,
 } from '@role-clarifier/contracts'
+import { DomainError } from '@role-clarifier/domain'
 import type { AppConfig } from '../config.js'
 import type { AgentRunner } from '../agent/runner.js'
 import type { RoleService } from '../services/role-service.js'
@@ -445,9 +446,22 @@ export class FeishuGateway {
       [/生成.*HR.*画像|输出.*HR.*画像/i, 'HR_RECRUITING_BRIEF'],
     ]
     const requestedArtifact = artifactCommand.find(([pattern]) => pattern.test(text))?.[1]
-    const run = requestedArtifact
-      ? await this.runner.submitArtifact(role.id, actor, requestedArtifact)
-      : (await this.runner.submitMessage(role.id, actor, text)).run
+    let run
+    try {
+      run = requestedArtifact
+        ? await this.runner.submitArtifact(role.id, actor, requestedArtifact)
+        : (await this.runner.submitMessage(role.id, actor, text)).run
+    } catch (error) {
+      if (error instanceof DomainError && error.code === 'UNRESOLVED_FACTS_PENDING') {
+        const count = typeof error.details?.count === 'number' ? error.details.count : 1
+        await this.sendText(
+          message.chat_id,
+          `还有 ${count} 条岗位事实待确认。请先到 Web 工作台完成确认或修订，正式生效后再生成岗位画像。`,
+        )
+        return
+      }
+      throw error
+    }
 
     const completed = await this.waitForRun(run.id)
     if (completed.status !== 'COMPLETED') {

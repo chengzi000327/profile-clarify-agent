@@ -167,6 +167,14 @@ export interface ApplicationStore {
   ): Promise<RoleAggregate | null>
   createRoleAggregate(aggregate: RoleAggregate): Promise<void>
   saveRoleState(state: RoleState, expectedRevision: number): Promise<boolean>
+  commitFactDecision(input: {
+    role_session_id: string
+    tenant_id: string
+    expected_revision: number
+    state: RoleState
+    artifacts: ArtifactEnvelope[]
+    decisions: DecisionRecord[]
+  }): Promise<boolean>
   insertArtifact(artifact: ArtifactEnvelope): Promise<void>
   updateArtifact(artifact: ArtifactEnvelope): Promise<void>
   insertCandidates(

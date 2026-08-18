@@ -972,6 +972,61 @@ export class PostgresStore implements ApplicationStore {
     })
   }
 
+  async commitFactDecision(input: {
+    role_session_id: string
+    tenant_id: string
+    expected_revision: number
+    state: RoleState
+    artifacts: ArtifactEnvelope[]
+    decisions: DecisionRecord[]
+  }): Promise<boolean> {
+    return this.db.transaction(async (tx) => {
+      const rows = await tx
+        .update(schema.roleSessions)
+        .set({
+          title: input.state.title,
+          department: input.state.department,
+          stage: input.state.stage,
+          revision: input.state.revision,
+          businessState: roleBusinessState(input.state),
+          updatedAt: new Date(input.state.updated_at),
+        })
+        .where(and(
+          eq(schema.roleSessions.id, input.role_session_id),
+          eq(schema.roleSessions.tenantId, input.tenant_id),
+          eq(schema.roleSessions.revision, input.expected_revision),
+        ))
+        .returning({ id: schema.roleSessions.id })
+      if (rows.length !== 1) return false
+
+      for (const artifact of input.artifacts) {
+        const updated = await tx
+          .update(schema.artifacts)
+          .set({ status: artifact.status })
+          .where(and(
+            eq(schema.artifacts.id, artifact.id),
+            eq(schema.artifacts.roleSessionId, input.role_session_id),
+          ))
+          .returning({ id: schema.artifacts.id })
+        if (updated.length !== 1) throw new Error('Missing artifact in atomic fact decision')
+      }
+      if (input.decisions.length > 0) {
+        await tx.insert(schema.auditLogs).values(input.decisions.map((record) => ({
+          id: record.id,
+          tenantId: input.tenant_id,
+          roleSessionId: record.role_session_id,
+          actorUserId: record.actor_user_id,
+          action: record.action,
+          targetType: record.target_type,
+          targetId: record.target_id,
+          metadata: { ...record.metadata, audit_kind: 'HUMAN_DECISION' },
+          createdAt: new Date(record.created_at),
+        })))
+      }
+      return true
+    })
+  }
+
   async insertArtifact(artifact: ArtifactEnvelope): Promise<void> {
     await this.db.insert(schema.artifacts).values({
       id: artifact.id,

@@ -5,6 +5,8 @@ import {
   type AgentRun,
   type ArtifactType,
   type CandidateEvidence,
+  type Fact,
+  type RoleState,
 } from '@role-clarifier/contracts'
 import { buildApp, visibleAgentEvent } from './app.js'
 import type {
@@ -268,6 +270,44 @@ const login = async (
   })
   expect(response.statusCode).toBe(200)
   return cookieFrom(response)
+}
+
+const submitFactAndWait = async (
+  app: FastifyInstance,
+  cookie: string,
+  content: string,
+): Promise<{ run: AgentRun; fact: Fact; state: RoleState }> => {
+  const submitted = await app.inject({
+    method: 'POST',
+    url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/messages`,
+    headers: { cookie },
+    payload: { content },
+  })
+  expect(submitted.statusCode, submitted.body).toBe(202)
+  const runId = submitted.json().run_id
+  let run: AgentRun | undefined
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const status = await app.inject({
+      method: 'GET',
+      url: `/api/v1/agent-runs/${runId}`,
+      headers: { cookie },
+    })
+    run = status.json().run
+    if (run?.status === 'COMPLETED') break
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+  expect(run?.status).toBe('COMPLETED')
+  if (!run) throw new Error('Run did not complete')
+  const detail = (await app.inject({
+    method: 'GET',
+    url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}`,
+    headers: { cookie },
+  })).json()
+  const fact = detail.state.facts.find(
+    (item: { source_run_id: string | null }) => item.source_run_id === runId,
+  )
+  expect(fact).toBeDefined()
+  return { run, fact, state: detail.state }
 }
 
 describe('Role Clarifier API', () => {
@@ -697,7 +737,7 @@ describe('Role Clarifier API', () => {
       .toEqual(['HUMAN', 'AGENT'])
   })
 
-  it('飞书事件可开启同一岗位澄清链路并回传 Agent 与岗位画像卡片', async () => {
+  it('飞书事件可开启同一岗位澄清链路，待确认事实会引导经理回 Web 生效', async () => {
     const cards: Array<{ chatId: string; card: Record<string, unknown> }> = []
     const texts: Array<{ chatId: string; text: string }> = []
     const feishuConfig = loadConfig({
@@ -788,12 +828,12 @@ describe('Role Clarifier API', () => {
       url: '/api/v1/integrations/feishu/events',
       payload: event('om_002', '生成岗位画像'),
     })
-    for (let attempt = 0; attempt < 60 && cards.length < 1; attempt += 1) {
+    for (let attempt = 0; attempt < 60 && texts.length < 2; attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 10))
     }
-    expect(cards).toHaveLength(1)
-    expect(JSON.stringify(cards[0]?.card)).toContain('岗位画像')
-    expect(JSON.stringify(cards[0]?.card)).not.toContain('"tag":"a"')
+    expect(cards).toHaveLength(0)
+    expect(texts[1]?.text).toContain('岗位事实待确认')
+    expect(texts[1]?.text).toContain('Web 工作台')
 
     const duplicate = await feishuApp.inject({
       method: 'POST',
@@ -1189,6 +1229,176 @@ describe('Role Clarifier API', () => {
     expect(facts).toHaveLength(1)
     expect(output.structured_content.fact_id).toBe(facts[0].id)
     await toolApp.close()
+  })
+
+  it('待确认事实阻断岗位画像生成，经理确认后正式生效并使旧产物失效', async () => {
+    const managerCookie = await login(app, 'manager-demo')
+    const created = await submitFactAndWait(app, managerCookie, '半年内完成三个客户场景标准化')
+    const blocked = await app.inject({
+      method: 'POST',
+      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/artifacts/ROLE_PROFILE/generate`,
+      headers: { cookie: managerCookie },
+      payload: {},
+    })
+    expect(blocked.statusCode).toBe(409)
+    expect(blocked.json().error).toMatchObject({
+      code: 'UNRESOLVED_FACTS_PENDING',
+      details: { fact_ids: [created.fact.id], count: 1 },
+    })
+    expect(JSON.stringify(blocked.json().error.details)).not.toContain(created.fact.statement)
+
+    const confirmed = await app.inject({
+      method: 'POST',
+      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/facts/${created.fact.id}:decide`,
+      headers: { cookie: managerCookie },
+      payload: { decision: 'CONFIRM', expected_revision: created.state.revision },
+    })
+    expect(confirmed.statusCode, confirmed.body).toBe(200)
+    expect(confirmed.json().fact).toMatchObject({ id: created.fact.id, status: 'CONFIRMED' })
+    expect(confirmed.json().state.latest_artifacts).toMatchObject({
+      ROLE_PROFILE: { status: 'INVALIDATED' },
+      ASSESSMENT_SCORECARD: { status: 'INVALIDATED' },
+    })
+    expect(confirmed.json().invalidated_artifact_ids).toHaveLength(2)
+
+    const allowed = await app.inject({
+      method: 'POST',
+      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/artifacts/ROLE_PROFILE/generate`,
+      headers: { cookie: managerCookie },
+      payload: {},
+    })
+    expect(allowed.statusCode, allowed.body).toBe(202)
+  })
+
+  it('事实修订保留来源链，驳回后旧事实不可再次决策', async () => {
+    const managerCookie = await login(app, 'manager-demo')
+    const created = await submitFactAndWait(app, managerCookie, '原始成功标准')
+    const revised = await app.inject({
+      method: 'POST',
+      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/facts/${created.fact.id}:decide`,
+      headers: { cookie: managerCookie },
+      payload: {
+        decision: 'REVISE',
+        expected_revision: created.state.revision,
+        reason: '补充可验收结果',
+        replacement: {
+          category: 'SUCCESS_CRITERION',
+          statement: '入职 90 天完成产品路线图并通过评审',
+        },
+      },
+    })
+    expect(revised.statusCode, revised.body).toBe(200)
+    expect(revised.json().fact).toMatchObject({
+      status: 'DRAFT',
+      supersedes_fact_id: created.fact.id,
+      statement: '入职 90 天完成产品路线图并通过评审',
+    })
+    expect(revised.json().state.facts.find(
+      (fact: { id: string }) => fact.id === created.fact.id,
+    ).status).toBe('STALE')
+
+    const rejected = await app.inject({
+      method: 'POST',
+      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/facts/${revised.json().fact.id}:decide`,
+      headers: { cookie: managerCookie },
+      payload: {
+        decision: 'REJECT',
+        expected_revision: revised.json().state.revision,
+        reason: '当前无法提供可靠验收口径',
+      },
+    })
+    expect(rejected.statusCode, rejected.body).toBe(200)
+    expect(rejected.json().fact).toMatchObject({
+      status: 'STALE',
+      decision_reason: '当前无法提供可靠验收口径',
+    })
+    const stale = await app.inject({
+      method: 'POST',
+      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/facts/${created.fact.id}:decide`,
+      headers: { cookie: managerCookie },
+      payload: { decision: 'CONFIRM', expected_revision: rejected.json().state.revision },
+    })
+    expect(stale.statusCode).toBe(409)
+    expect(stale.json().error.code).toBe('FACT_NOT_DECIDABLE')
+  })
+
+  it('事实决策只允许经理，管理员必须显式使用经理测试身份', async () => {
+    const managerCookie = await login(app, 'manager-demo')
+    const hrCookie = await login(app, 'hr-demo')
+    const adminCookie = await login(app, 'admin-demo')
+    const created = await submitFactAndWait(app, managerCookie, '补充一条待确认约束')
+    const url = `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/facts/${created.fact.id}:decide`
+
+    const hrAttempt = await app.inject({
+      method: 'POST', url, headers: { cookie: hrCookie },
+      payload: { decision: 'CONFIRM', expected_revision: created.state.revision },
+    })
+    expect(hrAttempt.statusCode).toBe(403)
+    const adminAttempt = await app.inject({
+      method: 'POST', url, headers: { cookie: adminCookie },
+      payload: { decision: 'CONFIRM', expected_revision: created.state.revision },
+    })
+    expect(adminAttempt.statusCode).toBe(403)
+    const spoofed = await app.inject({
+      method: 'POST', url, headers: { cookie: managerCookie },
+      payload: {
+        decision: 'CONFIRM',
+        expected_revision: created.state.revision,
+        test_role: 'MANAGER',
+      },
+    })
+    expect(spoofed.statusCode).toBe(403)
+    const adminAsManager = await app.inject({
+      method: 'POST', url, headers: { cookie: adminCookie },
+      payload: {
+        decision: 'CONFIRM',
+        expected_revision: created.state.revision,
+        test_role: 'MANAGER',
+      },
+    })
+    expect(adminAsManager.statusCode, adminAsManager.body).toBe(200)
+    expect(store.listDecisionsForTest()).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        actor_user_id: 'admin-demo',
+        action: 'FACT_CONFIRMED',
+        metadata: expect.objectContaining({
+          actual_actor_role: 'ADMIN',
+          effective_actor_role: 'MANAGER',
+        }),
+      }),
+    ]))
+  })
+
+  it('兼容批量确认接口保持单次 Revision，任一无效 ID 时不部分写入', async () => {
+    const managerCookie = await login(app, 'manager-demo')
+    const created = await submitFactAndWait(app, managerCookie, '需要批量确认的事实')
+    const failed = await app.inject({
+      method: 'POST',
+      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/facts:confirm`,
+      headers: { cookie: managerCookie },
+      payload: {
+        fact_ids: [created.fact.id, 'missing-fact'],
+        expected_revision: created.state.revision,
+      },
+    })
+    expect(failed.statusCode).toBe(404)
+    const afterFailure = (await app.inject({
+      method: 'GET',
+      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}`,
+      headers: { cookie: managerCookie },
+    })).json().state
+    expect(afterFailure.revision).toBe(created.state.revision)
+    expect(afterFailure.facts.find((fact: { id: string }) => fact.id === created.fact.id).status)
+      .toBe('DRAFT')
+
+    const confirmed = await app.inject({
+      method: 'POST',
+      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/facts:confirm`,
+      headers: { cookie: managerCookie },
+      payload: { fact_ids: [created.fact.id], expected_revision: created.state.revision },
+    })
+    expect(confirmed.statusCode, confirmed.body).toBe(200)
+    expect(confirmed.json().state.revision).toBe(created.state.revision + 1)
   })
 
   it('消息接口立即落库并返回 202，企业管理员可读取完整执行 Trace', async () => {
