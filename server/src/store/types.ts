@@ -11,6 +11,7 @@ import type {
   HcApproval,
   RoleState,
 } from '@role-clarifier/contracts'
+import type { ApprovedHcIngestion } from './closure-types.js'
 
 export interface StoredUser extends ActorContext {
   active: boolean
@@ -120,6 +121,7 @@ export interface ApplicationStore {
   getUser(userId: string): Promise<StoredUser | null>
   saveUser(user: StoredUser): Promise<void>
   claimExternalEvent(channel: string, eventId: string): Promise<boolean>
+  ingestApprovedHcClosure(input: ApprovedHcIngestion): Promise<{ inserted: boolean }>
   listEnterpriseKnowledge(input: EnterpriseKnowledgeQuery): Promise<EnterpriseKnowledgeItem[]>
   listHcApprovals(actor: ActorContext): Promise<HcApproval[]>
   getHcApproval(requestId: string, actor: ActorContext): Promise<HcApproval | null>

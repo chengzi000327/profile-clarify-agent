@@ -44,6 +44,7 @@ import type {
   StoredUser,
   TraceAccessAuditRecord,
 } from './types.js'
+import type { ApprovedHcIngestion } from './closure-types.js'
 
 const iso = (value: Date | string): string =>
   value instanceof Date ? value.toISOString() : new Date(value).toISOString()
@@ -280,6 +281,103 @@ export class PostgresStore implements ApplicationStore {
       .onConflictDoNothing()
       .returning({ eventId: schema.externalEventReceipts.eventId })
     return rows.length === 1
+  }
+
+  async ingestApprovedHcClosure(input: ApprovedHcIngestion): Promise<{ inserted: boolean }> {
+    return this.db.transaction(async (tx) => {
+      const receipts = await tx
+        .insert(schema.externalEventReceipts)
+        .values({
+          channel: input.external_event_channel,
+          eventId: input.external_event_id,
+          receivedAt: new Date(input.approval.updated_at),
+        })
+        .onConflictDoNothing()
+        .returning({ eventId: schema.externalEventReceipts.eventId })
+      if (receipts.length === 0) return { inserted: false }
+
+      await tx
+        .insert(schema.hcApprovals)
+        .values({
+          requestId: input.approval.request_id,
+          tenantId: input.approval.tenant_id,
+          title: input.approval.title,
+          department: input.approval.department,
+          status: 'APPROVED',
+          context: input.approval.context,
+          hiringManagerUserId: input.approval.context.hiring_manager_user_id,
+          assignedHrUserId: input.approval.context.assigned_hr_user_id,
+          roleSessionId: input.approval.role_session_id,
+          createdAt: new Date(input.approval.created_at),
+          updatedAt: new Date(input.approval.updated_at),
+        })
+        .onConflictDoUpdate({
+          target: [schema.hcApprovals.tenantId, schema.hcApprovals.requestId],
+          set: {
+            title: input.approval.title,
+            department: input.approval.department,
+            status: 'APPROVED',
+            context: input.approval.context,
+            hiringManagerUserId: input.approval.context.hiring_manager_user_id,
+            assignedHrUserId: input.approval.context.assigned_hr_user_id,
+            updatedAt: new Date(input.approval.updated_at),
+          },
+        })
+
+      await tx
+        .insert(schema.roleClarificationTasks)
+        .values({
+          id: input.task.id,
+          tenantId: input.task.tenant_id,
+          hcRequestId: input.task.hc_request_id,
+          roleSessionId: input.task.role_session_id,
+          assigneeUserId: input.task.assignee_user_id,
+          status: input.task.status,
+          dueAt: input.task.due_at ? new Date(input.task.due_at) : null,
+          startedAt: input.task.started_at ? new Date(input.task.started_at) : null,
+          completedAt: input.task.completed_at ? new Date(input.task.completed_at) : null,
+          createdAt: new Date(input.task.created_at),
+          updatedAt: new Date(input.task.updated_at),
+        })
+        .onConflictDoNothing({
+          target: [schema.roleClarificationTasks.tenantId, schema.roleClarificationTasks.hcRequestId],
+        })
+      const [task] = await tx
+        .select({ id: schema.roleClarificationTasks.id })
+        .from(schema.roleClarificationTasks)
+        .where(and(
+          eq(schema.roleClarificationTasks.tenantId, input.task.tenant_id),
+          eq(schema.roleClarificationTasks.hcRequestId, input.task.hc_request_id),
+        ))
+        .limit(1)
+      if (!task) throw new Error('HC_CLARIFICATION_TASK_NOT_FOUND')
+
+      await tx
+        .insert(schema.notificationOutbox)
+        .values({
+          id: input.notification.id,
+          tenantId: input.notification.tenant_id,
+          taskId: task.id,
+          dedupeKey: input.notification.dedupe_key,
+          channel: input.notification.channel,
+          recipientUserId: input.notification.recipient_user_id,
+          template: input.notification.template,
+          payload: input.notification.payload,
+          status: input.notification.status,
+          attemptCount: input.notification.attempt_count,
+          nextAttemptAt: new Date(input.notification.next_attempt_at),
+          lockedBy: input.notification.locked_by,
+          lockedUntil: input.notification.locked_until
+            ? new Date(input.notification.locked_until)
+            : null,
+          lastErrorCode: input.notification.last_error_code,
+          sentAt: input.notification.sent_at ? new Date(input.notification.sent_at) : null,
+          createdAt: new Date(input.notification.created_at),
+          updatedAt: new Date(input.notification.updated_at),
+        })
+        .onConflictDoNothing({ target: schema.notificationOutbox.dedupeKey })
+      return { inserted: true }
+    })
   }
 
   async listEnterpriseKnowledge(

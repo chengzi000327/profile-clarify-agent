@@ -27,6 +27,11 @@ import type {
   StoredUser,
   TraceAccessAuditRecord,
 } from './types.js'
+import type {
+  ApprovedHcIngestion,
+  NotificationOutboxRecord,
+  RoleClarificationTaskRecord,
+} from './closure-types.js'
 import { createDemoAggregate, demoHcApprovals, demoUsers } from './seed.js'
 import { demoEnterpriseKnowledge } from './enterprise-knowledge-seed.js'
 
@@ -47,6 +52,8 @@ export class MemoryStore implements ApplicationStore {
   private readonly traceAudits: TraceAccessAuditRecord[] = []
   private readonly externalEvents = new Set<string>()
   private readonly enterpriseKnowledge = new Map<string, EnterpriseKnowledgeItem>()
+  private readonly clarificationTasks = new Map<string, RoleClarificationTaskRecord>()
+  private readonly notifications = new Map<string, NotificationOutboxRecord>()
 
   constructor(
     private readonly initialEnterpriseKnowledge: readonly EnterpriseKnowledgeItem[] = demoEnterpriseKnowledge,
@@ -80,6 +87,56 @@ export class MemoryStore implements ApplicationStore {
     if (this.externalEvents.has(key)) return false
     this.externalEvents.add(key)
     return true
+  }
+
+  async ingestApprovedHcClosure(input: ApprovedHcIngestion): Promise<{ inserted: boolean }> {
+    const eventKey = `${input.external_event_channel}:${input.external_event_id}`
+    if (this.externalEvents.has(eventKey)) return { inserted: false }
+
+    const nextEvents = new Set(this.externalEvents)
+    const nextApprovals = new Map([...this.hcApprovals].map(([key, value]) => [key, clone(value)]))
+    const nextTasks = new Map([...this.clarificationTasks].map(([key, value]) => [key, clone(value)]))
+    const nextNotifications = new Map([...this.notifications].map(([key, value]) => [key, clone(value)]))
+    nextEvents.add(eventKey)
+
+    const approvalKey = hcKey(input.approval.tenant_id, input.approval.request_id)
+    const existingApproval = nextApprovals.get(approvalKey)
+    nextApprovals.set(approvalKey, clone(existingApproval
+      ? {
+          ...input.approval,
+          role_session_id: existingApproval.role_session_id,
+          created_at: existingApproval.created_at,
+        }
+      : input.approval))
+
+    const taskKey = hcKey(input.task.tenant_id, input.task.hc_request_id)
+    if (!nextTasks.has(taskKey)) nextTasks.set(taskKey, clone(input.task))
+    const actualTask = nextTasks.get(taskKey)!
+    if (!nextNotifications.has(input.notification.dedupe_key)) {
+      this.beforeNotificationInsert()
+      nextNotifications.set(input.notification.dedupe_key, clone({
+        ...input.notification,
+        task_id: actualTask.id,
+      }))
+    }
+
+    this.replaceMap(this.hcApprovals, nextApprovals)
+    this.replaceMap(this.clarificationTasks, nextTasks)
+    this.replaceMap(this.notifications, nextNotifications)
+    this.externalEvents.clear()
+    for (const key of nextEvents) this.externalEvents.add(key)
+    return { inserted: true }
+  }
+
+  async getClarificationTaskByHc(
+    tenantId: string,
+    hcRequestId: string,
+  ): Promise<RoleClarificationTaskRecord | null> {
+    return clone(this.clarificationTasks.get(hcKey(tenantId, hcRequestId)) ?? null)
+  }
+
+  async listNotificationsForTest(): Promise<NotificationOutboxRecord[]> {
+    return clone([...this.notifications.values()])
   }
 
   async listEnterpriseKnowledge(
@@ -433,5 +490,12 @@ export class MemoryStore implements ApplicationStore {
       updated_by: null,
       updated_at: new Date().toISOString(),
     }
+  }
+
+  protected beforeNotificationInsert(): void {}
+
+  private replaceMap<K, V>(target: Map<K, V>, replacement: Map<K, V>): void {
+    target.clear()
+    for (const [key, value] of replacement) target.set(key, value)
   }
 }
