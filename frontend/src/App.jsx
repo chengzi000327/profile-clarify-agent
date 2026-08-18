@@ -21,6 +21,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Plus,
+  Search,
   Settings,
   ShieldCheck,
   Sparkles,
@@ -640,7 +641,7 @@ function App() {
           </button>
         </div>
 
-        <button className="new-project-button" onClick={openHcLanding}>
+        <button className="new-project-button" onClick={openHcLanding} aria-label="返回选择 HC">
           <BriefcaseBusiness size={17} />
           {!sidebarCollapsed && <span>返回选择 HC</span>}
         </button>
@@ -817,7 +818,12 @@ function EmptyWorkspace({
             <span className="brand-copy"><strong>画像澄清 Agent</strong><small>ROLE CLARIFIER</small></span>
           </div>
         </div>
-        <button className="new-project-button" onClick={onStartNew} disabled={!canCreateRole}>
+        <button
+          className="new-project-button"
+          onClick={onStartNew}
+          disabled={!canCreateRole}
+          aria-label={canCreateRole ? '开始新岗位对话' : 'HR 查看获批岗位'}
+        >
           <Plus size={17} /><span>{canCreateRole ? '开始新岗位对话' : 'HR 查看获批岗位'}</span>
         </button>
         {actor.role === 'ADMIN' && (

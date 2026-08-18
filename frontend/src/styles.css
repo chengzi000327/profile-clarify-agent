@@ -6470,3 +6470,173 @@ textarea:focus-visible {
     grid-template-columns: 1fr;
   }
 }
+
+/* Narrow screens keep the existing workbench structure, but reuse the compact
+   sidebar presentation so content never relies on the old 1024px floor. */
+@media (max-width: 760px) {
+  html,
+  body,
+  #root {
+    min-width: 0;
+  }
+
+  .app-shell,
+  .app-shell.sidebar-is-collapsed,
+  .hc-landing-shell,
+  .empty-workspace-shell {
+    grid-template-columns: 68px minmax(0, 1fr);
+  }
+
+  .brand-row {
+    justify-content: center;
+    padding: 0;
+  }
+
+  .brand-copy,
+  .brand-row > .icon-button,
+  .new-project-button > span,
+  .sidebar-section-title,
+  .hc-sidebar-summary,
+  .role-session-copy,
+  .sidebar-utility > span,
+  .user-chip > .user-copy,
+  .user-chip > svg,
+  .hc-sidebar-user > div {
+    display: none;
+  }
+
+  .new-project-button {
+    width: 40px;
+    margin-right: auto;
+    margin-left: auto;
+    padding: 0;
+  }
+
+  .role-session-list {
+    padding: 2px 10px 16px;
+  }
+
+  .role-session-row {
+    min-height: 44px;
+    justify-content: center;
+    padding: 8px 0;
+  }
+
+  .role-session-row.active::before {
+    left: -10px;
+  }
+
+  .session-unread {
+    position: absolute;
+    top: 3px;
+    right: -1px;
+    width: 14px;
+    height: 14px;
+    font-size: 8px;
+  }
+
+  .sidebar-footer {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .sidebar-utility,
+  .user-chip {
+    width: 42px;
+    justify-content: center;
+    padding: 8px 0;
+  }
+
+  .hc-sidebar-user {
+    justify-content: center;
+    padding: 8px 0;
+  }
+
+  .main-workspace {
+    grid-template-rows: 60px 42px minmax(0, 1fr);
+  }
+
+  .workspace-header {
+    gap: 8px;
+    padding: 0 10px;
+  }
+
+  .title-stack {
+    gap: 2px;
+  }
+
+  .preset-line,
+  .header-actions .quiet-button,
+  .collaborators .avatar-add {
+    display: none;
+  }
+
+  .header-actions,
+  .collaborators {
+    gap: 3px;
+    margin-right: 0;
+  }
+
+  .workspace-tabs {
+    gap: 16px;
+    padding: 0 10px;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+
+  .workspace-tabs button {
+    height: 42px;
+    flex: 0 0 auto;
+  }
+
+  .transcript {
+    width: calc(100% - 20px);
+    padding-top: 24px;
+  }
+
+  .profile-page,
+  .profile-page.profile-page-wide {
+    width: calc(100% - 20px);
+    padding-top: 20px;
+  }
+
+  .profile-heading,
+  .profile-heading-rich {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .profile-heading-actions {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .hc-chat-surface {
+    padding: 14px 10px 12px;
+  }
+
+  .hc-agent-message {
+    gap: 8px;
+  }
+
+  .hc-conversation-choice {
+    grid-template-columns: 30px minmax(0, 1fr) 84px;
+    gap: 7px;
+    padding: 7px 9px;
+  }
+
+  .hc-choice-reason,
+  .hc-choice-facts {
+    display: none;
+  }
+
+  .hc-choice-action {
+    padding-right: 14px;
+  }
+
+  .hc-chat-composer {
+    width: calc(100% - 20px);
+  }
+}

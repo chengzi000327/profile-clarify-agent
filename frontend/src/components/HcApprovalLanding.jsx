@@ -34,7 +34,7 @@ export default function HcApprovalLanding({
             <span className="brand-copy"><strong>画像澄清 Agent</strong><small>ROLE CLARIFIER</small></span>
           </button>
         </div>
-        <button className="new-project-button" onClick={onOpenApprovals}>
+        <button className="new-project-button" onClick={onOpenApprovals} aria-label="选择已审批 HC">
           <BriefcaseBusiness size={17} /><span>选择已审批 HC</span>
         </button>
         <div className="sidebar-section-title"><span>岗位澄清</span></div>
