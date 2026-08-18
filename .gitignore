@@ -23,3 +23,6 @@ pnpm-debug.log*
 
 # Local Superpowers visual brainstorming sessions
 .superpowers/
+
+# Local isolated feature worktrees
+.worktrees/
