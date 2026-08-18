@@ -14,11 +14,13 @@ import type {
 } from './agent/harness-adapter.js'
 import { loadConfig } from './config.js'
 import { MemoryStore } from './store/memory-store.js'
-import { DEMO_ROLE_SESSION_ID } from './store/seed.js'
+import { createMockHcContext, DEMO_ROLE_SESSION_ID } from './store/seed.js'
+import { signMockHrisEvent } from './integrations/mock-hris.js'
 
 const config = loadConfig({
   NODE_ENV: 'test',
   SESSION_SECRET: 'test-session-secret-that-is-long-enough',
+  HC_EVENT_SECRET: 'test-hc-event-secret-that-is-at-least-32-characters',
 })
 
 class TestHarnessStub implements HarnessAdapter {
@@ -341,6 +343,69 @@ describe('Role Clarifier API', () => {
       role: 'MANAGER',
       display_name: '用人经理 · 陈曦',
     })
+  })
+
+  it('无需 Cookie 但必须使用有效签名接收 HC 审批事件', async () => {
+    const context = createMockHcContext({
+      hiringManagerUserId: 'manager-demo',
+      assignedHrUserId: 'hr-demo',
+    })
+    context.request_id = 'HC-ROUTE-001'
+    context.approved_at = new Date().toISOString()
+    const body = {
+      event_id: 'evt-route-001',
+      event_type: 'HC_APPROVED' as const,
+      occurred_at: context.approved_at,
+      tenant_id: 'tenant-demo',
+      hc: {
+        request_id: context.request_id,
+        title: '企业产品经理',
+        department: '企业服务产品部',
+        hiring_manager_user_id: 'manager-demo',
+        assigned_hr_user_id: 'hr-demo',
+        context,
+      },
+    }
+    const timestamp = new Date().toISOString()
+    const signature = signMockHrisEvent(config.HC_EVENT_SECRET!, timestamp, body)
+    const accepted = await app.inject({
+      method: 'POST',
+      url: '/api/v1/integrations/mock-hris/hc-events',
+      headers: {
+        'x-hc-event-timestamp': timestamp,
+        'x-hc-event-signature': signature,
+      },
+      payload: body,
+    })
+    expect(accepted.statusCode).toBe(202)
+    expect(accepted.json()).toEqual({ accepted: true, duplicate: false })
+
+    const rejected = await app.inject({
+      method: 'POST',
+      url: '/api/v1/integrations/mock-hris/hc-events',
+      headers: {
+        'x-hc-event-timestamp': timestamp,
+        'x-hc-event-signature': 'bad',
+      },
+      payload: body,
+    })
+    expect(rejected.statusCode).toBe(401)
+    expect(rejected.json().error.code).toBe('HC_EVENT_UNAUTHORIZED')
+  })
+
+  it('未配置 HC 事件密钥时集成入口返回 503', async () => {
+    const unconfiguredApp = await buildApp(loadConfig({
+      NODE_ENV: 'test',
+      SESSION_SECRET: 'test-session-secret-that-is-long-enough',
+    }), { store: new MemoryStore(), harness: testHarness })
+    const response = await unconfiguredApp.inject({
+      method: 'POST',
+      url: '/api/v1/integrations/mock-hris/hc-events',
+      payload: {},
+    })
+    expect(response.statusCode).toBe(503)
+    expect(response.json().error.code).toBe('HC_EVENT_NOT_CONFIGURED')
+    await unconfiguredApp.close()
   })
 
   it('三个角色登录后读取十条有效 HC，经理敏感薪酬字段保持脱敏', async () => {

@@ -44,6 +44,11 @@ import {
   FeishuOpenApiClient,
   type FeishuClientLike,
 } from './integrations/feishu.js'
+import {
+  MockHrisHcApprovedEventSchema,
+  verifyMockHrisEvent,
+} from './integrations/mock-hris.js'
+import { HcEventService } from './services/hc-event-service.js'
 
 const IdParamsSchema = z.object({ id: z.string().uuid() })
 const HcParamsSchema = z.object({ request_id: z.string().min(1).max(100) })
@@ -191,6 +196,7 @@ export const buildApp = async (
             level: 'info',
             redact: [
               'req.headers.cookie',
+              'req.headers.x-hc-event-signature',
               'req.body.content',
               'req.body.candidates',
               'res.headers.set-cookie',
@@ -202,6 +208,7 @@ export const buildApp = async (
   await store.initialize()
   await recoverInterruptedRuns(store)
   const roleService = new RoleService(store)
+  const hcEventService = new HcEventService(store)
   const runner = new AgentRunner(
     store,
     roleService,
@@ -292,7 +299,8 @@ export const buildApp = async (
       request.url === '/healthz' ||
       request.url === '/api/v1/auth/login' ||
       request.url === '/api/v1/openapi.json' ||
-      request.url === '/api/v1/integrations/feishu/events'
+      request.url === '/api/v1/integrations/feishu/events' ||
+      request.url === '/api/v1/integrations/mock-hris/hc-events'
     ) {
       return
     }
@@ -361,6 +369,25 @@ export const buildApp = async (
       }
       throw error
     }
+  })
+
+  app.post('/api/v1/integrations/mock-hris/hc-events', async (request, reply) => {
+    if (!config.HC_EVENT_SECRET) {
+      throw new DomainError('HC_EVENT_NOT_CONFIGURED', 'HC 事件接收密钥尚未配置', 503)
+    }
+    const rawTimestamp = request.headers['x-hc-event-timestamp']
+    const rawSignature = request.headers['x-hc-event-signature']
+    const timestamp = Array.isArray(rawTimestamp) ? rawTimestamp[0] : rawTimestamp
+    const signature = Array.isArray(rawSignature) ? rawSignature[0] : rawSignature
+    const event = verifyMockHrisEvent({
+      secret: config.HC_EVENT_SECRET,
+      timestamp: timestamp ?? '',
+      signature: signature ?? '',
+      body: request.body,
+      nowMs: Date.now(),
+      maxSkewSeconds: config.HC_EVENT_MAX_SKEW_SECONDS,
+    })
+    return reply.status(202).send(await hcEventService.accept(event))
   })
 
   app.post('/internal/v1/harness/tools/:tool_name', async (request) => {
@@ -932,6 +959,9 @@ export const buildApp = async (
       '/api/v1/integrations/feishu/events': {
         post: { summary: '接收飞书 URL 验证与 im.message.receive_v1 事件' },
       },
+      '/api/v1/integrations/mock-hris/hc-events': {
+        post: { summary: '接收带时间戳 HMAC 签名的 HC 审批事件' },
+      },
       '/api/v1/role-sessions/{id}/messages': {
         get: { summary: '读取持久化多角色对话和澄清策略' },
         post: { summary: '保存人类消息并创建异步 Agent Run' },
@@ -953,6 +983,7 @@ export const buildApp = async (
       schemas: {
         ActorContext: z.toJSONSchema(ActorContextSchema),
         HcApproval: z.toJSONSchema(HcApprovalSchema),
+        MockHrisHcApprovedEvent: z.toJSONSchema(MockHrisHcApprovedEventSchema),
         RoleState: z.toJSONSchema(RoleStateSchema),
         AgentRun: z.toJSONSchema(AgentRunSchema),
         AgentEvent: z.toJSONSchema(AgentEventSchema),
