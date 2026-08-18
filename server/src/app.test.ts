@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { FastifyInstance } from 'fastify'
 import {
   ROLE_CLARIFIER_SYSTEM_PROMPT,
+  type AgentRun,
   type ArtifactType,
   type CandidateEvidence,
 } from '@role-clarifier/contracts'
@@ -1059,6 +1060,135 @@ describe('Role Clarifier API', () => {
     expect(trace.json().events.map((event: { type: string }) => event.type))
       .not.toContain('context.retrieval_failed')
     await disabledApp.close()
+  })
+
+  it('caller 持久化事实时记录消息、Run 和提出人，并把 fact_id 写入 Agent 消息', async () => {
+    const managerCookie = await login(app, 'manager-demo')
+    const submitted = await app.inject({
+      method: 'POST',
+      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/messages`,
+      headers: { cookie: managerCookie },
+      payload: { content: '入职 90 天完成产品路线图' },
+    })
+    const runId = submitted.json().run_id
+    let completedRun: AgentRun | undefined
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const status = await app.inject({
+        method: 'GET',
+        url: `/api/v1/agent-runs/${runId}`,
+        headers: { cookie: managerCookie },
+      })
+      completedRun = status.json().run
+      if (completedRun?.status === 'COMPLETED') break
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    expect(completedRun?.status).toBe('COMPLETED')
+    if (!completedRun) throw new Error('Run did not complete')
+    const detail = (await app.inject({
+      method: 'GET',
+      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}`,
+      headers: { cookie: managerCookie },
+    })).json()
+    const conversation = (await app.inject({
+      method: 'GET',
+      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/messages`,
+      headers: { cookie: managerCookie },
+    })).json()
+    const facts = detail.state.facts.filter(
+      (item: { source_run_id: string | null }) => item.source_run_id === runId,
+    )
+    const output = conversation.items.find(
+      (item: { id: string }) => item.id === completedRun.output_message_id,
+    )
+
+    expect(facts).toHaveLength(1)
+    expect(facts[0]).toMatchObject({
+      source_message_id: completedRun.input_message_id,
+      proposed_by_user_id: 'manager-demo',
+      status: 'DRAFT',
+    })
+    expect(output.structured_content).toMatchObject({
+      fact_id: facts[0].id,
+      fact_category: facts[0].category,
+      fact_status: 'DRAFT',
+    })
+  })
+
+  it('工具已保存事实后的恢复结果只关联一条事实卡，不由 caller 重复写入', async () => {
+    const toolStore = new MemoryStore()
+    let toolApp: FastifyInstance
+    const toolPersistingHarness: HarnessAdapter = {
+      run: async (request) => {
+        const factDraft = {
+          category: 'SUCCESS_CRITERION' as const,
+          statement: '入职 90 天完成三个客户场景的标准化',
+          source_refs: ['mock://role-profile/enterprise-pm'],
+        }
+        const save = await toolApp.inject({
+          method: 'POST',
+          url: '/internal/v1/harness/tools/save_fact_draft',
+          headers: {
+            authorization: `Bearer ${config.ROLE_AGENT_TOOL_TOKEN}`,
+            'x-harness-session-id': `role-${request.role_state.id}`,
+          },
+          payload: factDraft,
+        })
+        expect(save.statusCode, save.body).toBe(200)
+        expect(save.json().fact_id).toEqual(expect.any(String))
+        return {
+          kind: 'CLARIFICATION',
+          persistence: 'TOOL',
+          answer: '已从成功的工具调用恢复本轮结果。',
+          question: '这个结果由谁验收？',
+          fact_draft: {
+            category: factDraft.category,
+            statement: factDraft.statement,
+          },
+        }
+      },
+    }
+    toolApp = await buildApp(config, { store: toolStore, harness: toolPersistingHarness })
+    const managerCookie = await login(toolApp, 'manager-demo')
+    const submitted = await toolApp.inject({
+      method: 'POST',
+      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/messages`,
+      headers: { cookie: managerCookie },
+      payload: { content: '请记录新的成功标准' },
+    })
+    const runId = submitted.json().run_id
+    let completedRun: AgentRun | undefined
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const status = await toolApp.inject({
+        method: 'GET',
+        url: `/api/v1/agent-runs/${runId}`,
+        headers: { cookie: managerCookie },
+      })
+      completedRun = status.json().run
+      if (completedRun?.status === 'COMPLETED') break
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    expect(completedRun?.status).toBe('COMPLETED')
+    if (!completedRun) throw new Error('Run did not complete')
+    const detail = (await toolApp.inject({
+      method: 'GET',
+      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}`,
+      headers: { cookie: managerCookie },
+    })).json()
+    const conversation = (await toolApp.inject({
+      method: 'GET',
+      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/messages`,
+      headers: { cookie: managerCookie },
+    })).json()
+    const facts = detail.state.facts.filter(
+      (item: { source_run_id: string | null }) => item.source_run_id === runId,
+    )
+    const output = conversation.items.find(
+      (item: { id: string }) => item.id === completedRun.output_message_id,
+    )
+
+    expect(facts).toHaveLength(1)
+    expect(output.structured_content.fact_id).toBe(facts[0].id)
+    await toolApp.close()
   })
 
   it('消息接口立即落库并返回 202，企业管理员可读取完整执行 Trace', async () => {

@@ -8,6 +8,7 @@ import type {
   ArtifactType,
   ClarificationRound,
   ConversationMessage,
+  Fact,
   ToolExecutionContext,
 } from '@role-clarifier/contracts'
 import { ROLE_CLARIFIER_PROMPT_VERSION } from '@role-clarifier/contracts'
@@ -473,14 +474,25 @@ export class AgentRunner {
           result.role_identity,
         )
       }
+      let persistedFact: Fact | undefined
       if (result.persistence !== 'TOOL') {
-        await this.roleService.saveFactDraft(
+        const saved = await this.roleService.saveFactDraft(
           run.role_session_id,
           actor,
-          result.fact_draft.statement,
-          result.fact_draft.category,
+          {
+            statement: result.fact_draft.statement,
+            category: result.fact_draft.category,
+            source_message_id: run.input_message_id,
+            source_run_id: run.id,
+            proposed_by_user_id: run.actor_user_id,
+          },
         )
+        persistedFact = saved.fact
+      } else {
+        const refreshed = await this.roleService.get(run.role_session_id, actor)
+        persistedFact = refreshed.state.facts.find((fact) => fact.source_run_id === run.id)
       }
+      if (!persistedFact) throw new Error('Harness fact tool did not persist a traceable fact')
       const timestamp = new Date().toISOString()
       const policy = await this.store.getClarificationPolicy(run.role_session_id)
       if (pending.answeredRound) {
@@ -525,6 +537,9 @@ export class AgentRunner {
           question: result.question,
           round_ordinal: openedRound.ordinal,
           budget,
+          fact_id: persistedFact.id,
+          fact_category: persistedFact.category,
+          fact_status: persistedFact.status,
         }
       } else {
         policy.status = 'LIMIT_REACHED'
@@ -533,6 +548,9 @@ export class AgentRunner {
           kind: 'CLARIFICATION_LIMIT',
           completed_rounds: policy.completed_rounds,
           budget,
+          fact_id: persistedFact.id,
+          fact_category: persistedFact.category,
+          fact_status: persistedFact.status,
         }
       }
       policy.updated_by = actor.user_id

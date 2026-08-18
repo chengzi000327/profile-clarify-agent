@@ -444,13 +444,19 @@ export const buildApp = async (
         })
         .strict()
         .parse(body)
-      const state = await roleService.saveFactDraft(
+      const result = await roleService.saveFactDraft(
         roleSessionId,
         actor,
-        input.statement,
-        input.category,
+        {
+          statement: input.statement,
+          category: input.category,
+          source_message_id: activeRun.run.input_message_id,
+          source_run_id: activeRun.run.id,
+          proposed_by_user_id: activeRun.run.actor_user_id,
+          evidence_refs: input.source_refs ?? [],
+        },
       )
-      return { saved: true, revision: state.revision }
+      return { saved: true, revision: result.state.revision, fact_id: result.fact.id }
     }
     if (tool_name === 'update_role_identity_draft') {
       const input = z

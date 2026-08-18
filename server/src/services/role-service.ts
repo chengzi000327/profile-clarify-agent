@@ -8,6 +8,7 @@ import {
   type ArtifactEnvelope,
   type ArtifactType,
   type CandidateEvidence,
+  type Fact,
   type FactCategory,
   type HcApproval,
   type RoleState,
@@ -399,9 +400,15 @@ export class RoleService {
   async saveFactDraft(
     roleSessionId: string,
     actor: ActorContext,
-    statement: string,
-    category: FactCategory,
-  ): Promise<RoleState> {
+    input: {
+      statement: string
+      category: FactCategory
+      source_message_id: string | null
+      source_run_id: string
+      proposed_by_user_id: string
+      evidence_refs?: string[]
+    },
+  ): Promise<{ state: RoleState; fact: Fact }> {
     const aggregate = await this.requireAggregate(roleSessionId, actor)
     if (aggregate.state.hc_status !== 'APPROVED') {
       throw new DomainError('HC_NOT_APPROVED', 'HC 未审批，不能进入岗位澄清', 409)
@@ -410,7 +417,7 @@ export class RoleService {
     const state: RoleState = {
       ...aggregate.state,
       stage:
-        category === 'SUCCESS_CRITERION'
+        input.category === 'SUCCESS_CRITERION'
           ? 'SUCCESS_CLARIFYING'
           : aggregate.state.stage === 'CONTEXT_SYNCING'
             ? 'REASON_CLARIFYING'
@@ -420,15 +427,15 @@ export class RoleService {
         ...aggregate.state.facts,
         {
           id: randomUUID(),
-          category,
-          statement,
+          category: input.category,
+          statement: input.statement,
           source: 'Agent 从本轮对话提取，待人工确认',
           status: 'DRAFT',
-          evidence_refs: [],
+          evidence_refs: input.evidence_refs ?? [],
           visible_to: 'ALL',
-          source_message_id: null,
-          source_run_id: null,
-          proposed_by_user_id: null,
+          source_message_id: input.source_message_id,
+          source_run_id: input.source_run_id,
+          proposed_by_user_id: input.proposed_by_user_id,
           confirmed_by_user_id: null,
           confirmed_at: null,
           supersedes_fact_id: null,
@@ -439,7 +446,9 @@ export class RoleService {
       updated_at: timestamp,
     }
     await this.persistState(state, aggregate.state.revision)
-    return this.filterState(state, actor)
+    const fact = state.facts.at(-1)
+    if (!fact) throw new Error('Fact draft was not appended')
+    return { state: this.filterState(state, actor), fact }
   }
 
   async confirmFacts(
