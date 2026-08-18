@@ -1231,6 +1231,91 @@ describe('Role Clarifier API', () => {
     await toolApp.close()
   })
 
+  it('同一 Run 的事实工具重试保持幂等，并拒绝写入第二条不同事实', async () => {
+    const toolStore = new MemoryStore()
+    let toolApp: FastifyInstance
+    const toolPersistingHarness: HarnessAdapter = {
+      run: async (request) => {
+        const headers = {
+          authorization: `Bearer ${config.ROLE_AGENT_TOOL_TOKEN}`,
+          'x-harness-session-id': `role-${request.role_state.id}`,
+        }
+        const firstPayload = {
+          category: 'SUCCESS_CRITERION' as const,
+          statement: '入职 90 天完成三个客户场景的标准化',
+          source_refs: ['mock://role-profile/enterprise-pm'],
+        }
+        const first = await toolApp.inject({
+          method: 'POST',
+          url: '/internal/v1/harness/tools/save_fact_draft',
+          headers,
+          payload: firstPayload,
+        })
+        const repeated = await toolApp.inject({
+          method: 'POST',
+          url: '/internal/v1/harness/tools/save_fact_draft',
+          headers,
+          payload: firstPayload,
+        })
+        const conflicting = await toolApp.inject({
+          method: 'POST',
+          url: '/internal/v1/harness/tools/save_fact_draft',
+          headers,
+          payload: {
+            ...firstPayload,
+            statement: '同一轮不应再写入的第二条事实',
+          },
+        })
+
+        expect(first.statusCode, first.body).toBe(200)
+        expect(repeated.statusCode, repeated.body).toBe(200)
+        expect(repeated.json().fact_id).toBe(first.json().fact_id)
+        expect(conflicting.statusCode).toBe(409)
+        expect(conflicting.json().error.code).toBe('FACT_DRAFT_ALREADY_SAVED')
+        return {
+          kind: 'CLARIFICATION',
+          persistence: 'TOOL',
+          answer: '已记录本轮唯一事实。',
+          question: '这个结果由谁验收？',
+          fact_draft: {
+            category: firstPayload.category,
+            statement: firstPayload.statement,
+          },
+        }
+      },
+    }
+    toolApp = await buildApp(config, { store: toolStore, harness: toolPersistingHarness })
+    const managerCookie = await login(toolApp, 'manager-demo')
+    const submitted = await toolApp.inject({
+      method: 'POST',
+      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}/messages`,
+      headers: { cookie: managerCookie },
+      payload: { content: '请记录唯一的成功标准' },
+    })
+    const runId = submitted.json().run_id
+    let finalStatus = ''
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const status = await toolApp.inject({
+        method: 'GET',
+        url: `/api/v1/agent-runs/${runId}`,
+        headers: { cookie: managerCookie },
+      })
+      finalStatus = status.json().run.status
+      if (finalStatus === 'COMPLETED') break
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    expect(finalStatus).toBe('COMPLETED')
+    const detail = (await toolApp.inject({
+      method: 'GET',
+      url: `/api/v1/role-sessions/${DEMO_ROLE_SESSION_ID}`,
+      headers: { cookie: managerCookie },
+    })).json()
+    expect(detail.state.facts.filter(
+      (item: { source_run_id: string | null }) => item.source_run_id === runId,
+    )).toHaveLength(1)
+    await toolApp.close()
+  })
+
   it('待确认事实阻断岗位画像生成，经理确认后正式生效并使旧产物失效', async () => {
     const managerCookie = await login(app, 'manager-demo')
     const created = await submitFactAndWait(app, managerCookie, '半年内完成三个客户场景标准化')

@@ -413,6 +413,20 @@ export class RoleService {
     if (aggregate.state.hc_status !== 'APPROVED') {
       throw new DomainError('HC_NOT_APPROVED', 'HC 未审批，不能进入岗位澄清', 409)
     }
+    const existing = aggregate.state.facts.find(
+      (fact) => fact.source_run_id === input.source_run_id,
+    )
+    if (existing) {
+      if (existing.category === input.category && existing.statement === input.statement) {
+        return { state: this.filterState(aggregate.state, actor), fact: structuredClone(existing) }
+      }
+      throw new DomainError(
+        'FACT_DRAFT_ALREADY_SAVED',
+        '同一 Agent Run 已经保存过岗位事实',
+        409,
+        { fact_id: existing.id },
+      )
+    }
     const timestamp = nowIso()
     const state: RoleState = {
       ...aggregate.state,
