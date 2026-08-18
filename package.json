@@ -22,6 +22,7 @@
     "harness:verify": "node packages/dsh-role-clarifier/scripts/verify-profile.mjs",
     "harness:prepare": "node scripts/prepare-harness-runtime.mjs",
     "harness:smoke:runtime": "pnpm --filter @role-clarifier/harness-sidecar build && node scripts/smoke-harness-runtime.mjs",
+    "hc:demo:event": "node scripts/send-demo-hc-event.mjs",
     "dev:sidecar": "pnpm --filter @role-clarifier/harness-sidecar dev"
   },
   "devDependencies": {
