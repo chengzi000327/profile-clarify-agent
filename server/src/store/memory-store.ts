@@ -7,6 +7,7 @@ import type {
   ClarificationPolicy,
   ClarificationRound,
   ConversationMessage,
+  EnterpriseKnowledgeItem,
   HcApproval,
   RoleState,
 } from '@role-clarifier/contracts'
@@ -17,6 +18,7 @@ import type {
   ApplicationStore,
   CalibrationSignalRecord,
   DecisionRecord,
+  EnterpriseKnowledgeQuery,
   EventSubscriber,
   ManagerTaskRecord,
   RoleAggregate,
@@ -26,6 +28,7 @@ import type {
   TraceAccessAuditRecord,
 } from './types.js'
 import { createDemoAggregate, demoHcApprovals, demoUsers } from './seed.js'
+import { demoEnterpriseKnowledge } from './enterprise-knowledge-seed.js'
 
 const clone = <T>(value: T): T => structuredClone(value)
 const hcKey = (tenantId: string, requestId: string): string => `${tenantId}:${requestId}`
@@ -43,11 +46,19 @@ export class MemoryStore implements ApplicationStore {
   private readonly decisions: DecisionRecord[] = []
   private readonly traceAudits: TraceAccessAuditRecord[] = []
   private readonly externalEvents = new Set<string>()
+  private readonly enterpriseKnowledge = new Map<string, EnterpriseKnowledgeItem>()
+
+  constructor(
+    private readonly initialEnterpriseKnowledge: readonly EnterpriseKnowledgeItem[] = demoEnterpriseKnowledge,
+  ) {}
 
   async initialize(): Promise<void> {
     for (const user of demoUsers) this.users.set(user.user_id, clone(user))
     for (const hc of demoHcApprovals) {
       this.hcApprovals.set(hcKey(hc.tenant_id, hc.request_id), clone(hc))
+    }
+    for (const item of this.initialEnterpriseKnowledge) {
+      this.enterpriseKnowledge.set(item.id, clone(item))
     }
     const aggregate = createDemoAggregate()
     this.roles.set(aggregate.state.id, aggregate)
@@ -69,6 +80,21 @@ export class MemoryStore implements ApplicationStore {
     if (this.externalEvents.has(key)) return false
     this.externalEvents.add(key)
     return true
+  }
+
+  async listEnterpriseKnowledge(
+    input: EnterpriseKnowledgeQuery,
+  ): Promise<EnterpriseKnowledgeItem[]> {
+    return [...this.enterpriseKnowledge.values()]
+      .filter((item) =>
+        item.tenant_id === input.tenant_id &&
+        item.status === 'ACTIVE' &&
+        input.visible_to.includes(item.visible_to) &&
+        input.categories.includes(item.category) &&
+        item.valid_from <= input.now &&
+        (item.valid_to === null || item.valid_to > input.now),
+      )
+      .map(clone)
   }
 
   async listHcApprovals(actor: ActorContext): Promise<HcApproval[]> {

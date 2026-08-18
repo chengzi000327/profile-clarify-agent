@@ -7,6 +7,8 @@ import {
   gt,
   ilike,
   inArray,
+  isNull,
+  lte,
   or,
   sql,
 } from 'drizzle-orm'
@@ -21,6 +23,7 @@ import type {
   ClarificationPolicy,
   ClarificationRound,
   ConversationMessage,
+  EnterpriseKnowledgeItem,
   HcApproval,
   RoleState,
 } from '@role-clarifier/contracts'
@@ -32,6 +35,7 @@ import type {
   ApplicationStore,
   CalibrationSignalRecord,
   DecisionRecord,
+  EnterpriseKnowledgeQuery,
   EventSubscriber,
   ManagerTaskRecord,
   RoleAggregate,
@@ -46,6 +50,7 @@ const iso = (value: Date | string): string =>
 
 type RoleSessionRow = typeof schema.roleSessions.$inferSelect
 type HcApprovalRow = typeof schema.hcApprovals.$inferSelect
+type EnterpriseKnowledgeRow = typeof schema.enterpriseKnowledgeItems.$inferSelect
 type ArtifactRow = typeof schema.artifacts.$inferSelect
 type AgentRunRow = typeof schema.agentRuns.$inferSelect
 type AgentEventRow = typeof schema.agentRunEvents.$inferSelect
@@ -90,6 +95,25 @@ const hcApprovalFromRow = (row: HcApprovalRow): HcApproval => ({
   clarification_task: null,
   notification_delivery: null,
   created_at: iso(row.createdAt),
+  updated_at: iso(row.updatedAt),
+})
+
+const enterpriseKnowledgeFromRow = (row: EnterpriseKnowledgeRow): EnterpriseKnowledgeItem => ({
+  id: row.id,
+  tenant_id: row.tenantId,
+  category: row.category,
+  title: row.title,
+  content: row.content,
+  summary: row.summary,
+  department: row.department,
+  job_family: row.jobFamily,
+  tags: row.tags,
+  visible_to: row.visibleTo,
+  source_ref: row.sourceRef,
+  source_version: row.sourceVersion,
+  status: row.status,
+  valid_from: iso(row.validFrom),
+  valid_to: row.validTo ? iso(row.validTo) : null,
   updated_at: iso(row.updatedAt),
 })
 
@@ -256,6 +280,28 @@ export class PostgresStore implements ApplicationStore {
       .onConflictDoNothing()
       .returning({ eventId: schema.externalEventReceipts.eventId })
     return rows.length === 1
+  }
+
+  async listEnterpriseKnowledge(
+    input: EnterpriseKnowledgeQuery,
+  ): Promise<EnterpriseKnowledgeItem[]> {
+    if (input.categories.length === 0 || input.visible_to.length === 0) return []
+    const now = new Date(input.now)
+    const rows = await this.db
+      .select()
+      .from(schema.enterpriseKnowledgeItems)
+      .where(and(
+        eq(schema.enterpriseKnowledgeItems.tenantId, input.tenant_id),
+        eq(schema.enterpriseKnowledgeItems.status, 'ACTIVE'),
+        inArray(schema.enterpriseKnowledgeItems.visibleTo, input.visible_to),
+        inArray(schema.enterpriseKnowledgeItems.category, input.categories),
+        lte(schema.enterpriseKnowledgeItems.validFrom, now),
+        or(
+          isNull(schema.enterpriseKnowledgeItems.validTo),
+          gt(schema.enterpriseKnowledgeItems.validTo, now),
+        ),
+      ))
+    return rows.map(enterpriseKnowledgeFromRow)
   }
 
   async listHcApprovals(actor: ActorContext): Promise<HcApproval[]> {

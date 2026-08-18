@@ -7,6 +7,7 @@ import type {
   ClarificationPolicy,
   ClarificationRound,
   ConversationMessage,
+  EnterpriseKnowledgeItem,
   HcApproval,
   RoleState,
 } from '@role-clarifier/contracts'
@@ -104,6 +105,13 @@ export interface TraceAccessAuditRecord {
   created_at: string
 }
 
+export interface EnterpriseKnowledgeQuery {
+  tenant_id: string
+  visible_to: EnterpriseKnowledgeItem['visible_to'][]
+  categories: EnterpriseKnowledgeItem['category'][]
+  now: string
+}
+
 export type EventSubscriber = (event: AgentEvent) => void
 
 export interface ApplicationStore {
@@ -112,6 +120,7 @@ export interface ApplicationStore {
   getUser(userId: string): Promise<StoredUser | null>
   saveUser(user: StoredUser): Promise<void>
   claimExternalEvent(channel: string, eventId: string): Promise<boolean>
+  listEnterpriseKnowledge(input: EnterpriseKnowledgeQuery): Promise<EnterpriseKnowledgeItem[]>
   listHcApprovals(actor: ActorContext): Promise<HcApproval[]>
   getHcApproval(requestId: string, actor: ActorContext): Promise<HcApproval | null>
   createRoleAggregateForHc(hcRequestId: string, aggregate: RoleAggregate): Promise<string>
