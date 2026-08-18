@@ -45,7 +45,11 @@ import AdminTraceConsole from './components/AdminTraceConsole.jsx';
 import HcApprovalLanding from './components/HcApprovalLanding.jsx';
 import ClarifierMark from './components/ClarifierMark.jsx';
 import FactDecisionCard from './components/FactDecisionCard.jsx';
-import { factForMessage } from './fact-decision.js';
+import {
+  enterpriseContextWarning,
+  factForMessage,
+  pendingFactNotice,
+} from './fact-decision.js';
 
 const sourceIcons = {
   org: Users,
@@ -439,6 +443,8 @@ function App() {
       runInfo.stream_url,
       (event) => {
         setAgentEvents((current) => [...current, event]);
+        const contextWarning = enterpriseContextWarning(event);
+        if (contextWarning) setRequestError(contextWarning);
         if (event.type === 'agent.status') setAgentStatus(event.payload.status);
         if (
           event.type === 'artifact.updated'
@@ -555,7 +561,13 @@ function App() {
         connectRun(run);
       }
     } catch (error) {
-      setRequestError(error.message);
+      if (error instanceof ApiError && error.code === 'UNRESOLVED_FACTS_PENDING') {
+        const count = error.details?.count ?? pendingFactNotice(roleDetail.state.facts).count;
+        setRequestError(`还有 ${count} 条岗位事实待确认，请先在对话中处理`);
+        setActiveView('conversation');
+      } else {
+        setRequestError(error.message);
+      }
     }
   }
 
@@ -763,6 +775,7 @@ function App() {
             onRetry={() => setRoleDetailReloadKey((value) => value + 1)}
             onArtifactAction={handleArtifactAction}
             agentStatus={agentStatus}
+            onOpenConversation={() => setActiveView('conversation')}
           />
         )}
       </main>
@@ -1259,7 +1272,7 @@ function roleBasicInfo(state, viewerRole) {
   ];
 }
 
-function ArtifactEmptyState({ artifactType, invalidated, canManage, onGenerate, busy }) {
+function ArtifactEmptyState({ artifactType, invalidated, canManage, onGenerate, busy, blockedLabel = '' }) {
   const presentation = artifactPresentation[artifactType];
   const prerequisite = {
     ROLE_PROFILE: 'HC 已审批后即可生成；Agent 会基于招聘原因、成功标准和已确认事实形成草稿。',
@@ -1273,8 +1286,8 @@ function ArtifactEmptyState({ artifactType, invalidated, canManage, onGenerate, 
       <strong>{invalidated ? `${presentation.name}需要更新` : `${presentation.name}尚未生成`}</strong>
       <p>{invalidated ? '上游产物已发生变化，请生成新版本以保持内容一致。' : prerequisite}</p>
       {canManage ? (
-        <button className="primary-action" type="button" onClick={onGenerate} disabled={busy}>
-          {busy ? 'Agent 生成中…' : presentation.generateAction}<ChevronRight size={15} />
+        <button className="primary-action" type="button" onClick={onGenerate} disabled={busy || Boolean(blockedLabel)}>
+          {busy ? 'Agent 生成中…' : blockedLabel || presentation.generateAction}<ChevronRight size={15} />
         </button>
       ) : (
         <small>当前身份可查看该产物，但需要由{artifactType === 'HR_RECRUITING_BRIEF' ? ' HR' : '用人经理'}生成和确认。</small>
@@ -1293,6 +1306,7 @@ function ProfileView({
   onRetry,
   onArtifactAction,
   agentStatus,
+  onOpenConversation,
 }) {
   const [section, setSection] = useState(viewerRole === 'hr' ? 'portrait' : 'basis');
   const [expandedScenario, setExpandedScenario] = useState('T-01');
@@ -1355,6 +1369,8 @@ function ProfileView({
   const latestArtifact = roleDetail?.state?.latest_artifacts?.[artifactType];
   const presentation = artifactPresentation[artifactType];
   const canManageArtifact = section === 'portrait' ? viewerRole === 'hr' : viewerRole === 'manager';
+  const factNotice = pendingFactNotice(state.facts);
+  const factGenerationBlocked = artifactType === 'ROLE_PROFILE' && factNotice.generationBlocked;
   const connectedActionLabel = latestArtifact?.status === 'DRAFT'
     ? presentation.draftAction
     : latestArtifact?.status === 'CONFIRMED'
@@ -1375,10 +1391,14 @@ function ProfileView({
             <button className="quiet-button"><History size={15} />查看版本</button>
             <button
               className="primary-action"
-              disabled={agentStatus === 'running' || !canManageArtifact}
+              disabled={agentStatus === 'running' || !canManageArtifact || factGenerationBlocked}
               onClick={() => onArtifactAction?.(artifactType)}
             >
-              {agentStatus === 'running' ? 'Agent 生成中…' : canManageArtifact ? connectedActionLabel : '只读查看'}<ChevronRight size={16} />
+              {agentStatus === 'running'
+                ? 'Agent 生成中…'
+                : factGenerationBlocked
+                  ? `先确认 ${factNotice.count} 条事实`
+                  : canManageArtifact ? connectedActionLabel : '只读查看'}<ChevronRight size={16} />
             </button>
           </div>
         </div>
@@ -1397,6 +1417,13 @@ function ProfileView({
           <span>{actualActorRole === 'ADMIN' ? `企业管理员正在以“${viewerRole === 'hr' ? 'HR' : '用人经理'}”身份测试；真实身份仍写入审计记录。` : viewerRole === 'hr' ? 'HR 权限：在同一岗位会话中查看招聘画像、画像依据、评估方案和对外 JD。' : '用人经理权限：确认画像依据、评估方案和对外 JD；HR 内部招聘画像不可见。'}</span>
         </div>
 
+        {factNotice.count > 0 && (
+          <div className="profile-pending-facts" role="status">
+            <span><AlertTriangle size={13} /><strong>{factNotice.text}</strong>，处理完成后再生成正式岗位画像。</span>
+            <button type="button" onClick={onOpenConversation}>{factNotice.action}<ChevronRight size={13} /></button>
+          </div>
+        )}
+
         <nav className={`profile-subnav tabs-${profileTabs.length}`} aria-label="岗位画像目录" style={{ gridTemplateColumns: `repeat(${profileTabs.length}, minmax(0, 1fr))` }}>
           {profileTabs.map((item) => (
             <button className={section === item.id ? 'active' : ''} key={item.id} onClick={() => setSection(item.id)}>
@@ -1414,6 +1441,7 @@ function ProfileView({
                 canManage={canManageArtifact}
                 onGenerate={() => onArtifactAction?.(artifactType)}
                 busy={agentStatus === 'running'}
+                blockedLabel={factGenerationBlocked ? `先确认 ${factNotice.count} 条事实` : ''}
               />
             ) : (
               <RecruitingPortrait onOpenEvidence={onOpenEvidence} artifact={latestArtifact} roleDetail={roleDetail} />
@@ -1427,6 +1455,7 @@ function ProfileView({
                   canManage={canManageArtifact}
                   onGenerate={() => onArtifactAction?.(artifactType)}
                   busy={agentStatus === 'running'}
+                  blockedLabel={factGenerationBlocked ? `先确认 ${factNotice.count} 条事实` : ''}
                 />
               ) : section === 'basis' ? (
                 <GeneratedProfileBasis artifact={latestArtifact} state={state} onOpenEvidence={onOpenEvidence} />

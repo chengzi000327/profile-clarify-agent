@@ -21,6 +21,23 @@ export const pendingFacts = (facts = []) => facts.filter(
   (fact) => fact.status === 'DRAFT' || fact.status === 'CONFLICTED',
 );
 
+export const pendingFactNotice = (facts = []) => {
+  const count = pendingFacts(facts).length;
+  return {
+    count,
+    text: `还有 ${count} 条岗位事实待确认`,
+    action: '返回对话处理',
+    generationBlocked: count > 0,
+  };
+};
+
+export const enterpriseContextWarning = (event) => {
+  if (event?.type !== 'context.retrieval_failed') return '';
+  return String(event.payload?.task ?? '').startsWith('GENERATE_')
+    ? '企业背景未完整加载，本轮结果需人工复核'
+    : '';
+};
+
 export const factForMessage = (facts = [], factId) => {
   if (!factId) return null;
   const referenced = facts.find((fact) => fact.id === factId);

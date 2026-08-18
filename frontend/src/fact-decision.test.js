@@ -2,8 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   canDecideFact,
+  enterpriseContextWarning,
   factForMessage,
   factStatusLabel,
+  pendingFactNotice,
   pendingFacts,
 } from './fact-decision.js';
 
@@ -60,4 +62,27 @@ test('没有来源链的历史事实仍回到消息直接引用的事实', () =>
   });
   assert.equal(factForMessage([historical], historical.id)?.id, historical.id);
   assert.equal(factForMessage([historical], 'missing'), null);
+});
+
+test('待处理提示给出数量和生成按钮文案', () => {
+  assert.deepEqual(pendingFactNotice([
+    fact('draft', 'DRAFT'),
+    fact('conflicted', 'CONFLICTED'),
+  ]), {
+    count: 2,
+    text: '还有 2 条岗位事实待确认',
+    action: '返回对话处理',
+    generationBlocked: true,
+  });
+});
+
+test('正式产物检索失败复用现有错误提示，普通澄清不打断对话', () => {
+  assert.equal(enterpriseContextWarning({
+    type: 'context.retrieval_failed',
+    payload: { task: 'GENERATE_ROLE_PROFILE' },
+  }), '企业背景未完整加载，本轮结果需人工复核');
+  assert.equal(enterpriseContextWarning({
+    type: 'context.retrieval_failed',
+    payload: { task: 'CLARIFY_MESSAGE' },
+  }), '');
 });

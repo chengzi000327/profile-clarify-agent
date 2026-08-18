@@ -3875,6 +3875,38 @@ textarea:focus-visible {
   margin-top: 9px;
 }
 
+.profile-pending-facts {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 9px;
+  padding: 8px 10px;
+  border: 1px solid #f0d39b;
+  border-radius: 7px;
+  color: #805a13;
+  background: #fff9ea;
+  font-size: 9px;
+}
+
+.profile-pending-facts span,
+.profile-pending-facts button { display: inline-flex; align-items: center; gap: 5px; }
+.profile-pending-facts button {
+  padding: 5px 7px;
+  border: 0;
+  border-radius: 5px;
+  color: #fff;
+  background: #9a6700;
+  font-size: 9px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.profile-pending-facts + .profile-subnav { margin-top: 9px; }
+
+@media (max-width: 560px) {
+  .profile-pending-facts { align-items: flex-start; flex-direction: column; }
+}
+
 .hiring-reason-decision {
   margin: 0;
   padding: 18px 28px 22px;
