@@ -2,18 +2,28 @@ import { randomUUID } from 'node:crypto'
 import {
   ARTIFACT_VISIBILITY,
   CandidateEvidenceSchema,
-  PublicJDSchema,
+  JobDescriptionDraftInputSchema,
+  RoleProfileJobDescriptionContentSchema,
+  RoleProfileTalentDraftContentSchema,
+  TalentProfileDraftInputSchema,
+  type ConversationMessage,
+  generatedArtifactContentSchema,
   type ActorContext,
   type ArtifactEnvelope,
   type ArtifactType,
   type CandidateEvidence,
   type FactCategory,
+  type HcApproval,
+  type RoleProfileJobDescriptionContent,
+  type RoleProfileTalentDraftContent,
+  type TalentProfileDraftInput,
   type RoleState,
 } from '@role-clarifier/contracts'
 import {
   DomainError,
   assertArtifactAccess,
   assertRevision,
+  contentHash,
   confirmArtifact,
   createArtifactEnvelope,
   detectPII,
@@ -50,6 +60,122 @@ const artifactNames: Record<ArtifactType, string> = {
   HR_RECRUITING_BRIEF: '招聘画像',
 }
 
+type ArtifactWriteAction = '生成' | '确认'
+
+export type RoleProfileJobDescriptionConfirmedContent = Extract<
+  RoleProfileJobDescriptionContent,
+  { stage: 'JOB_DESCRIPTION_CONFIRMED' }
+>
+
+type RoleProfileTalentDraftBase = Pick<
+  RoleProfileTalentDraftContent,
+  'schema_version' | 'stage' | 'job_description' | 'job_description_confirmation' | 'talent_profile'
+>
+
+const flattenTalentRequirements = (content: RoleProfileTalentDraftBase) => {
+  const { qualifications, competency_model: competencyModel } = content.talent_profile
+  const groups = [
+    ['hard_qualifications', qualifications.hard_qualifications],
+    ['necessary_experience', qualifications.necessary_experience],
+    ['role_conditions', qualifications.role_conditions],
+    ['must_have', qualifications.must_have],
+    ['preferred', qualifications.preferred],
+    ['alternatives', qualifications.alternatives],
+    ['knowledge', competencyModel.knowledge],
+    ['skills', competencyModel.skills],
+    ['behavioral_competencies', competencyModel.behavioral_competencies],
+    ['values_and_work_style', competencyModel.values_and_work_style],
+    ['career_motivation', competencyModel.career_motivation],
+  ] as const
+
+  return groups.flatMap(([sourceGroup, items]) => items.map((item) => ({
+    id: item.id,
+    priority: sourceGroup === 'preferred' ? 'Preferred' as const : 'Must-have' as const,
+    name: item.name,
+    level: item.definition,
+    rationale: `对应岗位依据：${item.maps_to.join('、')}`,
+    maps_to: item.maps_to,
+    strong_evidence: item.observable_evidence,
+    substitute_evidence: sourceGroup === 'alternatives' ? item.observable_evidence : [],
+    risk_signals: [],
+    assessment_method: '围绕可观察证据进行结构化追问',
+    evidence_refs: item.evidence_refs,
+  })))
+}
+
+export const buildLegacyRoleProfileProjection = (content: RoleProfileTalentDraftBase) => ({
+  hiring_reason: {
+    conclusion: content.job_description.hiring_background.hiring_conclusion,
+    business_change: content.job_description.hiring_background.business_change,
+    organization_gap: content.job_description.hiring_background.organization_gap,
+    no_hire_impact: content.job_description.hiring_background.no_hire_impact,
+    evidence_refs: content.job_description.hiring_background.evidence_refs,
+  },
+  mission: content.job_description.job_purpose.statement,
+  success_outcomes: content.job_description.success_criteria,
+  work_scenarios: content.job_description.work_scenarios.map((scenario) => ({
+    id: scenario.id,
+    title: scenario.title,
+    frequency: scenario.frequency,
+    trigger: scenario.trigger,
+    actions: scenario.actions,
+    output: scenario.output,
+    challenge: scenario.challenge,
+    stakeholders: scenario.stakeholders.join('、'),
+    outcome_refs: scenario.success_outcome_refs,
+    evidence_refs: scenario.evidence_refs,
+  })),
+  boundaries: {
+    owns: content.job_description.boundaries.owns,
+    does_not_own: content.job_description.boundaries.does_not_own,
+    decision_rights: content.job_description.boundaries.decision_rights.join('、'),
+    collaboration_and_resources: [
+      `协作：${content.job_description.boundaries.key_collaborations.join('、')}`,
+      `资源：${content.job_description.boundaries.available_resources.join('、')}`,
+    ].join('；'),
+    evidence_refs: content.job_description.boundaries.evidence_refs,
+  },
+  requirements: flattenTalentRequirements(content),
+})
+
+export const mergeLockedRoleProfileContent = (
+  locked: RoleProfileJobDescriptionConfirmedContent,
+  input: TalentProfileDraftInput,
+): RoleProfileTalentDraftContent => {
+  if (contentHash(locked.job_description) !== locked.job_description_confirmation.section_hash) {
+    throw new DomainError('JOB_DESCRIPTION_LOCK_INVALID', '岗位说明锁定校验失败', 409)
+  }
+  const validMappingIds = new Set([
+    ...locked.job_description.key_accountabilities.map(({ id }) => id),
+    ...locked.job_description.success_criteria.map(({ id }) => id),
+    ...locked.job_description.work_scenarios.map(({ id }) => id),
+  ])
+  const talentRequirements = [
+    ...Object.values(input.talent_profile.qualifications),
+    ...Object.values(input.talent_profile.competency_model),
+  ].flat()
+  const invalidMappings = talentRequirements.flatMap((requirement) =>
+    requirement.maps_to
+      .filter((reference) => !validMappingIds.has(reference))
+      .map((reference) => `${requirement.id}.maps_to:${reference}`),
+  )
+  if (invalidMappings.length > 0) {
+    throw new DomainError(
+      'ARTIFACT_CONTENT_INVALID',
+      `岗位画像结构不符合前端展示契约：人才要求只能引用已锁定岗位说明中的 KRA、成功结果或工作场景 ID（${invalidMappings.slice(0, 5).join('、')}）`,
+      422,
+    )
+  }
+  const base = {
+    schema_version: '2' as const,
+    stage: 'TALENT_PROFILE_DRAFT' as const,
+    job_description: locked.job_description,
+    job_description_confirmation: locked.job_description_confirmation,
+    talent_profile: input.talent_profile,
+  }
+  return { ...base, ...buildLegacyRoleProfileProjection(base) }
+}
+
 export interface RoleView {
   state: RoleState
   artifacts: ArtifactEnvelope[]
@@ -64,6 +190,131 @@ export class RoleService {
   async list(actor: ActorContext): Promise<RoleState[]> {
     const states = await this.store.listRoleStates(actor)
     return states.map((state) => this.filterState(state, actor))
+  }
+
+  async listApprovedHc(actor: ActorContext): Promise<HcApproval[]> {
+    const [approvals, roleStates] = await Promise.all([
+      this.store.listHcApprovals(actor),
+      this.store.listRoleStates(actor),
+    ])
+    const roleById = new Map(roleStates.map((state) => [state.id, state]))
+    return approvals.map((approval) => {
+      const hc = structuredClone(approval)
+      const role = hc.role_session_id ? roleById.get(hc.role_session_id) : undefined
+      if (actor.role === 'MANAGER') hc.context.job_basics.salary_range = '按权限可见'
+      return {
+        ...hc,
+        clarification_status: !role
+          ? 'NOT_STARTED'
+          : ['CREATED', 'CONTEXT_SYNCING', 'REASON_CLARIFYING', 'SUCCESS_CLARIFYING'].includes(role.stage)
+            ? 'IN_PROGRESS'
+            : 'PROFILE_READY',
+        role_stage: role?.stage ?? null,
+      }
+    })
+  }
+
+  async openApprovedHc(
+    requestId: string,
+    actor: ActorContext,
+  ): Promise<{ role: RoleView; created: boolean }> {
+    const hc = await this.store.getHcApproval(requestId, actor)
+    if (!hc) throw new DomainError('HC_APPROVAL_NOT_FOUND', '未找到可访问的已通过 HC', 404)
+    if (hc.role_session_id) {
+      await this.ensureHcOpeningQuestion(hc.role_session_id, hc, actor)
+      return { role: await this.get(hc.role_session_id, actor), created: false }
+    }
+
+    const timestamp = nowIso()
+    const state: RoleState = {
+      id: randomUUID(),
+      tenant_id: actor.tenant_id,
+      title: hc.title,
+      department: hc.department,
+      stage: 'REASON_CLARIFYING',
+      revision: 0,
+      hc_status: 'APPROVED',
+      hc_context: structuredClone(hc.context),
+      facts: [
+        {
+          id: randomUUID(),
+          category: 'BACKGROUND',
+          statement: hc.context.business_change,
+          source: `${hc.request_id} HC 审批`,
+          status: 'CONFIRMED',
+          evidence_refs: [`hc://${hc.request_id}`],
+          visible_to: 'ALL',
+          updated_at: timestamp,
+        },
+        {
+          id: randomUUID(),
+          category: 'HIRING_REASON',
+          statement: hc.context.approved_reason,
+          source: `${hc.request_id} HC 审批`,
+          status: 'CONFIRMED',
+          evidence_refs: [`hc://${hc.request_id}`],
+          visible_to: 'ALL',
+          updated_at: timestamp,
+        },
+      ],
+      conflicts: [],
+      latest_artifacts: {},
+      candidate_count: 0,
+      candidate_channels: [],
+      calibration_status: 'OBSERVING',
+      created_at: timestamp,
+      updated_at: timestamp,
+    }
+    const aggregate: RoleAggregate = {
+      state,
+      member_ids: [
+        hc.context.hiring_manager_user_id,
+        ...(hc.context.assigned_hr_user_id ? [hc.context.assigned_hr_user_id] : []),
+      ],
+      artifacts: [],
+      candidates: [],
+      calibration_signals: [],
+      manager_tasks: [],
+    }
+    const roleSessionId = await this.store.createRoleAggregateForHc(hc.request_id, aggregate)
+    await this.ensureHcOpeningQuestion(roleSessionId, hc, actor)
+    return {
+      role: await this.get(roleSessionId, actor),
+      created: roleSessionId === state.id,
+    }
+  }
+
+  private async ensureHcOpeningQuestion(
+    roleSessionId: string,
+    hc: HcApproval,
+    actor: ActorContext,
+  ): Promise<void> {
+    const existing = await this.store.listConversationMessages(roleSessionId)
+    if (existing.length > 0) return
+
+    const timestamp = nowIso()
+    const message: ConversationMessage = {
+      id: roleSessionId,
+      tenant_id: actor.tenant_id,
+      role_session_id: roleSessionId,
+      run_id: null,
+      clarification_round_id: null,
+      sender_type: 'AGENT',
+      sender_user_id: null,
+      sender_role: null,
+      sender_name: '画像澄清 Agent',
+      content: `这条「${hc.title}」HC 已通过审批。我会主动带你完成岗位澄清，你只需要逐题回答；审批材料会作为已确认背景，不需要重复填写。`,
+      structured_content: {
+        kind: 'HC_OPENING_QUESTION',
+        hc_request_id: hc.request_id,
+        question: `先从最关键的结果开始：这位${hc.title}入职 90 天后，针对“${hc.context.organization_gap}”，必须交付什么可验证的结果，才说明这个人招对了？`,
+      },
+      status: 'COMPLETED',
+      sequence: 1,
+      created_at: timestamp,
+      completed_at: timestamp,
+    }
+    await this.store.appendConversationMessageIfAbsent(message)
   }
 
   async get(roleSessionId: string, actor: ActorContext): Promise<RoleView> {
@@ -297,21 +548,24 @@ export class RoleService {
     return this.filterState(state, actor)
   }
 
-  async assertArtifactGenerationAllowed(
-    roleSessionId: string,
+  private assertArtifactWritePrerequisites(
+    aggregate: RoleAggregate,
     actor: ActorContext,
     effectiveRole: ActorContext['role'],
     artifactType: ArtifactType,
-  ): Promise<void> {
-    const aggregate = await this.requireAggregate(roleSessionId, actor)
+    action: ArtifactWriteAction,
+  ): void {
     if (aggregate.state.hc_status !== 'APPROVED') {
       throw new DomainError('HC_NOT_APPROVED', 'HC 审批通过后才能生成正式岗位产物', 409)
     }
+    if (effectiveRole !== actor.role && actor.role !== 'ADMIN') {
+      throw new DomainError('FORBIDDEN', '只有企业管理员可以使用测试身份操作岗位产物', 403)
+    }
     if (artifactType === 'HR_RECRUITING_BRIEF' && !['HR', 'ADMIN'].includes(effectiveRole)) {
-      throw new DomainError('FORBIDDEN', '仅 HR 可以生成内部招聘画像', 403)
+      throw new DomainError('FORBIDDEN', `仅 HR 可以${action}内部招聘画像`, 403)
     }
     if (artifactType !== 'HR_RECRUITING_BRIEF' && !['MANAGER', 'ADMIN'].includes(effectiveRole)) {
-      throw new DomainError('FORBIDDEN', '该产物需要由用人经理生成', 403)
+      throw new DomainError('FORBIDDEN', `该产物需要由用人经理${action}`, 403)
     }
     const missing = artifactDependencies[artifactType].filter(
       (dependency) => aggregate.state.latest_artifacts[dependency]?.status !== 'CONFIRMED',
@@ -319,9 +573,38 @@ export class RoleService {
     if (missing.length > 0) {
       throw new DomainError(
         'ARTIFACT_PREREQUISITES_MISSING',
-        `请先确认${missing.map((type) => artifactNames[type]).join('、')}，再生成${artifactNames[artifactType]}`,
+        `请先确认${missing.map((type) => artifactNames[type]).join('、')}，再${action}${artifactNames[artifactType]}`,
         409,
       )
+    }
+  }
+
+  private assertRoleProfileDraftCanBeGenerated(aggregate: RoleAggregate): void {
+    const latestRoleProfile = aggregate.state.latest_artifacts.ROLE_PROFILE
+    const staged = RoleProfileJobDescriptionContentSchema.safeParse(latestRoleProfile?.content)
+    const talentDraft = RoleProfileTalentDraftContentSchema.safeParse(latestRoleProfile?.content)
+    if (
+      staged.success
+      && staged.data.stage === 'JOB_DESCRIPTION_DRAFT'
+      && latestRoleProfile?.status === 'DRAFT'
+    ) {
+      throw new DomainError('JOB_DESCRIPTION_CONFIRMATION_REQUIRED', '请先确认岗位说明，再继续生成岗位画像', 409)
+    }
+    if (talentDraft.success && latestRoleProfile?.status === 'DRAFT') {
+      throw new DomainError('TALENT_PROFILE_CONFIRMATION_REQUIRED', '请先确认完整人才画像，再继续生成', 409)
+    }
+  }
+
+  async assertArtifactGenerationAllowed(
+    roleSessionId: string,
+    actor: ActorContext,
+    effectiveRole: ActorContext['role'],
+    artifactType: ArtifactType,
+  ): Promise<void> {
+    const aggregate = await this.requireAggregate(roleSessionId, actor)
+    this.assertArtifactWritePrerequisites(aggregate, actor, effectiveRole, artifactType, '生成')
+    if (artifactType === 'ROLE_PROFILE') {
+      this.assertRoleProfileDraftCanBeGenerated(aggregate)
     }
   }
 
@@ -330,10 +613,82 @@ export class RoleService {
     actor: ActorContext,
     type: ArtifactType,
     content: T,
+    effectiveRole: ActorContext['role'] = actor.role,
   ): Promise<ArtifactEnvelope<T>> {
     const aggregate = await this.requireAggregate(roleSessionId, actor)
     assertArtifactAccess(actor, type)
-    if (type === 'PUBLIC_JD') PublicJDSchema.parse(content)
+    this.assertArtifactWritePrerequisites(aggregate, actor, effectiveRole, type, '生成')
+    if (type === 'ROLE_PROFILE') this.assertRoleProfileDraftCanBeGenerated(aggregate)
+    let validatedContent = content
+    if (type === 'ROLE_PROFILE') {
+      const latestRoleProfile = aggregate.state.latest_artifacts.ROLE_PROFILE
+      const latestStaged = RoleProfileJobDescriptionContentSchema.safeParse(
+        latestRoleProfile?.content,
+      )
+      if (latestStaged.success && latestStaged.data.stage === 'JOB_DESCRIPTION_CONFIRMED') {
+        const validation = TalentProfileDraftInputSchema.safeParse(content)
+        if (!validation.success) {
+          const issueSummary = validation.error.issues
+            .slice(0, 5)
+            .map((issue) => `${issue.path.join('.') || 'content'}：${issue.message}`)
+            .join('；')
+          throw new DomainError(
+            'ARTIFACT_CONTENT_INVALID',
+            `${artifactNames[type]}结构不符合前端展示契约：${issueSummary}`,
+            422,
+          )
+        }
+        const merged = mergeLockedRoleProfileContent(latestStaged.data, validation.data)
+        const mergedValidation = RoleProfileTalentDraftContentSchema.safeParse(merged)
+        if (!mergedValidation.success) {
+          const issueSummary = mergedValidation.error.issues
+            .slice(0, 5)
+            .map((issue) => `${issue.path.join('.') || 'content'}：${issue.message}`)
+            .join('；')
+          throw new DomainError(
+            'ARTIFACT_CONTENT_INVALID',
+            `${artifactNames[type]}结构不符合前端展示契约：${issueSummary}`,
+            422,
+          )
+        }
+        validatedContent = mergedValidation.data as T
+      } else {
+        const validation = JobDescriptionDraftInputSchema.safeParse(content)
+        if (!validation.success) {
+          const issueSummary = validation.error.issues
+            .slice(0, 5)
+            .map((issue) => `${issue.path.join('.') || 'content'}：${issue.message}`)
+            .join('；')
+          throw new DomainError(
+            'ARTIFACT_CONTENT_INVALID',
+            `${artifactNames[type]}结构不符合前端展示契约：${issueSummary}`,
+            422,
+          )
+        }
+        validatedContent = {
+          schema_version: '2',
+          stage: 'JOB_DESCRIPTION_DRAFT',
+          job_description: validation.data.job_description,
+        } as T
+      }
+    } else {
+      const contentSchema = generatedArtifactContentSchema(type)
+      if (contentSchema) {
+        const validation = contentSchema.safeParse(content)
+        if (!validation.success) {
+          const issueSummary = validation.error.issues
+            .slice(0, 5)
+            .map((issue) => `${issue.path.join('.') || 'content'}：${issue.message}`)
+            .join('；')
+          throw new DomainError(
+            'ARTIFACT_CONTENT_INVALID',
+            `${artifactNames[type]}结构不符合前端展示契约：${issueSummary}`,
+            422,
+          )
+        }
+        validatedContent = validation.data as T
+      }
+    }
     const version =
       Math.max(
         0,
@@ -348,7 +703,7 @@ export class RoleService {
       roleSessionId,
       type,
       version,
-      content,
+      content: validatedContent,
       createdBy: actor.user_id,
       basedOnHash: previous?.content_hash ?? null,
     })
@@ -409,11 +764,81 @@ export class RoleService {
     const artifact = aggregate.artifacts.find((item) => item.id === artifactId)
     if (!artifact) throw new DomainError('ARTIFACT_NOT_FOUND', '产物不存在', 404)
     assertArtifactAccess(actor, artifact.type)
-    if (artifact.type === 'HR_RECRUITING_BRIEF' && !['HR', 'ADMIN'].includes(effectiveRole)) {
-      throw new DomainError('FORBIDDEN', '仅 HR 可以确认内部招聘画像', 403)
+    this.assertArtifactWritePrerequisites(
+      aggregate,
+      actor,
+      effectiveRole,
+      artifact.type,
+      '确认',
+    )
+    if (aggregate.state.latest_artifacts[artifact.type]?.id !== artifact.id) {
+      throw new DomainError('ARTIFACT_VERSION_STALE', '该产物已生成新版本，请确认最新版本', 409)
     }
-    if (artifact.type !== 'HR_RECRUITING_BRIEF' && !['MANAGER', 'ADMIN'].includes(effectiveRole)) {
-      throw new DomainError('FORBIDDEN', '该产物需要用人经理确认', 403)
+    if (artifact.type === 'ROLE_PROFILE') {
+      const staged = RoleProfileJobDescriptionContentSchema.safeParse(artifact.content)
+      if (staged.success && staged.data.stage === 'JOB_DESCRIPTION_CONFIRMED') {
+        throw new DomainError(
+          'TALENT_PROFILE_GENERATION_REQUIRED',
+          '岗位说明已锁定，请先生成并确认完整人才画像',
+          409,
+        )
+      }
+      if (staged.success && staged.data.stage === 'JOB_DESCRIPTION_DRAFT') {
+        if (artifact.content_hash !== submittedHash) {
+          throw new DomainError('CONTENT_HASH_MISMATCH', '产物已发生变化，请查看最新版本后再确认', 409)
+        }
+        if (artifact.status !== 'DRAFT') {
+          throw new DomainError('ARTIFACT_NOT_CONFIRMABLE', '仅草稿可以确认', 409)
+        }
+        const locked = createArtifactEnvelope({
+          roleSessionId,
+          type: 'ROLE_PROFILE',
+          version: Math.max(
+            0,
+            ...aggregate.artifacts
+              .filter((item) => item.type === 'ROLE_PROFILE')
+              .map((item) => item.version),
+          ) + 1,
+          content: {
+            schema_version: '2',
+            stage: 'JOB_DESCRIPTION_CONFIRMED',
+            job_description: staged.data.job_description,
+            job_description_confirmation: {
+              source_artifact_id: artifact.id,
+              section_hash: contentHash(staged.data.job_description),
+              confirmed_by: actor.user_id,
+              confirmed_at: nowIso(),
+            },
+          },
+          createdBy: actor.user_id,
+          basedOnHash: artifact.content_hash,
+        })
+        await this.store.insertArtifact(locked)
+        const state: RoleState = {
+          ...aggregate.state,
+          stage: 'PROFILE_DRAFT',
+          revision: aggregate.state.revision + 1,
+          latest_artifacts: {
+            ...aggregate.state.latest_artifacts,
+            ROLE_PROFILE: {
+              id: locked.id,
+              version: locked.version,
+              status: locked.status,
+              content_hash: locked.content_hash,
+              content: locked.content,
+            },
+          },
+          updated_at: nowIso(),
+        }
+        await this.persistState(state, aggregate.state.revision)
+        await this.audit(actor, roleSessionId, 'CONFIRM_ARTIFACT', artifact.type, artifact.id, {
+          content_hash: submittedHash,
+          version: artifact.version,
+          effective_actor_role: effectiveRole,
+          confirmation_scope: 'JOB_DESCRIPTION',
+        })
+        return locked
+      }
     }
     const confirmed = confirmArtifact(artifact, actor, submittedHash)
     await this.store.updateArtifact(confirmed)

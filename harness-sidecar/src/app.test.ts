@@ -1,4 +1,8 @@
-import type { RoleState } from '@role-clarifier/contracts'
+import type {
+  AgentContextSnapshot,
+  RoleProfileGenerationProjection,
+  RoleState,
+} from '@role-clarifier/contracts'
 import { describe, expect, it } from 'vitest'
 import { buildSidecarApp, type ExecutorLike } from './app.js'
 import { loadSidecarConfig } from './config.js'
@@ -6,9 +10,10 @@ import {
   HarnessExecutor,
   maxTokensForTask,
   recoverResultFromTool,
+  timeoutMsForTask,
 } from './executor.js'
 import { buildContextSnapshot, buildTaskPrompt } from './prompts.js'
-import { parseHarnessResult, type HarnessRequest } from './schemas.js'
+import { HarnessRequestSchema, parseHarnessResult, type HarnessRequest } from './schemas.js'
 
 const state: RoleState = {
   id: '11111111-1111-4111-8111-111111111111',
@@ -52,12 +57,250 @@ const request: HarnessRequest = {
   structured_output_repair_attempts: 1,
 }
 
+const talentProjection: RoleProfileGenerationProjection = {
+  projection: 'ROLE_PROFILE',
+  state_revision: 7,
+  role: {
+    id: state.id,
+    title: '商业化产品负责人',
+    department: '产品与商业化',
+    stage: 'PROFILE_DRAFT',
+    hc_status: 'APPROVED',
+  },
+  facts: [],
+  conflicts: [],
+  artifact_refs: [],
+  task_context: {
+    task: 'GENERATE_ROLE_PROFILE',
+    artifacts: [],
+    role_profile_mode: 'TALENT_PROFILE',
+    locked_job_description: {
+      artifact_id: 'artifact-locked-job-description',
+      version: 2,
+      section_hash: '1234567890abcdef1234567890abcdef',
+      confirmed_by: 'manager-confirmed-job-description',
+      confirmed_at: '2026-08-18T00:00:00.000Z',
+      content: {
+        hiring_background: {
+          business_change: '业务正在从项目交付转向平台化经营。',
+          organization_gap: '团队缺少持续负责平台产品边界的岗位。',
+          hiring_conclusion: '新增一名平台产品负责人。',
+          no_hire_impact: '重复建设将继续增加。',
+          evidence_refs: ['E-LOCKED-01'],
+        },
+        job_purpose: {
+          statement: '将分散需求沉淀为可复用的平台能力。',
+          evidence_refs: ['E-LOCKED-01'],
+        },
+        key_accountabilities: [{
+          id: 'KRA-01',
+          name: '平台产品规划',
+          responsibility: '持续定义产品边界与路线。',
+          core_outputs: ['产品路线图'],
+          success_outcome_refs: ['O-01'],
+          evidence_refs: ['E-LOCKED-01'],
+        }],
+        success_criteria: [
+          {
+            id: 'O-01', horizon: '3个月', title: '形成产品路线图',
+            definition: '完成现状诊断并明确优先级。', measures: ['路线图通过评审'],
+            status: '已确认', evidence_refs: ['E-LOCKED-01'],
+          },
+          {
+            id: 'O-02', horizon: '6个月', title: '验证重点能力',
+            definition: '完成重点场景验证。', measures: ['场景验收通过'],
+            status: '已确认', evidence_refs: ['E-LOCKED-01'],
+          },
+          {
+            id: 'O-03', horizon: '12个月', title: '形成规模复用',
+            definition: '平台能力在多个场景复用。', measures: ['复用目标达成'],
+            status: '已确认', evidence_refs: ['E-LOCKED-01'],
+          },
+        ],
+        work_scenarios: [{
+          id: 'S-01',
+          title: '跨团队优先级决策',
+          frequency: '每周',
+          trigger: '多个需求同时进入评审。',
+          actions: '组织评审并完成取舍。',
+          output: '优先级决策。',
+          challenge: '平衡短期交付和长期复用。',
+          stakeholders: ['研发', '交付'],
+          success_outcome_refs: ['O-01'],
+          evidence_refs: ['E-LOCKED-01'],
+        }],
+        boundaries: {
+          owns: ['产品边界与路线图'],
+          does_not_own: ['研发编制决策'],
+          decision_rights: ['提出需求优先级取舍'],
+          key_collaborations: ['研发', '交付'],
+          available_resources: ['客户调研材料'],
+          evidence_refs: ['E-LOCKED-01'],
+        },
+      },
+    },
+  },
+}
+
+const jobDescriptionProjection: RoleProfileGenerationProjection = {
+  projection: 'ROLE_PROFILE',
+  state_revision: 4,
+  role: {
+    id: state.id,
+    title: '商业化产品负责人',
+    department: '产品与商业化',
+    stage: 'SUCCESS_CLARIFYING',
+    hc_status: 'APPROVED',
+    hc_context: {
+      request_id: 'HC-FIRST-STAGE-001',
+      status: 'APPROVED',
+      approved_at: '2026-08-18T00:00:00.000Z',
+      business_change: 'FIRST_STAGE_HC_BUSINESS_CHANGE',
+      organization_gap: 'FIRST_STAGE_HC_ORGANIZATION_GAP',
+      approved_reason: 'FIRST_STAGE_HC_APPROVED_REASON',
+      initial_responsibilities: ['FIRST_STAGE_INITIAL_RESPONSIBILITY'],
+      recruiting_budget: 'FIRST_STAGE_RECRUITING_BUDGET',
+      recruiting_constraints: ['FIRST_STAGE_RECRUITING_CONSTRAINT'],
+      hiring_manager_user_id: 'manager-first-stage',
+      assigned_hr_user_id: 'hr-first-stage',
+      job_basics: {
+        recruitment_type: 'NEW_HEADCOUNT',
+        headcount: 1,
+        level: 'P7',
+        reporting_line: '产品负责人',
+        locations: ['北京'],
+        employment_type: '全职',
+        salary_range: '内部审批范围',
+        target_onboard: '8 周内',
+      },
+    },
+  },
+  facts: [{
+    category: 'SUCCESS_CRITERION',
+    statement: 'FIRST_STAGE_CONFIRMED_FACT',
+    source: '用人经理确认',
+    status: 'CONFIRMED',
+    evidence_refs: ['conversation://first-stage'],
+  }],
+  conflicts: [{
+    field: '岗位范围',
+    left_value: 'FIRST_STAGE_CONFLICT_LEFT',
+    right_value: 'FIRST_STAGE_CONFLICT_RIGHT',
+    source_refs: ['hc://first-stage', 'conversation://first-stage'],
+    status: 'OPEN',
+  }],
+  artifact_refs: [],
+  task_context: {
+    task: 'GENERATE_ROLE_PROFILE',
+    artifacts: [],
+    role_profile_mode: 'JOB_DESCRIPTION',
+  },
+}
+
 const config = loadSidecarConfig({
   NODE_ENV: 'test',
   HARNESS_SIDECAR_TOKEN: 'test-sidecar-token-at-least-24-chars',
 })
 
 describe('Harness sidecar', () => {
+  it('accepts the strict role profile projection at the Sidecar boundary', () => {
+    const parsed = HarnessRequestSchema.safeParse({
+      ...request,
+      task: 'GENERATE_ROLE_PROFILE',
+      role_state: talentProjection,
+      message: undefined,
+      conversation_context: undefined,
+    })
+
+    expect(parsed.success).toBe(true)
+  })
+
+  it('rejects talent projections polluted with HC or unrelated artifact references', () => {
+    const requestBase = {
+      ...request,
+      task: 'GENERATE_ROLE_PROFILE',
+      message: undefined,
+      conversation_context: undefined,
+    }
+    const withHcContext = {
+      ...talentProjection,
+      role: {
+        ...talentProjection.role,
+        hc_context: jobDescriptionProjection.role.hc_context,
+      },
+    }
+    const withArtifactReference = {
+      ...talentProjection,
+      artifact_refs: [{
+        type: 'ASSESSMENT_SCORECARD',
+        id: 'assessment-secret-reference',
+        version: 1,
+        status: 'CONFIRMED',
+        content_hash: '1234567890abcdef',
+      }],
+    }
+
+    expect(HarnessRequestSchema.safeParse({
+      ...requestBase,
+      role_state: withHcContext,
+    }).success).toBe(false)
+    expect(HarnessRequestSchema.safeParse({
+      ...requestBase,
+      role_state: withArtifactReference,
+    }).success).toBe(false)
+  })
+
+  it('builds the talent prompt from the locked job description without restoring HC context', () => {
+    const roleProfileRequest: HarnessRequest = {
+      ...request,
+      task: 'GENERATE_ROLE_PROFILE',
+      role_state: talentProjection,
+      message: undefined,
+      conversation_context: undefined,
+    }
+    let prompt = ''
+    let context: AgentContextSnapshot | undefined
+
+    expect(() => {
+      context = buildContextSnapshot(roleProfileRequest)
+      prompt = buildTaskPrompt(roleProfileRequest)
+    }).not.toThrow()
+
+    expect(context?.long_term_memory.role_state).toEqual(talentProjection)
+    expect(prompt).toContain('artifact-locked-job-description')
+    expect(prompt).toContain('manager-confirmed-job-description')
+    expect(prompt).toContain('将分散需求沉淀为可复用的平台能力。')
+    expect(prompt).toContain('先调用 read_role_state')
+    expect(prompt).not.toContain('hc_context')
+    expect(prompt).not.toContain('request_id')
+    expect(prompt).not.toContain('年度新增编制预算内')
+    expect(prompt).not.toContain('latest_artifacts')
+    expect(prompt).not.toContain('ASSESSMENT_SCORECARD')
+    expect(prompt).not.toContain('PUBLIC_JD')
+    expect(prompt).not.toContain('HR_RECRUITING_BRIEF')
+  })
+
+  it('keeps approved HC facts and conflicts in the first-stage job description prompt', () => {
+    const roleProfileRequest: HarnessRequest = {
+      ...request,
+      task: 'GENERATE_ROLE_PROFILE',
+      role_state: jobDescriptionProjection,
+      message: undefined,
+      conversation_context: undefined,
+    }
+    const context = buildContextSnapshot(roleProfileRequest)
+    const prompt = buildTaskPrompt(roleProfileRequest)
+
+    expect(prompt).toContain('FIRST_STAGE_HC_BUSINESS_CHANGE')
+    expect(prompt).toContain('FIRST_STAGE_CONFIRMED_FACT')
+    expect(prompt).toContain('FIRST_STAGE_CONFLICT_LEFT')
+    expect(prompt).toContain('"role_profile_mode":"JOB_DESCRIPTION"')
+    expect(prompt).toContain('先调用 read_role_state')
+    expect(context.long_term_memory.role_state).not.toHaveProperty(
+      'task_context.locked_job_description',
+    )
+  })
+
   it('does not expose actor identity fields to the model prompt', () => {
     const prompt = buildTaskPrompt(request)
     expect(prompt).not.toContain('actor_user_id')
@@ -84,6 +327,24 @@ describe('Harness sidecar', () => {
       task: 'CLARIFY_MESSAGE',
       current_user_role: 'MANAGER',
     })
+  })
+
+  it('loads only the core and current task prompt', () => {
+    const clarification = buildContextSnapshot(request)
+    expect(clarification.system_prompt.content).toContain('<P-01')
+    expect(clarification.system_prompt.content).not.toContain('<P-02')
+    expect(clarification.task_state.orchestration_instructions).toContain('<P-02')
+    expect(clarification.task_state.orchestration_instructions).not.toContain('<P-03')
+
+    const jd = buildContextSnapshot({
+      ...request,
+      task: 'GENERATE_JD',
+      message: undefined,
+      conversation_context: undefined,
+    })
+    expect(jd.system_prompt.content).toContain('<P-01')
+    expect(jd.task_state.orchestration_instructions).toContain('<P-05')
+    expect(jd.task_state.orchestration_instructions).not.toContain('<P-07')
   })
 
   it('repairs fenced model JSON into the typed result', () => {
@@ -120,9 +381,22 @@ describe('Harness sidecar', () => {
   it('sends greetings and capability questions through the model prompt', () => {
     const prompt = buildTaskPrompt({ ...request, message: '你好，你可以做什么？' })
     expect(prompt).toContain('你好，你可以做什么？')
-    expect(prompt).toContain('不要套用固定模板')
-    expect(prompt).toContain('不要调用 read_role_state 或其他领域工具')
+    expect(prompt).toContain('<P-02')
+    expect(prompt).not.toContain('<P-03')
+    expect(prompt).toContain('CONVERSATION 不调用工具')
     expect(prompt).toContain('"kind":"CONVERSATION"')
+  })
+
+  it('puts an explicit user reply constraint ahead of contextual capability guidance', () => {
+    const prompt = buildTaskPrompt({
+      ...request,
+      message: '请只回复：我可以协助澄清岗位。',
+    })
+
+    expect(prompt).toContain('请只回复：我可以协助澄清岗位。')
+    expect(prompt).toContain('必须严格遵守该输出约束')
+    expect(prompt).toContain('不得补充岗位名称、当前状态、历史事实、下一步建议或寒暄')
+    expect(prompt).toContain('指定了输出格式时，以用户的格式要求为准')
   })
 
   it('keeps artifact content out of the initial model prompt and only exposes references', () => {
@@ -151,6 +425,12 @@ describe('Harness sidecar', () => {
     expect(maxTokensForTask('CLARIFY_MESSAGE', 16_384)).toBe(4_096)
     expect(maxTokensForTask('EXTRACT_CANDIDATES', 16_384)).toBe(8_192)
     expect(maxTokensForTask('GENERATE_JD', 16_384)).toBe(16_384)
+  })
+
+  it('extends only role profile generation beyond the default run timeout', () => {
+    expect(timeoutMsForTask('GENERATE_ROLE_PROFILE', 90_000, 240_000)).toBe(240_000)
+    expect(timeoutMsForTask('CLARIFY_MESSAGE', 90_000, 240_000)).toBe(90_000)
+    expect(timeoutMsForTask('GENERATE_JD', 90_000, 240_000)).toBe(90_000)
   })
 
   it('does not fabricate a canned conversation when model output is invalid', () => {

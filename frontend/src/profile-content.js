@@ -1,0 +1,350 @@
+const asArray = (value) => (Array.isArray(value) ? value : []);
+const asObject = (value) => (value && typeof value === 'object' && !Array.isArray(value) ? value : {});
+
+const toText = (value) => {
+  if (typeof value === 'string') return value.trim();
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (Array.isArray(value)) return value.map(toText).filter(Boolean).join('；');
+  if (value && typeof value === 'object') {
+    for (const key of ['statement', 'text', 'description', 'definition', 'result', 'title', 'name', 'value', 'summary', 'conclusion']) {
+      const text = toText(value[key]);
+      if (text) return text;
+    }
+  }
+  return '';
+};
+
+const joinText = (value) => asArray(value).map(toText).filter(Boolean).join('；');
+
+const textList = (value) => asArray(value).map(toText).filter(Boolean);
+
+const evidenceRefs = (value) => {
+  const source = asArray(value);
+  return source
+    .map((item) => typeof item === 'string' ? item : item?.id ?? item?.ref ?? '')
+    .filter(Boolean);
+};
+
+const boundaryLabels = {
+  owns: '负责',
+  does_not_own: '不负责',
+  decision_rights: '决策权限',
+  collaboration_and_resources: '协作资源',
+};
+
+const normalizeTalentRequirement = (item, index, prefix) => ({
+  id: toText(item?.id) || `${prefix}-${String(index + 1).padStart(2, '0')}`,
+  name: toText(item?.name) || '待补充人才要求',
+  definition: toText(item?.definition) || '待补充该人才要求的定义。',
+  mapsTo: textList(item?.maps_to),
+  observableEvidence: textList(item?.observable_evidence),
+  evidenceRefs: evidenceRefs(item?.evidence_refs),
+  status: toText(item?.status) || '待确认',
+});
+
+const normalizeTalentRequirementGroup = (value, prefix) => asArray(value)
+  .map((item, index) => normalizeTalentRequirement(item, index, prefix));
+
+export const roleProfileRequirementInstanceKey = (prefix, item, index) =>
+  `${prefix}:${toText(item?.id) || 'requirement'}:${index}`;
+
+export const roleProfileViewSections = Object.freeze({
+  jobDescription: Object.freeze([
+    Object.freeze({ id: 'hiringBackground', number: '01', title: '招聘背景' }),
+    Object.freeze({ id: 'jobPurpose', number: '02', title: '岗位设置目的' }),
+    Object.freeze({ id: 'keyAccountabilities', number: '03', title: '关键责任领域' }),
+    Object.freeze({ id: 'successCriteria', number: '04', title: '关键绩效结果与成功标准' }),
+    Object.freeze({ id: 'workScenarios', number: '05', title: '关键工作场景与挑战' }),
+    Object.freeze({ id: 'boundaries', number: '06', title: '权责边界' }),
+  ]),
+  talentProfile: Object.freeze([
+    Object.freeze({ id: 'targetTalentProfile', number: '01', title: '目标人才画像' }),
+    Object.freeze({ id: 'qualifications', number: '02', title: '任职资格' }),
+    Object.freeze({ id: 'competencyModel', number: '03', title: '岗位胜任力模型' }),
+  ]),
+});
+
+const normalizeTalentProfile = (value) => {
+  const source = asObject(value);
+  const target = asObject(source.target_talent_profile);
+  const qualifications = asObject(source.qualifications);
+  const competencyModel = asObject(source.competency_model);
+  return {
+    target: {
+      coreDefinition: toText(target.core_definition),
+      transferableBackgrounds: textList(target.transferable_backgrounds),
+      fitSignals: textList(target.fit_signals),
+      nonTargets: textList(target.non_target_and_misjudgments),
+      attractionFactors: textList(target.attraction_factors),
+      evidenceRefs: evidenceRefs(target.evidence_refs),
+    },
+    qualifications: {
+      hardQualifications: normalizeTalentRequirementGroup(qualifications.hard_qualifications, 'HQ'),
+      necessaryExperience: normalizeTalentRequirementGroup(qualifications.necessary_experience, 'NE'),
+      roleConditions: normalizeTalentRequirementGroup(qualifications.role_conditions, 'RC'),
+      mustHave: normalizeTalentRequirementGroup(qualifications.must_have, 'MH'),
+      preferred: normalizeTalentRequirementGroup(qualifications.preferred, 'PF'),
+      alternatives: normalizeTalentRequirementGroup(qualifications.alternatives, 'AL'),
+    },
+    competencyModel: {
+      knowledge: normalizeTalentRequirementGroup(competencyModel.knowledge, 'KN'),
+      skills: normalizeTalentRequirementGroup(competencyModel.skills, 'SK'),
+      behavioralCompetencies: normalizeTalentRequirementGroup(competencyModel.behavioral_competencies, 'BC'),
+      valuesAndWorkStyle: normalizeTalentRequirementGroup(competencyModel.values_and_work_style, 'VW'),
+      careerMotivation: normalizeTalentRequirementGroup(competencyModel.career_motivation, 'CM'),
+    },
+  };
+};
+
+export function roleProfileAction(latest) {
+  if (!latest) return { kind: 'generate', label: '生成岗位说明' };
+  if (latest.content?.schema_version !== '2') {
+    return latest.status === 'DRAFT'
+      ? { kind: 'confirm', label: '确认画像依据' }
+      : { kind: 'generate', label: '生成新版本' };
+  }
+  if (latest.content.stage === 'JOB_DESCRIPTION_DRAFT') {
+    return { kind: 'confirm', label: '确认岗位说明' };
+  }
+  if (latest.content.stage === 'JOB_DESCRIPTION_CONFIRMED') {
+    return { kind: 'generate', label: '推导人才画像' };
+  }
+  if (latest.content.stage === 'TALENT_PROFILE_DRAFT' && latest.status === 'DRAFT') {
+    return { kind: 'confirm', label: '确认完整岗位画像' };
+  }
+  return { kind: 'generate', label: '生成新版本' };
+}
+
+export function roleProfileViewStatus(latest, view) {
+  if (!latest) return '尚未生成';
+  if (latest.status === 'INVALIDATED') return '需更新';
+  if (latest.content?.schema_version !== '2') {
+    return latest.status === 'DRAFT' ? '待确认' : '已确认';
+  }
+
+  const stage = latest.content.stage;
+  if (view === 'talentProfile') {
+    if (stage === 'JOB_DESCRIPTION_DRAFT') return '待确认岗位说明';
+    if (stage === 'JOB_DESCRIPTION_CONFIRMED') return '尚未生成';
+    if (stage === 'TALENT_PROFILE_DRAFT') {
+      return latest.status === 'DRAFT' ? '待确认' : '已确认';
+    }
+  }
+
+  if (stage === 'JOB_DESCRIPTION_DRAFT') return '待确认';
+  if (stage === 'JOB_DESCRIPTION_CONFIRMED' || stage === 'TALENT_PROFILE_DRAFT') return '已确认';
+  return latest.status === 'DRAFT' ? '待确认' : '已确认';
+}
+
+export function normalizeRoleProfileContent(content = {}, hc = null) {
+  const rawSource = content && typeof content === 'object' ? content : {};
+  const isStagedV2 = rawSource.schema_version === '2' && Boolean(rawSource.job_description);
+  const rawJobDescription = asObject(rawSource.job_description);
+  const source = isStagedV2
+    ? {
+        ...rawSource,
+        mission: rawJobDescription.job_purpose?.statement,
+        hiring_reason: rawJobDescription.hiring_background,
+        success_outcomes: rawJobDescription.success_criteria,
+        work_scenarios: asArray(rawJobDescription.work_scenarios).map((item) => ({
+          ...asObject(item),
+          outcome_refs: item?.success_outcome_refs,
+        })),
+        responsibilities: asArray(rawJobDescription.key_accountabilities).map((item) => item?.responsibility),
+        boundaries: {
+          ...asObject(rawJobDescription.boundaries),
+          collaboration_and_resources: [
+            ...asArray(rawJobDescription.boundaries?.key_collaborations),
+            ...asArray(rawJobDescription.boundaries?.available_resources),
+          ],
+        },
+      }
+    : rawSource;
+  const work = asArray(source.work);
+  const legacyOutcomes = asArray(source.success_outcomes).length
+    ? asArray(source.success_outcomes)
+    : asArray(source.outcomes);
+  const outcomes = (legacyOutcomes.length ? legacyOutcomes : work).map((item, index) => {
+    const measures = textList(item?.measures).length
+      ? textList(item?.measures)
+      : textList(item?.deliverables);
+    const definition = item?.definition ?? item?.description ?? item?.result ?? item?.title ?? '待补充结果';
+    return {
+      id: toText(item?.id) || `O-${String(index + 1).padStart(2, '0')}`,
+      horizon: toText(item?.horizon) || toText(item?.id) || `阶段 ${index + 1}`,
+      title: toText(item?.title ?? item?.result ?? item?.description) || '待补充结果',
+      result: toText(item?.result ?? item?.description ?? item?.title) || '待补充结果',
+      definition: toText(definition) || '待补充结果',
+      measures,
+      status: toText(item?.status) || '待确认',
+      evidence: typeof item?.evidence === 'string' ? item.evidence : joinText(item?.deliverables),
+      evidenceRefs: evidenceRefs(item?.evidence_refs ?? (typeof item?.evidence === 'string' ? [] : item?.evidence)),
+    };
+  });
+
+  const responsibilities = asArray(source.responsibilities).length
+    ? asArray(source.responsibilities).map(toText).filter(Boolean)
+    : work.map((item) => toText(item?.description ?? item?.title)).filter(Boolean);
+  const fallbackResponsibilities = asArray(hc?.initial_responsibilities);
+
+  const legacyCapabilities = asArray(source.capabilities);
+  const capabilities = (legacyCapabilities.length ? legacyCapabilities : asArray(source.requirements))
+    .map((item, index) => ({
+      id: toText(item?.id) || `C-${String(index + 1).padStart(2, '0')}`,
+      name: toText(item?.name ?? item?.title) || '待补充能力',
+      level: toText(item?.level ?? item?.priority) || '待确认',
+      priority: toText(item?.priority) || (legacyCapabilities.length ? 'Must-have' : '待确认'),
+      rationale: toText(item?.rationale ?? item?.why) || '待补充该要求与岗位成功的关系。',
+      mapping: textList(item?.maps_to).length ? textList(item?.maps_to) : textList(item?.mapping),
+      strongEvidence: typeof item?.evidence === 'string'
+        ? item.evidence
+        : joinText(item?.strong_evidence) || toText(item?.strongEvidence ?? item?.rationale) || '待补充可观察证据',
+      substitute: joinText(item?.substitute_evidence) || toText(item?.substitute) || '待补充可接受的替代经历。',
+      risk: joinText(item?.risk_signals) || toText(item?.risk) || '待补充风险信号。',
+      assessment: toText(item?.assessment_method ?? item?.assessment) || '待评估方案生成',
+      evidence: typeof item?.evidence === 'string'
+        ? item.evidence
+        : joinText(item?.strong_evidence) || item?.rationale || '待补充可观察证据',
+      evidenceRefs: evidenceRefs(item?.evidence_refs ?? (typeof item?.evidence === 'string' ? [] : item?.evidence)),
+    }));
+
+  const scenarioSource = asArray(source.work_scenarios).length
+    ? asArray(source.work_scenarios)
+    : asArray(source.scenarios).length
+      ? asArray(source.scenarios)
+      : work.filter((item) => item?.trigger || item?.actions || item?.challenge || item?.stakeholders);
+  const scenarios = scenarioSource.map((item, index) => ({
+    id: toText(item?.id) || `T-${String(index + 1).padStart(2, '0')}`,
+    title: toText(item?.title ?? item?.name) || `关键工作场景 ${index + 1}`,
+    frequency: toText(item?.frequency) || '频率待确认',
+    trigger: toText(item?.trigger ?? item?.context) || '触发情境待补充',
+    actions: toText(item?.actions) || joinText(item?.actions) || toText(item?.description) || '关键动作待补充',
+    output: toText(item?.output) || joinText(item?.outputs) || joinText(item?.deliverables) || '主要产出待补充',
+    challenge: toText(item?.challenge) || '核心挑战待补充',
+    stakeholders: toText(item?.stakeholders) || joinText(item?.stakeholders) || '协作对象待补充',
+    outcomeRefs: textList(item?.outcome_refs).length ? textList(item?.outcome_refs) : textList(item?.outcomes),
+    evidenceRefs: evidenceRefs(item?.evidence_refs ?? item?.evidence),
+  }));
+
+  const legacyBoundaries = asArray(source.boundaries);
+  const boundarySource = asObject(source.boundaries);
+  const owns = textList(boundarySource.owns);
+  const notOwns = textList(boundarySource.does_not_own).length
+    ? textList(boundarySource.does_not_own)
+    : textList(boundarySource.not_owns ?? boundarySource.notOwns);
+  const decisionRights = toText(boundarySource.decision_rights)
+    || toText(boundarySource.decisionRights)
+    || joinText(boundarySource.decision_rights);
+  const resources = toText(boundarySource.collaboration_and_resources)
+    || toText(boundarySource.resources)
+    || joinText(boundarySource.collaboration_and_resources);
+  const boundaries = legacyBoundaries.length
+    ? legacyBoundaries.map(toText).filter(Boolean)
+    : Object.entries(boundaryLabels).flatMap(([key, label]) =>
+        asArray(boundarySource?.[key])
+          .map(toText)
+          .filter(Boolean)
+          .map((statement) => `${label}：${statement}`),
+      );
+
+  const hiringReason = Object.keys(asObject(source.hiring_reason)).length
+    ? asObject(source.hiring_reason)
+    : asObject(source.recruitment);
+  const recruitment = {
+    conclusion: toText(source.hiring_reason) || toText(hiringReason.conclusion) || toText(hiringReason.reason) || hc?.approved_reason || '待补充招聘结论',
+    businessChange: toText(hiringReason.business_change) || toText(hiringReason.businessChange) || hc?.business_change || '待同步业务变化',
+    organizationGap: toText(hiringReason.organization_gap) || toText(hiringReason.organizationGap) || hc?.organization_gap || '待同步组织缺口',
+    noHireImpact: toText(hiringReason.no_hire_impact) || toText(hiringReason.noHireImpact) || toText(source.no_hire_impact),
+    evidenceRefs: evidenceRefs(hiringReason.evidence_refs ?? hiringReason.evidence ?? source.evidence_refs),
+  };
+
+  const jobDescription = isStagedV2 ? {
+    hiringBackground: {
+      businessChange: toText(rawJobDescription.hiring_background?.business_change),
+      organizationGap: toText(rawJobDescription.hiring_background?.organization_gap),
+      hiringConclusion: toText(rawJobDescription.hiring_background?.hiring_conclusion),
+      noHireImpact: toText(rawJobDescription.hiring_background?.no_hire_impact),
+      evidenceRefs: evidenceRefs(rawJobDescription.hiring_background?.evidence_refs),
+    },
+    jobPurpose: {
+      statement: toText(rawJobDescription.job_purpose?.statement),
+      evidenceRefs: evidenceRefs(rawJobDescription.job_purpose?.evidence_refs),
+    },
+    accountabilities: asArray(rawJobDescription.key_accountabilities).map((item, index) => {
+      const id = toText(item?.id) || `KRA-${String(index + 1).padStart(2, '0')}`;
+      return {
+        id,
+        instanceKey: `accountability:${id}:${index}`,
+        name: toText(item?.name) || '待补充责任领域',
+        responsibility: toText(item?.responsibility) || '待补充持续承担的责任',
+        coreOutputs: textList(item?.core_outputs),
+        successOutcomeRefs: textList(item?.success_outcome_refs),
+        evidenceRefs: evidenceRefs(item?.evidence_refs),
+      };
+    }),
+    successCriteria: asArray(rawJobDescription.success_criteria).map((item, index) => {
+      const id = toText(item?.id) || `O-${String(index + 1).padStart(2, '0')}`;
+      return {
+        id,
+        instanceKey: `success-criterion:${id}:${index}`,
+        horizon: toText(item?.horizon) || `阶段 ${index + 1}`,
+        title: toText(item?.title) || '待补充成功结果',
+        definition: toText(item?.definition) || '待补充结果定义',
+        measures: textList(item?.measures),
+        status: toText(item?.status) || '待确认',
+        evidenceRefs: evidenceRefs(item?.evidence_refs),
+      };
+    }),
+    workScenarios: asArray(rawJobDescription.work_scenarios).map((item, index) => {
+      const id = toText(item?.id) || `S-${String(index + 1).padStart(2, '0')}`;
+      return {
+        id,
+        instanceKey: `scenario:${id}:${index}`,
+        title: toText(item?.title) || `关键工作场景 ${index + 1}`,
+        frequency: toText(item?.frequency) || '频率待确认',
+        trigger: toText(item?.trigger) || '触发情境待补充',
+        actions: toText(item?.actions) || joinText(item?.actions) || '关键动作待补充',
+        output: toText(item?.output) || joinText(item?.outputs) || '主要产出待补充',
+        challenge: toText(item?.challenge) || '核心挑战待补充',
+        stakeholders: textList(item?.stakeholders),
+        successOutcomeRefs: textList(item?.success_outcome_refs),
+        evidenceRefs: evidenceRefs(item?.evidence_refs),
+      };
+    }),
+    boundaries: {
+      owns: textList(rawJobDescription.boundaries?.owns),
+      doesNotOwn: textList(rawJobDescription.boundaries?.does_not_own),
+      decisionRights: textList(rawJobDescription.boundaries?.decision_rights),
+      keyCollaborations: textList(rawJobDescription.boundaries?.key_collaborations),
+      availableResources: textList(rawJobDescription.boundaries?.available_resources),
+      evidenceRefs: evidenceRefs(rawJobDescription.boundaries?.evidence_refs),
+    },
+    confirmation: {
+      sourceArtifactId: toText(rawSource.job_description_confirmation?.source_artifact_id),
+      sectionHash: toText(rawSource.job_description_confirmation?.section_hash),
+      confirmedBy: toText(rawSource.job_description_confirmation?.confirmed_by),
+      confirmedAt: toText(rawSource.job_description_confirmation?.confirmed_at),
+    },
+  } : null;
+
+  return {
+    schemaVersion: isStagedV2 ? '2' : null,
+    internalStage: isStagedV2 ? toText(rawSource.stage) : null,
+    jobDescription,
+    talentProfile: isStagedV2 && rawSource.talent_profile ? normalizeTalentProfile(rawSource.talent_profile) : null,
+    mission: toText(source.mission) || toText(hiringReason.mission) || '当前版本未形成岗位使命，请生成新版本补齐。',
+    recruitment,
+    outcomes,
+    scenarios,
+    responsibilities: responsibilities.length ? responsibilities : fallbackResponsibilities,
+    capabilities,
+    boundaries,
+    boundaryGroups: {
+      owns: owns.length ? owns : boundaries.filter((item) => item.startsWith('负责：')).map((item) => item.slice(3)),
+      notOwns: notOwns.length ? notOwns : boundaries.filter((item) => item.startsWith('不负责：')).map((item) => item.slice(4)),
+      decisionRights: decisionRights || boundaries.find((item) => item.startsWith('决策权限：'))?.slice(5) || '待确认关键决策权限。',
+      resources: resources || boundaries.find((item) => item.startsWith('协作资源：'))?.slice(5) || '待确认必要协作与资源。',
+      evidenceRefs: evidenceRefs(boundarySource.evidence_refs ?? boundarySource.evidence),
+    },
+  };
+}

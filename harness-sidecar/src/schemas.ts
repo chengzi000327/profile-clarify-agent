@@ -2,6 +2,7 @@ import {
   ArtifactTypeSchema,
   CandidateEvidenceSchema,
   FactCategorySchema,
+  RoleProfileGenerationProjectionSchema,
   RoleStateSchema,
   ToolExecutionContextSchema,
 } from '@role-clarifier/contracts'
@@ -24,9 +25,7 @@ const CandidateImportItemSchema = z.object({
   content: z.union([z.string(), z.record(z.string(), z.unknown())]),
 })
 
-export const HarnessRequestSchema = z.object({
-  task: HarnessTaskSchema,
-  role_state: RoleStateSchema,
+const HarnessRequestBaseSchema = z.object({
   message: z.string().optional(),
   conversation_context: z.object({
     current_user_role: z.enum(['MANAGER', 'HR', 'ADMIN']),
@@ -45,6 +44,26 @@ export const HarnessRequestSchema = z.object({
   maximum_transitions: z.literal(10),
   structured_output_repair_attempts: z.literal(1),
 })
+
+const NonRoleProfileHarnessTaskSchema = z.enum([
+  'CLARIFY_MESSAGE',
+  'GENERATE_ASSESSMENT',
+  'GENERATE_JD',
+  'GENERATE_HR_BRIEF',
+  'EXTRACT_CANDIDATES',
+  'CALIBRATION_ADVICE',
+])
+
+export const HarnessRequestSchema = z.union([
+  HarnessRequestBaseSchema.extend({
+    task: z.literal('GENERATE_ROLE_PROFILE'),
+    role_state: RoleProfileGenerationProjectionSchema,
+  }),
+  HarnessRequestBaseSchema.extend({
+    task: NonRoleProfileHarnessTaskSchema,
+    role_state: RoleStateSchema,
+  }),
+])
 
 const ToolPersistenceSchema = z.literal('TOOL')
 const ResultSummarySchema = z.preprocess(

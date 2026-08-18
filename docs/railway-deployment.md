@@ -57,6 +57,7 @@ Browser -> web (public HTTPS)
 - `DEEPSEEK_PRO_MODEL=deepseek-v4-pro`
 - `DSH_MAX_TOKENS=16384`
 - `DSH_RUN_TIMEOUT_MS=90000`
+- `DSH_ROLE_PROFILE_TIMEOUT_MS=240000`
 - `SIDECAR_CONCURRENCY=4`
 - `HARNESS_SIDECAR_TOKEN=<same shared secret as api>`
 - `ROLE_AGENT_TOOL_TOKEN=<same shared secret as api>`
@@ -66,8 +67,9 @@ Browser -> web (public HTTPS)
 1. 三个 Docker 镜像构建成功。
 2. `api` 和 `harness-sidecar` 的 `/healthz` 在私网可访问。
 3. `web` 的公开 `/healthz` 返回 200。
-4. 新账号选择角色后进入空工作台；直接发送第一条消息即可建立岗位，同一账号重新登录可恢复，不同普通账号不可读取；经理可提交消息并收到完整 SSE。
-5. HR 账号看得到内部招聘画像，经理账号不可见。
-6. 真实 DeepSeek Flash 澄清和 Pro 产物各跑一次。
-7. 企业管理员 Trace 将 System Prompt、当前输入、短期会话记忆、长期岗位记忆和任务状态分层展示，同时保留完整用户原文、实际模型输入输出和工具数据；确认其中不出现 API Key、Cookie 或内部令牌。
-8. 若启用飞书，完成回调 URL 验证；机器人单聊第一条消息能够建立岗位，重复事件不产生重复 Run，并能用卡片返回岗位画像。
+4. 三个固定账号登录后进入岗位澄清会话，默认内容区显示 10 条产研/算法已审批 HC，招聘类型覆盖新增、离职补充、汰换补充、组织调整和其他补充；进入岗位后左侧只显示当前会话，岗位画像入口保持可见。
+5. 首次选择 HC 后由 Agent 结合审批原因和组织缺口主动发出首问；重复选择同一 HC 返回原会话且不生成重复会话或首问，选择页按真实岗位阶段显示待开始、澄清中或画像状态。
+6. HR 账号看得到内部招聘画像，经理账号不可见。
+7. 真实 DeepSeek Flash 澄清和 Pro 产物各跑一次。
+8. 企业管理员 Trace 分页覆盖租户内全部 Run，并保留完整事件；确认其中不出现 API Key、Cookie 或内部令牌。
+9. 若启用飞书，完成回调 URL 验证；机器人单聊第一条消息能够建立岗位，重复事件不产生重复 Run，并能用卡片返回岗位画像。

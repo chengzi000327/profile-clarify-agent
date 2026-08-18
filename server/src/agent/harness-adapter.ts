@@ -3,6 +3,7 @@ import {
   type ArtifactType,
   type CandidateEvidence,
   type FactCategory,
+  type RoleProfileGenerationProjection,
   type RoleState,
   type ToolExecutionContext,
 } from '@role-clarifier/contracts'
@@ -24,9 +25,7 @@ export interface CandidateImportItem {
   content: string | Record<string, unknown>
 }
 
-export interface HarnessRequest {
-  task: HarnessTask
-  role_state: RoleState
+interface HarnessRequestBase {
   message?: string
   conversation_context?: {
     current_user_role: 'MANAGER' | 'HR' | 'ADMIN'
@@ -42,6 +41,19 @@ export interface HarnessRequest {
   maximum_transitions: 10
   structured_output_repair_attempts: 1
 }
+
+type NonRoleProfileHarnessTask = Exclude<HarnessTask, 'GENERATE_ROLE_PROFILE'>
+
+export type HarnessRequest = HarnessRequestBase & (
+  | {
+      task: 'GENERATE_ROLE_PROFILE'
+      role_state: RoleProfileGenerationProjection
+    }
+  | {
+      task: NonRoleProfileHarnessTask
+      role_state: RoleState
+    }
+)
 
 export type HarnessResult =
   | {

@@ -1,11 +1,20 @@
 import {
   FACT_CATEGORIES,
+  ROLE_CLARIFIER_PROMPT_VERSION,
   ROLE_CLARIFIER_SYSTEM_PROMPT,
+  promptForTask,
+  taskPromptForTask,
   type FactCategory,
 } from '@role-clarifier/agent-spec'
 import { z } from 'zod'
 
-export { ROLE_CLARIFIER_SYSTEM_PROMPT, type FactCategory }
+export {
+  ROLE_CLARIFIER_PROMPT_VERSION,
+  ROLE_CLARIFIER_SYSTEM_PROMPT,
+  promptForTask,
+  taskPromptForTask,
+  type FactCategory,
+}
 
 export const ActorRoleSchema = z.enum(['MANAGER', 'HR', 'ADMIN'])
 export type ActorRole = z.infer<typeof ActorRoleSchema>
@@ -80,7 +89,14 @@ export const JobHeaderSchema = z.object({
 export type JobHeader = z.infer<typeof JobHeaderSchema>
 
 export const JobBasicsSchema = z.object({
-  recruitment_type: z.enum(['NEW_HEADCOUNT', 'REPLACEMENT', 'ORGANIZATION_ADJUSTMENT']),
+  recruitment_type: z.enum([
+    'NEW_HEADCOUNT',
+    'REPLACEMENT',
+    'ATTRITION_REPLACEMENT',
+    'PERFORMANCE_REPLACEMENT',
+    'ORGANIZATION_ADJUSTMENT',
+    'OTHER',
+  ]),
   headcount: z.number().int().positive(),
   level: z.string().min(1),
   reporting_line: z.string().min(1),
@@ -107,6 +123,372 @@ export const HcContextSchema = z.object({
 })
 export type HcContext = z.infer<typeof HcContextSchema>
 
+export const HcApprovalSchema = z.object({
+  request_id: z.string().min(1),
+  tenant_id: z.string().min(1),
+  title: z.string().min(1),
+  department: z.string().min(1),
+  status: z.literal('APPROVED'),
+  context: HcContextSchema,
+  role_session_id: z.string().uuid().nullable(),
+  clarification_status: z.enum(['NOT_STARTED', 'IN_PROGRESS', 'PROFILE_READY']).optional(),
+  role_stage: RoleSessionStageSchema.nullable().optional(),
+  created_at: z.string().datetime(),
+  updated_at: z.string().datetime(),
+})
+export type HcApproval = z.infer<typeof HcApprovalSchema>
+
+const ARTIFACT_TEXT_MAX_LENGTH = 4_000
+const ROLE_PROFILE_SOURCE_LIST_MAX_ITEMS = 12
+const ROLE_PROFILE_JOINED_LIST_MAX_LENGTH =
+  ARTIFACT_TEXT_MAX_LENGTH * ROLE_PROFILE_SOURCE_LIST_MAX_ITEMS
+  + (ROLE_PROFILE_SOURCE_LIST_MAX_ITEMS - 1)
+const ROLE_PROFILE_COLLABORATION_AND_RESOURCES_MAX_LENGTH =
+  ROLE_PROFILE_JOINED_LIST_MAX_LENGTH * 2 + '协作：；资源：'.length
+
+const ArtifactTextSchema = z.string().trim().min(1).max(ARTIFACT_TEXT_MAX_LENGTH)
+const ArtifactEvidenceRefsSchema = z.array(z.string().trim().min(1).max(120)).max(20).default([])
+
+const LegacyRoleProfileRequirementSchema = z.object({
+  id: z.string().trim().min(1).max(40),
+  priority: z.enum(['Must-have', 'Preferred']),
+  name: z.string().trim().min(1).max(200),
+  level: z.string().trim().min(1).max(120),
+  rationale: ArtifactTextSchema,
+  maps_to: z.array(z.string().trim().min(1).max(40)).min(1).max(12),
+  strong_evidence: z.array(ArtifactTextSchema).min(1).max(8),
+  substitute_evidence: z.array(ArtifactTextSchema).max(8).default([]),
+  risk_signals: z.array(ArtifactTextSchema).max(8).default([]),
+  assessment_method: ArtifactTextSchema,
+  evidence_refs: ArtifactEvidenceRefsSchema,
+}).strict()
+
+const LegacyRoleProfileSuccessOutcomeSchema = z.object({
+  id: z.string().trim().min(1).max(40),
+  horizon: z.string().trim().min(1).max(80),
+  title: z.string().trim().min(1).max(200),
+  definition: ArtifactTextSchema,
+  measures: z.array(ArtifactTextSchema).min(1).max(8),
+  status: z.string().trim().min(1).max(80),
+  evidence_refs: ArtifactEvidenceRefsSchema,
+}).strict()
+
+const LegacyRoleProfileWorkScenarioSchema = z.object({
+  id: z.string().trim().min(1).max(40),
+  title: z.string().trim().min(1).max(200),
+  frequency: z.string().trim().min(1).max(120),
+  trigger: ArtifactTextSchema,
+  actions: ArtifactTextSchema,
+  output: ArtifactTextSchema,
+  challenge: ArtifactTextSchema,
+  stakeholders: ArtifactTextSchema,
+  outcome_refs: z.array(z.string().trim().min(1).max(40)).max(10).default([]),
+  evidence_refs: ArtifactEvidenceRefsSchema,
+}).strict()
+
+const LegacyRoleProfileBoundariesSchema = z.object({
+  owns: z.array(ArtifactTextSchema).min(1).max(12),
+  does_not_own: z.array(ArtifactTextSchema).min(1).max(12),
+  decision_rights: ArtifactTextSchema,
+  collaboration_and_resources: ArtifactTextSchema,
+  evidence_refs: ArtifactEvidenceRefsSchema,
+}).strict()
+
+export const LegacyRoleProfileContentSchema = z
+  .object({
+    hiring_reason: z
+      .object({
+        conclusion: ArtifactTextSchema,
+        business_change: ArtifactTextSchema,
+        organization_gap: ArtifactTextSchema,
+        no_hire_impact: ArtifactTextSchema,
+        evidence_refs: ArtifactEvidenceRefsSchema,
+      })
+      .strict(),
+    mission: ArtifactTextSchema,
+    success_outcomes: z.array(LegacyRoleProfileSuccessOutcomeSchema).min(1).max(6),
+    work_scenarios: z.array(LegacyRoleProfileWorkScenarioSchema).min(1).max(8),
+    requirements: z.array(LegacyRoleProfileRequirementSchema).min(1).max(12),
+    boundaries: LegacyRoleProfileBoundariesSchema,
+  })
+  .strict()
+
+export const RoleProfileInternalStageSchema = z.enum([
+  'JOB_DESCRIPTION_DRAFT',
+  'JOB_DESCRIPTION_CONFIRMED',
+  'TALENT_PROFILE_DRAFT',
+])
+export type RoleProfileInternalStage = z.infer<typeof RoleProfileInternalStageSchema>
+
+const ArtifactIdSchema = z.string().trim().min(1).max(40)
+
+export const JobDescriptionSchema = z.object({
+  hiring_background: z.object({
+    business_change: ArtifactTextSchema,
+    organization_gap: ArtifactTextSchema,
+    hiring_conclusion: ArtifactTextSchema,
+    no_hire_impact: ArtifactTextSchema,
+    evidence_refs: ArtifactEvidenceRefsSchema,
+  }).strict(),
+  job_purpose: z.object({
+    statement: ArtifactTextSchema,
+    evidence_refs: ArtifactEvidenceRefsSchema,
+  }).strict(),
+  key_accountabilities: z.array(z.object({
+    id: ArtifactIdSchema,
+    name: z.string().trim().min(1).max(200),
+    responsibility: ArtifactTextSchema,
+    core_outputs: z.array(ArtifactTextSchema).min(1).max(8),
+    success_outcome_refs: z.array(ArtifactIdSchema).min(1).max(10),
+    evidence_refs: ArtifactEvidenceRefsSchema,
+  }).strict()).min(1).max(12),
+  success_criteria: z.array(z.object({
+    id: ArtifactIdSchema,
+    horizon: z.string().trim().min(1).max(80),
+    title: z.string().trim().min(1).max(200),
+    definition: ArtifactTextSchema,
+    measures: z.array(ArtifactTextSchema).min(1).max(8),
+    status: z.string().trim().min(1).max(80),
+    evidence_refs: ArtifactEvidenceRefsSchema,
+  }).strict()).min(3).max(8).superRefine((criteria, context) => {
+    for (const requiredHorizon of ['3个月', '6个月', '12个月']) {
+      if (!criteria.some((criterion) => criterion.horizon.replace(/\s+/g, '') === requiredHorizon)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `关键绩效结果必须包含${requiredHorizon}成功标准`,
+        })
+      }
+    }
+  }),
+  work_scenarios: z.array(z.object({
+    id: ArtifactIdSchema,
+    title: z.string().trim().min(1).max(200),
+    frequency: z.string().trim().min(1).max(120),
+    trigger: ArtifactTextSchema,
+    actions: ArtifactTextSchema,
+    output: ArtifactTextSchema,
+    challenge: ArtifactTextSchema,
+    stakeholders: z.array(ArtifactTextSchema).min(1).max(12),
+    success_outcome_refs: z.array(ArtifactIdSchema).min(1).max(10),
+    evidence_refs: ArtifactEvidenceRefsSchema,
+  }).strict()).min(1).max(8),
+  boundaries: z.object({
+    owns: z.array(ArtifactTextSchema).min(1).max(12),
+    does_not_own: z.array(ArtifactTextSchema).min(1).max(12),
+    decision_rights: z.array(ArtifactTextSchema).min(1).max(12),
+    key_collaborations: z.array(ArtifactTextSchema).min(1).max(12),
+    available_resources: z.array(ArtifactTextSchema).min(1).max(12),
+    evidence_refs: ArtifactEvidenceRefsSchema,
+  }).strict(),
+}).strict().superRefine((description, context) => {
+  const identifiedSections = [
+    ['key_accountabilities', description.key_accountabilities],
+    ['success_criteria', description.success_criteria],
+    ['work_scenarios', description.work_scenarios],
+  ] as const
+  const seenIds = new Set<string>()
+  for (const [section, items] of identifiedSections) {
+    items.forEach((item, index) => {
+      const path = [section, index, 'id'] as const
+      if (seenIds.has(item.id)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [...path],
+          message: `岗位说明中的 KRA、成功结果与工作场景 id 必须全局唯一：${item.id}`,
+        })
+      } else {
+        seenIds.add(item.id)
+      }
+    })
+  }
+
+  const successCriterionIds = new Set(description.success_criteria.map(({ id }) => id))
+  const validateSuccessReferences = (
+    section: 'key_accountabilities' | 'work_scenarios',
+    items: typeof description.key_accountabilities | typeof description.work_scenarios,
+  ) => {
+    items.forEach((item, itemIndex) => {
+      item.success_outcome_refs.forEach((reference, referenceIndex) => {
+        if (!successCriterionIds.has(reference)) {
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [section, itemIndex, 'success_outcome_refs', referenceIndex],
+            message: `引用的成功结果 ${reference} 不存在于本岗位说明 success_criteria`,
+          })
+        }
+      })
+    })
+  }
+  validateSuccessReferences('key_accountabilities', description.key_accountabilities)
+  validateSuccessReferences('work_scenarios', description.work_scenarios)
+})
+export type JobDescription = z.infer<typeof JobDescriptionSchema>
+
+export const JobDescriptionDraftInputSchema = z.object({
+  job_description: JobDescriptionSchema,
+}).strict()
+export type JobDescriptionDraftInput = z.infer<typeof JobDescriptionDraftInputSchema>
+
+export const TalentProfileItemStatusSchema = z.enum(['已确认', '待确认', '推断', '冲突'])
+export type TalentProfileItemStatus = z.infer<typeof TalentProfileItemStatusSchema>
+
+const TraceableTalentRequirementSchema = z.object({
+  id: ArtifactIdSchema,
+  name: z.string().trim().min(1).max(200),
+  definition: ArtifactTextSchema,
+  maps_to: z.array(ArtifactIdSchema).min(1).max(12),
+  observable_evidence: z.array(ArtifactTextSchema).min(1).max(8),
+  evidence_refs: z.array(z.string().trim().min(1).max(120)).min(1).max(20),
+  status: TalentProfileItemStatusSchema,
+}).strict()
+
+export const TargetTalentProfileSchema = z.object({
+  core_definition: ArtifactTextSchema,
+  transferable_backgrounds: z.array(ArtifactTextSchema).min(1).max(12),
+  fit_signals: z.array(ArtifactTextSchema).min(1).max(12),
+  non_target_and_misjudgments: z.array(ArtifactTextSchema).min(1).max(12),
+  attraction_factors: z.array(ArtifactTextSchema).min(1).max(12),
+  evidence_refs: z.array(z.string().trim().min(1).max(120)).min(1).max(20),
+}).strict()
+export type TargetTalentProfile = z.infer<typeof TargetTalentProfileSchema>
+
+export const QualificationsSchema = z.object({
+  hard_qualifications: z.array(TraceableTalentRequirementSchema).max(12),
+  necessary_experience: z.array(TraceableTalentRequirementSchema).min(1).max(12),
+  role_conditions: z.array(TraceableTalentRequirementSchema).max(12),
+  must_have: z.array(TraceableTalentRequirementSchema).min(1).max(12),
+  preferred: z.array(TraceableTalentRequirementSchema).max(12),
+  alternatives: z.array(TraceableTalentRequirementSchema).max(12),
+}).strict()
+export type Qualifications = z.infer<typeof QualificationsSchema>
+
+export const CompetencyModelSchema = z.object({
+  knowledge: z.array(TraceableTalentRequirementSchema).min(1).max(12),
+  skills: z.array(TraceableTalentRequirementSchema).min(1).max(12),
+  behavioral_competencies: z.array(TraceableTalentRequirementSchema).min(1).max(12),
+  values_and_work_style: z.array(TraceableTalentRequirementSchema).min(1).max(12),
+  career_motivation: z.array(TraceableTalentRequirementSchema).min(1).max(12),
+}).strict()
+export type CompetencyModel = z.infer<typeof CompetencyModelSchema>
+
+export const TalentProfileSchema = z.object({
+  target_talent_profile: TargetTalentProfileSchema,
+  qualifications: QualificationsSchema,
+  competency_model: CompetencyModelSchema,
+}).strict().superRefine((profile, context) => {
+  const requirementGroups = [
+    ...Object.values(profile.qualifications),
+    ...Object.values(profile.competency_model),
+  ]
+  const requirementIds = requirementGroups.flatMap((requirements) => requirements.map(({ id }) => id))
+  if (new Set(requirementIds).size !== requirementIds.length) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: '人才要求 id 在任职资格和胜任力模型的 11 个分组内必须全局唯一',
+    })
+  }
+})
+export type TalentProfile = z.infer<typeof TalentProfileSchema>
+
+export const TalentProfileDraftInputSchema = z.object({
+  talent_profile: TalentProfileSchema,
+}).strict()
+export type TalentProfileDraftInput = z.infer<typeof TalentProfileDraftInputSchema>
+
+export const JobDescriptionConfirmationSchema = z.object({
+  source_artifact_id: z.string().uuid(),
+  section_hash: z.string().min(16),
+  confirmed_by: z.string().min(1),
+  confirmed_at: z.string().datetime(),
+}).strict()
+export type JobDescriptionConfirmation = z.infer<typeof JobDescriptionConfirmationSchema>
+
+export const RoleProfileJobDescriptionContentSchema = z.discriminatedUnion('stage', [
+  z.object({
+    schema_version: z.literal('2'),
+    stage: z.literal('JOB_DESCRIPTION_DRAFT'),
+    job_description: JobDescriptionSchema,
+  }).strict(),
+  z.object({
+    schema_version: z.literal('2'),
+    stage: z.literal('JOB_DESCRIPTION_CONFIRMED'),
+    job_description: JobDescriptionSchema,
+    job_description_confirmation: JobDescriptionConfirmationSchema,
+  }).strict(),
+])
+export type RoleProfileJobDescriptionContent = z.infer<typeof RoleProfileJobDescriptionContentSchema>
+
+const RoleProfileV2CompatibilityRequirementSchema = LegacyRoleProfileRequirementSchema.extend({
+  level: ArtifactTextSchema,
+})
+
+const RoleProfileV2CompatibilityWorkScenarioSchema = LegacyRoleProfileWorkScenarioSchema.extend({
+  stakeholders: z.string().trim().min(1).max(ROLE_PROFILE_JOINED_LIST_MAX_LENGTH),
+})
+
+const RoleProfileV2CompatibilityBoundariesSchema = LegacyRoleProfileBoundariesSchema.extend({
+  decision_rights: z.string().trim().min(1).max(ROLE_PROFILE_JOINED_LIST_MAX_LENGTH),
+  collaboration_and_resources: z.string().trim().min(1)
+    .max(ROLE_PROFILE_COLLABORATION_AND_RESOURCES_MAX_LENGTH),
+})
+
+export const RoleProfileTalentDraftContentSchema = LegacyRoleProfileContentSchema.extend({
+  success_outcomes: z.array(LegacyRoleProfileSuccessOutcomeSchema).min(1).max(8),
+  work_scenarios: z.array(RoleProfileV2CompatibilityWorkScenarioSchema).min(1).max(8),
+  requirements: z.array(RoleProfileV2CompatibilityRequirementSchema).min(1).max(132),
+  boundaries: RoleProfileV2CompatibilityBoundariesSchema,
+  schema_version: z.literal('2'),
+  stage: z.literal('TALENT_PROFILE_DRAFT'),
+  job_description: JobDescriptionSchema,
+  job_description_confirmation: JobDescriptionConfirmationSchema,
+  talent_profile: TalentProfileSchema,
+}).strict()
+export type RoleProfileTalentDraftContent = z.infer<typeof RoleProfileTalentDraftContentSchema>
+
+export const RoleProfileContentSchema = z.union([
+  RoleProfileJobDescriptionContentSchema,
+  RoleProfileTalentDraftContentSchema,
+  LegacyRoleProfileContentSchema,
+])
+export type RoleProfileContent = z.infer<typeof RoleProfileContentSchema>
+
+export const AssessmentScorecardSchema = z
+  .object({
+    dimensions: z.array(z
+      .object({
+        id: z.string().trim().min(1).max(40),
+        name: z.string().trim().min(1).max(200),
+        weight: z.number().min(0).max(100),
+        method: ArtifactTextSchema,
+        owner: ArtifactTextSchema,
+        question: ArtifactTextSchema,
+        evidence: ArtifactTextSchema,
+        anchors: z
+          .object({
+            1: ArtifactTextSchema,
+            3: ArtifactTextSchema,
+            5: ArtifactTextSchema,
+          })
+          .strict(),
+      })
+      .strict()).min(1).max(12),
+    decision_rule: z
+      .object({
+        status: z.string().trim().min(1).max(120),
+        summary: ArtifactTextSchema,
+        scoring: ArtifactTextSchema,
+        pass_thresholds: ArtifactTextSchema,
+        calibration: ArtifactTextSchema,
+      })
+      .strict(),
+  })
+  .strict()
+  .refine(
+    (value) => Math.abs(value.dimensions.reduce((sum, item) => sum + item.weight, 0) - 100) < 0.001,
+    { message: '评估维度权重之和必须等于 100', path: ['dimensions'] },
+  )
+export type AssessmentScorecard = z.infer<typeof AssessmentScorecardSchema>
+
 export const PublicJDSchema = z
   .object({
     title_and_basics: JobHeaderSchema,
@@ -124,6 +506,15 @@ export const ArtifactTypeSchema = z.enum([
   'HR_RECRUITING_BRIEF',
 ])
 export type ArtifactType = z.infer<typeof ArtifactTypeSchema>
+
+export const generatedArtifactContentSchema = (
+  type: ArtifactType,
+): typeof RoleProfileContentSchema | typeof AssessmentScorecardSchema | typeof PublicJDSchema | null => {
+  if (type === 'ROLE_PROFILE') return RoleProfileContentSchema
+  if (type === 'ASSESSMENT_SCORECARD') return AssessmentScorecardSchema
+  if (type === 'PUBLIC_JD') return PublicJDSchema
+  return null
+}
 
 export const ArtifactStatusSchema = z.enum(['DRAFT', 'CONFIRMED', 'INVALIDATED'])
 export type ArtifactStatus = z.infer<typeof ArtifactStatusSchema>
@@ -356,6 +747,80 @@ export const RoleStateSchema = z.object({
   updated_at: z.string().datetime(),
 })
 export type RoleState = z.infer<typeof RoleStateSchema>
+
+const RoleProfileProjectedFactSchema = FactSchema.pick({
+  category: true,
+  statement: true,
+  source: true,
+  status: true,
+  evidence_refs: true,
+}).strict()
+
+const RoleProfileProjectedConflictSchema = ConflictSchema.pick({
+  field: true,
+  left_value: true,
+  right_value: true,
+  source_refs: true,
+  status: true,
+  resolution: true,
+}).strict()
+
+const RoleProfileProjectionBaseSchema = z.object({
+  projection: z.literal('ROLE_PROFILE'),
+  state_revision: z.number().int().nonnegative(),
+}).strict()
+
+const RoleProfileProjectionRoleBaseSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  department: z.string(),
+  stage: RoleSessionStageSchema,
+  hc_status: z.enum(['PENDING', 'APPROVED', 'REJECTED']),
+}).strict()
+
+const EmptyProjectionCollectionSchema = z.array(z.never()).max(0)
+
+export const RoleProfileJobDescriptionProjectionSchema = RoleProfileProjectionBaseSchema.extend({
+  role: RoleProfileProjectionRoleBaseSchema.extend({
+    hc_context: HcContextSchema.nullable(),
+  }).strict(),
+  facts: z.array(RoleProfileProjectedFactSchema),
+  conflicts: z.array(RoleProfileProjectedConflictSchema),
+  artifact_refs: EmptyProjectionCollectionSchema,
+  task_context: z.object({
+    task: z.literal('GENERATE_ROLE_PROFILE'),
+    artifacts: EmptyProjectionCollectionSchema,
+    role_profile_mode: z.literal('JOB_DESCRIPTION'),
+  }).strict(),
+}).strict()
+
+export const RoleProfileTalentProjectionSchema = RoleProfileProjectionBaseSchema.extend({
+  role: RoleProfileProjectionRoleBaseSchema,
+  facts: EmptyProjectionCollectionSchema,
+  conflicts: EmptyProjectionCollectionSchema,
+  artifact_refs: EmptyProjectionCollectionSchema,
+  task_context: z.object({
+    task: z.literal('GENERATE_ROLE_PROFILE'),
+    artifacts: EmptyProjectionCollectionSchema,
+    role_profile_mode: z.literal('TALENT_PROFILE'),
+    locked_job_description: z.object({
+      artifact_id: z.string(),
+      version: z.number().int().positive(),
+      section_hash: z.string().min(16),
+      confirmed_by: z.string().min(1),
+      confirmed_at: z.string().datetime(),
+      content: JobDescriptionSchema,
+    }).strict(),
+  }).strict(),
+}).strict()
+
+export const RoleProfileGenerationProjectionSchema = z.union([
+  RoleProfileJobDescriptionProjectionSchema,
+  RoleProfileTalentProjectionSchema,
+])
+export type RoleProfileGenerationProjection = z.infer<
+  typeof RoleProfileGenerationProjectionSchema
+>
 
 export const ToolExecutionContextSchema = z.object({
   tenant_id: z.string(),

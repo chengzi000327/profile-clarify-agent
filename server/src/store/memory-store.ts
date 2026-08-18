@@ -7,10 +7,13 @@ import type {
   ClarificationPolicy,
   ClarificationRound,
   ConversationMessage,
+  HcApproval,
   RoleState,
 } from '@role-clarifier/contracts'
 import type {
   AdminRunRecord,
+  AdminRunFilters,
+  AdminRunPage,
   ApplicationStore,
   CalibrationSignalRecord,
   DecisionRecord,
@@ -22,12 +25,14 @@ import type {
   StoredUser,
   TraceAccessAuditRecord,
 } from './types.js'
-import { createDemoAggregate, demoUsers } from './seed.js'
+import { createDemoAggregate, demoHcApprovals, demoUsers } from './seed.js'
 
 const clone = <T>(value: T): T => structuredClone(value)
+const hcKey = (tenantId: string, requestId: string): string => `${tenantId}:${requestId}`
 
 export class MemoryStore implements ApplicationStore {
   private readonly users = new Map<string, StoredUser>()
+  private readonly hcApprovals = new Map<string, HcApproval>()
   private readonly roles = new Map<string, RoleAggregate>()
   private readonly runs = new Map<string, RunRecord>()
   private readonly events = new Map<string, AgentEvent[]>()
@@ -41,6 +46,9 @@ export class MemoryStore implements ApplicationStore {
 
   async initialize(): Promise<void> {
     for (const user of demoUsers) this.users.set(user.user_id, clone(user))
+    for (const hc of demoHcApprovals) {
+      this.hcApprovals.set(hcKey(hc.tenant_id, hc.request_id), clone(hc))
+    }
     const aggregate = createDemoAggregate()
     this.roles.set(aggregate.state.id, aggregate)
     this.policies.set(aggregate.state.id, this.makeDefaultPolicy(aggregate.state.id))
@@ -61,6 +69,38 @@ export class MemoryStore implements ApplicationStore {
     if (this.externalEvents.has(key)) return false
     this.externalEvents.add(key)
     return true
+  }
+
+  async listHcApprovals(actor: ActorContext): Promise<HcApproval[]> {
+    return [...this.hcApprovals.values()]
+      .filter((hc) =>
+        hc.tenant_id === actor.tenant_id &&
+        (
+          actor.role === 'ADMIN' ||
+          (actor.role === 'MANAGER' && hc.context.hiring_manager_user_id === actor.user_id) ||
+          (actor.role === 'HR' && hc.context.assigned_hr_user_id === actor.user_id)
+        ),
+      )
+      .map(clone)
+      .sort((left, right) => right.context.approved_at.localeCompare(left.context.approved_at))
+  }
+
+  async getHcApproval(requestId: string, actor: ActorContext): Promise<HcApproval | null> {
+    const hc = this.hcApprovals.get(hcKey(actor.tenant_id, requestId))
+    if (!hc || hc.tenant_id !== actor.tenant_id) return null
+    if (actor.role === 'MANAGER' && hc.context.hiring_manager_user_id !== actor.user_id) return null
+    if (actor.role === 'HR' && hc.context.assigned_hr_user_id !== actor.user_id) return null
+    return clone(hc)
+  }
+
+  async createRoleAggregateForHc(hcRequestId: string, aggregate: RoleAggregate): Promise<string> {
+    const hc = this.hcApprovals.get(hcKey(aggregate.state.tenant_id, hcRequestId))
+    if (!hc) throw new Error('HC_APPROVAL_NOT_FOUND')
+    if (hc.role_session_id) return hc.role_session_id
+    await this.createRoleAggregate(aggregate)
+    hc.role_session_id = aggregate.state.id
+    hc.updated_at = new Date().toISOString()
+    return aggregate.state.id
   }
 
   async listRoleStates(actor: ActorContext): Promise<RoleState[]> {
@@ -261,6 +301,15 @@ export class MemoryStore implements ApplicationStore {
     this.messages.set(message.role_session_id, messages)
   }
 
+  async appendConversationMessageIfAbsent(message: ConversationMessage): Promise<boolean> {
+    const messages = this.messages.get(message.role_session_id) ?? []
+    if (messages.some((item) => item.id === message.id)) return false
+    messages.push(clone(message))
+    messages.sort((left, right) => left.sequence - right.sequence)
+    this.messages.set(message.role_session_id, messages)
+    return true
+  }
+
   async updateConversationMessage(message: ConversationMessage): Promise<void> {
     const messages = this.messages.get(message.role_session_id) ?? []
     const index = messages.findIndex((item) => item.id === message.id)
@@ -296,8 +345,9 @@ export class MemoryStore implements ApplicationStore {
     rounds[index] = clone(round)
   }
 
-  async listRunsForTenant(tenantId: string): Promise<AdminRunRecord[]> {
-    return [...this.runs.values()]
+  async listRunsForTenant(tenantId: string, filters: AdminRunFilters): Promise<AdminRunPage> {
+    const keyword = filters.query?.trim().toLowerCase() ?? ''
+    const records = [...this.runs.values()]
       .filter(({ run }) => this.roles.get(run.role_session_id)?.state.tenant_id === tenantId)
       .map((record) => {
         const actor = this.users.get(record.run.actor_user_id)
@@ -309,9 +359,27 @@ export class MemoryStore implements ApplicationStore {
           actor_role: actor?.role ?? 'MANAGER',
         }
       })
+      .filter((record) =>
+        (!filters.status || record.run.status === filters.status) &&
+        (!filters.model_tier || record.run.model_tier === filters.model_tier) &&
+        (!filters.role_session_id || record.run.role_session_id === filters.role_session_id) &&
+        (!keyword || [
+          record.role_title,
+          record.actor_display_name,
+          record.run.id,
+          record.run.model_name,
+        ].some((value) => value.toLowerCase().includes(keyword))),
+      )
       .sort((left, right) =>
         (right.run.started_at ?? '').localeCompare(left.run.started_at ?? ''),
       )
+    const start = (filters.page - 1) * filters.page_size
+    return {
+      items: records.slice(start, start + filters.page_size),
+      total: records.length,
+      page: filters.page,
+      page_size: filters.page_size,
+    }
   }
 
   async appendTraceAccessAudit(record: TraceAccessAuditRecord): Promise<void> {

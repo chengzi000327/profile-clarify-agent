@@ -1,9 +1,11 @@
-import type {
-  ArtifactType,
-  CandidateEvidence,
-  Conflict,
-  Fact,
-  RoleState,
+import {
+  RoleProfileJobDescriptionContentSchema,
+  type ArtifactType,
+  type CandidateEvidence,
+  type Conflict,
+  type Fact,
+  type JobDescription,
+  type RoleState,
 } from '@role-clarifier/contracts'
 import type { HarnessTask } from '../agent/harness-adapter.js'
 
@@ -77,6 +79,17 @@ export interface CandidateEvidenceSummary {
   omitted_bottleneck_count: number
 }
 
+type RoleProfileMode = 'JOB_DESCRIPTION' | 'TALENT_PROFILE'
+
+export interface LockedJobDescription {
+  artifact_id: string
+  version: number
+  section_hash: string
+  confirmed_by: string
+  confirmed_at: string
+  content: JobDescription
+}
+
 export interface RoleStateProjection {
   projection: string
   state_revision: number
@@ -86,7 +99,7 @@ export interface RoleStateProjection {
     department: string
     stage: RoleState['stage']
     hc_status: RoleState['hc_status']
-    hc_context: RoleState['hc_context']
+    hc_context?: RoleState['hc_context']
   }
   facts: ProjectedFact[]
   conflicts: ProjectedConflict[]
@@ -100,8 +113,20 @@ export interface RoleStateProjection {
       content: unknown
     }>
     candidate_summary?: CandidateEvidenceSummary
+    role_profile_mode?: RoleProfileMode
+    locked_job_description?: LockedJobDescription
   }
 }
+
+const confirmedJobDescription = (state: RoleState) => {
+  const artifact = state.latest_artifacts.ROLE_PROFILE
+  const parsed = RoleProfileJobDescriptionContentSchema.safeParse(artifact?.content)
+  if (!artifact || !parsed.success || parsed.data.stage !== 'JOB_DESCRIPTION_CONFIRMED') return null
+  return { artifact, content: parsed.data }
+}
+
+const roleProfileMode = (state: RoleState): RoleProfileMode =>
+  confirmedJobDescription(state) ? 'TALENT_PROFILE' : 'JOB_DESCRIPTION'
 
 const projectFact = (fact: Fact): ProjectedFact => ({
   category: fact.category,
@@ -185,8 +210,12 @@ export const projectRoleStateForTask = (
   task: string,
   candidates: CandidateEvidence[] = [],
 ): RoleStateProjection => {
+  const generatingRoleProfile = task === 'GENERATE_ROLE_PROFILE'
+  const lockedJobDescription = generatingRoleProfile ? confirmedJobDescription(state) : null
+  const roleProfileGenerationMode = generatingRoleProfile ? roleProfileMode(state) : null
+  const isTalentProfileGeneration = roleProfileGenerationMode === 'TALENT_PROFILE'
   const dependencies = isHarnessTask(task) ? artifactDependencies[task] : []
-  const artifactRefs = artifactTypes.flatMap((type) => {
+  const artifactRefs = generatingRoleProfile ? [] : artifactTypes.flatMap((type) => {
     const artifact = state.latest_artifacts[type]
     return artifact
       ? [{
@@ -198,7 +227,7 @@ export const projectRoleStateForTask = (
         }]
       : []
   })
-  const artifacts = dependencies.flatMap((type) => {
+  const artifacts = isTalentProfileGeneration ? [] : dependencies.flatMap((type) => {
     const artifact = state.latest_artifacts[type]
     return artifact?.status === 'CONFIRMED'
       ? [{ type, version: artifact.version, status: 'CONFIRMED' as const, content: artifact.content }]
@@ -214,16 +243,29 @@ export const projectRoleStateForTask = (
       department: state.department,
       stage: state.stage,
       hc_status: state.hc_status,
-      hc_context: state.hc_context,
+      ...(!isTalentProfileGeneration ? { hc_context: state.hc_context } : {}),
     },
-    facts: selectFacts(state, task),
-    conflicts: ['CLARIFY_MESSAGE', 'GENERATE_ROLE_PROFILE'].includes(task)
+    facts: isTalentProfileGeneration ? [] : selectFacts(state, task),
+    conflicts: !isTalentProfileGeneration && ['CLARIFY_MESSAGE', 'GENERATE_ROLE_PROFILE'].includes(task)
       ? state.conflicts.map(projectConflict)
       : [],
     artifact_refs: artifactRefs,
     task_context: {
       task,
       artifacts,
+      ...(roleProfileGenerationMode ? { role_profile_mode: roleProfileGenerationMode } : {}),
+      ...(lockedJobDescription
+        ? {
+            locked_job_description: {
+              artifact_id: lockedJobDescription.artifact.id,
+              version: lockedJobDescription.artifact.version,
+              section_hash: lockedJobDescription.content.job_description_confirmation.section_hash,
+              confirmed_by: lockedJobDescription.content.job_description_confirmation.confirmed_by,
+              confirmed_at: lockedJobDescription.content.job_description_confirmation.confirmed_at,
+              content: lockedJobDescription.content.job_description,
+            },
+          }
+        : {}),
       ...(task === 'CALIBRATION_ADVICE'
         ? { candidate_summary: summarizeCandidates(candidates) }
         : {}),

@@ -10,6 +10,10 @@ import type {
   ConversationMessage,
   ToolExecutionContext,
 } from '@role-clarifier/contracts'
+import {
+  ROLE_CLARIFIER_PROMPT_VERSION,
+  RoleProfileGenerationProjectionSchema,
+} from '@role-clarifier/contracts'
 import { DomainError } from '@role-clarifier/domain'
 import type { AppConfig } from '../config.js'
 import { RoleService } from '../services/role-service.js'
@@ -42,6 +46,12 @@ const artifactTaskMap: Record<ArtifactType, HarnessTask> = {
   ASSESSMENT_SCORECARD: 'GENERATE_ASSESSMENT',
   PUBLIC_JD: 'GENERATE_JD',
   HR_RECRUITING_BRIEF: 'GENERATE_HR_BRIEF',
+}
+
+export const artifactTypeForTask = (task: string): ArtifactType | null => {
+  const match = (Object.entries(artifactTaskMap) as Array<[ArtifactType, HarnessTask]>)
+    .find(([, mappedTask]) => mappedTask === task)
+  return match?.[0] ?? null
 }
 
 export class AgentRunner {
@@ -166,7 +176,7 @@ export class AgentRunner {
       model_tier: modelTier,
       task,
       harness_session_id: null,
-      prompt_version: 'role-clarifier-v2',
+      prompt_version: ROLE_CLARIFIER_PROMPT_VERSION,
       model_name:
         modelTier === 'FLASH'
           ? this.config.DEEPSEEK_FLASH_MODEL
@@ -293,12 +303,10 @@ export class AgentRunner {
       const conversationMessages = pending.task === 'CLARIFY_MESSAGE'
         ? await this.store.listConversationMessages(run.role_session_id)
         : []
-      const request: HarnessRequest = {
-        task: pending.task,
-        role_state: view.state,
+      const requestBase = {
         execution_context: executionContext,
-        maximum_transitions: 10,
-        structured_output_repair_attempts: 1,
+        maximum_transitions: 10 as const,
+        structured_output_repair_attempts: 1 as const,
         ...(pending.task === 'CLARIFY_MESSAGE'
           ? {
               conversation_context: {
@@ -327,6 +335,24 @@ export class AgentRunner {
         ...(pending.message !== undefined ? { message: pending.message } : {}),
         ...(pending.candidates !== undefined ? { candidates: pending.candidates } : {}),
       }
+      const request: HarnessRequest = pending.task === 'GENERATE_ROLE_PROFILE'
+        ? {
+            ...requestBase,
+            task: pending.task,
+            role_state: RoleProfileGenerationProjectionSchema.parse(
+              await this.roleService.readStateForTask(
+                run.role_session_id,
+                pending.actor,
+                pending.task,
+                pending.effectiveRole,
+              ),
+            ),
+          }
+        : {
+            ...requestBase,
+            task: pending.task,
+            role_state: view.state,
+          }
       const result = await this.harness.run(request, {
         signal: controller.signal,
         onStatus: async (status) => emit('agent.status', { status }),
@@ -551,6 +577,14 @@ export class AgentRunner {
       return message
     }
     if (result.kind === 'ARTIFACT') {
+      const expectedArtifactType = artifactTypeForTask(pending.task)
+      if (expectedArtifactType !== result.artifact_type) {
+        throw new DomainError(
+          'ARTIFACT_TASK_MISMATCH',
+          `产物类型与 Agent 任务不匹配：${pending.task} 只能生成 ${expectedArtifactType ?? 'NONE'}`,
+          409,
+        )
+      }
       if (result.persistence === 'TOOL') {
         await emit('artifact.updated', {
           artifact_type: result.artifact_type,
@@ -568,6 +602,7 @@ export class AgentRunner {
         actor,
         result.artifact_type,
         result.content,
+        pending.effectiveRole,
       )
       await emit('artifact.updated', {
         artifact_id: artifact.id,

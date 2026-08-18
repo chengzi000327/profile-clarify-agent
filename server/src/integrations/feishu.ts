@@ -201,16 +201,21 @@ const outputMessageText = (message: ConversationMessage): string => {
 const artifactMarkdown = (artifact: ArtifactEnvelope): string => {
   const content = artifact.content as Record<string, unknown>
   if (artifact.type === 'ROLE_PROFILE') {
-    const outcomes = Array.isArray(content.outcomes)
-      ? content.outcomes.map((item) => {
+    const outcomeSource = Array.isArray(content.success_outcomes) ? content.success_outcomes : content.outcomes
+    const outcomes = Array.isArray(outcomeSource)
+      ? outcomeSource.map((item) => {
           const value = item as Record<string, unknown>
-          return `- **${String(value.horizon ?? '阶段')}**：${String(value.result ?? '')}`
+          return `- **${String(value.horizon ?? '阶段')}**：${String(value.title ?? value.result ?? value.definition ?? '')}`
         }).join('\n')
       : ''
-    const capabilities = Array.isArray(content.capabilities)
-      ? content.capabilities.map((item) => {
+    const capabilitySource = Array.isArray(content.requirements) ? content.requirements : content.capabilities
+    const capabilities = Array.isArray(capabilitySource)
+      ? capabilitySource.map((item) => {
           const value = item as Record<string, unknown>
-          return `- **${String(value.name ?? '')}**（${String(value.level ?? '')}）：${String(value.evidence ?? '')}`
+          const strongEvidence = Array.isArray(value.strong_evidence)
+            ? value.strong_evidence.map(String).join('；')
+            : String(value.evidence ?? '')
+          return `- **${String(value.name ?? value.title ?? '')}**（${String(value.level ?? value.priority ?? '')}）：${strongEvidence}`
         }).join('\n')
       : ''
     return `**岗位使命**\n${String(content.mission ?? '待补充')}\n\n**预期结果**\n${outcomes || '- 待补充'}\n\n**关键能力**\n${capabilities || '- 待补充'}`
