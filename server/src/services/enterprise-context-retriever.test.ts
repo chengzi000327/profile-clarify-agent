@@ -94,4 +94,44 @@ describe('企业上下文检索', () => {
     expect(result.hits.map((item) => item.knowledge_id)).not.toContain('EK-ADMIN-PRIVATE')
     expect(result.hits.map((item) => item.knowledge_id)).not.toContain('EK-HR-POLICY-PRIVATE')
   })
+
+  it('检索词只使用岗位资料、已确认事实和当前澄清消息，并保持确定顺序', async () => {
+    const retriever = await createRetriever()
+    const role = createDemoAggregate().state
+    role.facts = [
+      { ...role.facts[0]!, statement: '标准产品经营', status: 'CONFIRMED' },
+      { ...role.facts[1]!, statement: '候选人隐私信息', status: 'DRAFT' },
+    ]
+    const result = await retriever.retrieve({
+      actor: managerActor,
+      effective_role: 'MANAGER',
+      task: 'CLARIFY_MESSAGE',
+      role,
+      message: '职级，成功标准',
+    })
+
+    expect(result.query.query_terms).toContain('标准产品经营')
+    expect(result.query.query_terms).toContain('成功标准')
+    expect(result.query.query_terms).not.toContain('候选人隐私信息')
+    expect(result.query.query_terms).toEqual(
+      [...result.query.query_terms].sort((left, right) => left.localeCompare(right, 'zh-CN')),
+    )
+  })
+
+  it.each(['EXTRACT_CANDIDATES', 'CALIBRATION_ADVICE'] as const)(
+    '%s 不查询企业上下文，避免候选人材料进入岗位澄清检索',
+    async (task) => {
+      const retriever = await createRetriever()
+      const result = await retriever.retrieve({
+        actor: managerActor,
+        effective_role: 'MANAGER',
+        task,
+        role: createDemoAggregate().state,
+        message: '候选人面试评价',
+      })
+
+      expect(result.hits).toEqual([])
+      expect(result.query.query_terms).toEqual([])
+    },
+  )
 })

@@ -29,18 +29,8 @@ const categoriesByTask: Record<HarnessTask, EnterpriseKnowledgeItem['category'][
   GENERATE_ASSESSMENT: ['INTERVIEW_STANDARD', 'ROLE_PROFILE_CASE', 'JOB_FAMILY', 'LEVEL_FRAMEWORK'],
   GENERATE_JD: ['HISTORICAL_JD', 'ROLE_PROFILE_CASE', 'ORGANIZATION'],
   GENERATE_HR_BRIEF: ['RECRUITING_POLICY', 'ROLE_PROFILE_CASE', 'JOB_FAMILY', 'LEVEL_FRAMEWORK'],
-  EXTRACT_CANDIDATES: ['JOB_FAMILY', 'ROLE_PROFILE_CASE', 'INTERVIEW_STANDARD', 'RECRUITING_POLICY'],
-  CALIBRATION_ADVICE: ['INTERVIEW_STANDARD', 'ROLE_PROFILE_CASE', 'RECRUITING_POLICY'],
-}
-
-const termsByTask: Record<HarnessTask, string[]> = {
-  CLARIFY_MESSAGE: ['岗位画像', '招聘原因', '成功标准', '职级'],
-  GENERATE_ROLE_PROFILE: ['岗位画像', '成功标准', '招聘原因', '工作场景'],
-  GENERATE_ASSESSMENT: ['面试标准', '评分锚点', '能力证据', '评估维度'],
-  GENERATE_JD: ['历史JD', '公开JD', '岗位职责', '招聘要求'],
-  GENERATE_HR_BRIEF: ['招聘协作', '筛选标准', '能力证据', '任务进度'],
-  EXTRACT_CANDIDATES: ['筛选标准', '能力证据', '岗位画像'],
-  CALIBRATION_ADVICE: ['面试标准', '评分锚点', '校准', '岗位画像'],
+  EXTRACT_CANDIDATES: [],
+  CALIBRATION_ADVICE: [],
 }
 
 const visibilityFor = (
@@ -59,18 +49,24 @@ const inferJobFamily = (title: string): string | null => {
 }
 
 const buildQueryTerms = (input: EnterpriseContextRetrievalInput, jobFamily: string | null) => {
-  const messageTerms = input.message
-    ? [input.message.trim(), ...input.message.split(/[，。；、\s]+/u)]
-    : []
-  return [...new Set([
+  const sources = [
     input.role.title,
     input.role.department,
     ...(jobFamily ? [jobFamily] : []),
-    ...termsByTask[input.task],
-    ...messageTerms,
-  ])]
+    ...input.role.facts
+      .filter((fact) => fact.status === 'CONFIRMED')
+      .map((fact) => fact.statement),
+    ...(input.message ? [input.message] : []),
+  ]
+  const terms = sources.flatMap((source) => {
+    const normalized = source.replace(/\s+/gu, ' ').trim()
+    const parts = normalized.split(/[，。；、：:！？!?（）()\[\]\s]+/u)
+    return normalized.length <= 24 ? [normalized, ...parts] : parts
+  })
+  return [...new Set(terms)]
     .map((term) => term.trim())
     .filter((term) => term.length >= 2 && term.length <= 24)
+    .sort((left, right) => left.localeCompare(right, 'zh-CN'))
     .slice(0, 20)
 }
 
@@ -82,8 +78,9 @@ const scoreItem = (
 ) => {
   let score = 0
   const reasons: string[] = []
-  if (categoriesByTask[input.task].includes(item.category)) {
-    score += 30
+  const categoryIndex = categoriesByTask[input.task].indexOf(item.category)
+  if (categoryIndex >= 0) {
+    score += 30 + (categoriesByTask[input.task].length - categoryIndex) * 15
     reasons.push('任务类别匹配')
   }
   if (item.department && item.department === input.role.department) {
@@ -117,6 +114,19 @@ export class EnterpriseContextRetriever {
 
   async retrieve(input: EnterpriseContextRetrievalInput): Promise<EnterpriseContextBundle> {
     const jobFamily = inferJobFamily(input.role.title)
+    if (categoriesByTask[input.task].length === 0) {
+      return {
+        query: {
+          role_session_id: input.role.id,
+          task: input.task,
+          department: input.role.department,
+          job_family: jobFamily,
+          query_terms: [],
+        },
+        hits: [],
+        truncated: false,
+      }
+    }
     const queryTerms = buildQueryTerms(input, jobFamily)
     const items = await this.store.listEnterpriseKnowledge({
       tenant_id: input.actor.tenant_id,
