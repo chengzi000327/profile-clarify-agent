@@ -31,3 +31,26 @@ Rollback requires restoring the corresponding old Dockerfile path before redeplo
 - Post-migration `layout:check`, `git diff --check`, `typecheck`, `test`, `build`, and Harness runtime smoke: passed after rebuilding application dependency links and correcting both moved TypeScript config roots.
 - Review findings fixed: stale moved `node_modules` links, two `tsconfig.base.json` paths, an invalid pnpm-generated `allowBuilds` placeholder, and one Markdown trailing-space issue.
 - Business source and database migrations: byte-for-byte comparisons against pre-migration paths found no content changes; only build/config/documentation paths changed.
+
+## GitHub and Railway delivery
+
+- GitHub implementation commit: `9968ef193ab8d603a78e9529265257241d8cb316`; remote branch matched after push.
+- `harness-sidecar`: deployment `c6c8647e-50eb-4857-ad29-12de2157e4ba`, `/apps/harness-sidecar/Dockerfile`, `SUCCESS` / `RUNNING`.
+- `api`: deployment `0e11d793-44f0-47ef-82fe-d49fd7207617`, `/apps/api/Dockerfile`, `SUCCESS` / `RUNNING`.
+- `web`: deployment `201df445-b7c3-4844-9562-0d4b50554ef5`, `/apps/web/Dockerfile`, `SUCCESS` / `RUNNING`. The first upload attempt failed before creating a deployment; read-only confirmation preceded the successful retry.
+- Public `/healthz`: HTTP 200 with `ok`; web root: HTTP 200 with the React root element.
+- Manager, HR, and admin demo login, identity, approved-HC list, role-session list, and first role detail: HTTP 200.
+- Permission boundary: manager and HR admin-run access returned 403; admin returned 200. Manager detail omitted HR-only candidate/calibration collections; HR/admin detail included them.
+- Artifact chain: online API returned confirmed job-description and target-talent stages; browser smoke opened the role workbench and rendered both “岗位说明” and “目标人才画像”.
+- Existing production data contains 11 approved HC rows rather than the README's original 10-row baseline because an additional historical demo HC is present. No data was added, deleted, or edited during this change.
+- PostgreSQL service and volume were not rebuilt or changed. No migration file content changed; API startup only ran the existing idempotent migration command.
+
+## OpenSpec verification
+
+| Dimension | Result |
+| --- | --- |
+| Completeness | 17/17 implementation tasks complete; behavioral specs intentionally skipped for this pure refactor. |
+| Correctness | Directory, workspace, scripts, Docker paths, three Railway builds, health checks, artifacts, and permission boundaries are covered by recorded evidence. |
+| Coherence | Implementation follows the approved `apps/` mapping, keeps service/package contracts unchanged, and introduces no legacy compatibility paths or unrelated business changes. |
+
+Final assessment: no CRITICAL, WARNING, or SUGGESTION issues remain. The local Docker limitation is explicitly covered by Compose YAML assertions and successful Railway builds for all three production Dockerfiles.

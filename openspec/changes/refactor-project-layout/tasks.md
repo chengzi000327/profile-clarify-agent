@@ -20,12 +20,12 @@
 ## 4. 完整验证与 Review
 
 - [x] 4.1 执行目录检查、`git diff --check`、`corepack pnpm typecheck`、`corepack pnpm test` 与 `corepack pnpm build`，记录所有结果并修复本变更引入的失败。
-- [ ] 4.2 从仓库根 context 分别构建 `apps/web/Dockerfile`、`apps/api/Dockerfile`、`apps/harness-sidecar/Dockerfile`，并运行 Compose 本地健康检查或等价容器 smoke，确认三条生产构建链可用。
+- [x] 4.2 从仓库根 context 分别构建 `apps/web/Dockerfile`、`apps/api/Dockerfile`、`apps/harness-sidecar/Dockerfile`，并运行 Compose 本地健康检查或等价容器 smoke，确认三条生产构建链可用。
 - [x] 4.3 基于完整 diff Review rename 相似度、路径残留、锁文件、Docker COPY、权限/租户/HC/产物/SSE/Trace 不变性、数据库迁移内容和敏感信息，发现 P0/P1 或非路径业务差异时先修复再重新 Review。
 
 ## 5. GitHub 与 Railway 交付
 
-- [ ] 5.1 提交前再次 fetch GitHub 并安全整合远程最新代码，确认无无关文件、密钥、`node_modules` 或 `dist` 后提交并推送，验证远程分支包含目标 commit hash。
-- [ ] 5.2 在既有 Railway 项目和环境中按 `harness-sidecar`、`api`、`web` 顺序将 Dockerfile 路径切到新位置并部署同一个 Git commit；逐服务核对 deployment ID、commit、构建状态和 health check，失败时停止后续切换并按基线回滚。
-- [ ] 5.3 线上 Smoke Test `/healthz`、API 健康状态、登录、岗位列表、岗位详情、岗位说明和人才画像；涉及权限的关键链路分别核对经理、HR、管理员视角，并记录 PostgreSQL 未迁移、未重建、数据未修改。
-- [ ] 5.4 使用 `openspec-verify-change` 核对 proposal、design 和任务实现，确认无 CRITICAL 问题且所有未执行检查均有明确原因。
+- [x] 5.1 提交前再次 fetch GitHub 并安全整合远程最新代码，确认无无关文件、密钥、`node_modules` 或 `dist` 后提交并推送，验证远程分支包含目标 commit hash。
+- [x] 5.2 在既有 Railway 项目和环境中按 `harness-sidecar`、`api`、`web` 顺序将 Dockerfile 路径切到新位置并部署同一个 Git commit；逐服务核对 deployment ID、commit、构建状态和 health check，失败时停止后续切换并按基线回滚。
+- [x] 5.3 线上 Smoke Test `/healthz`、API 健康状态、登录、岗位列表、岗位详情、岗位说明和人才画像；涉及权限的关键链路分别核对经理、HR、管理员视角，并记录 PostgreSQL 未迁移、未重建、数据未修改。
+- [x] 5.4 使用 `openspec-verify-change` 核对 proposal、design 和任务实现，确认无 CRITICAL 问题且所有未执行检查均有明确原因。
