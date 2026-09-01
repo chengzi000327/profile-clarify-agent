@@ -1,6 +1,6 @@
 # 岗位画像澄清 Agent：核心评测 Case 详细脚本 v1.4
 
-> 对应 PRD：`岗位画像澄清Agent_PRD_v1.md` 中 S-01 至 S-12。  
+> 对应 PRD：[`岗位画像澄清Agent_PRD_v1.md`](../docs/product/岗位画像澄清Agent_PRD_v1.md) 中 S-01 至 S-12。
 > 用途：人工走查、Answer Eval、Trace Eval、接口/状态验收。  
 > 口径：预期输出中的文案是“可接受参考输出”，不要求逐字匹配；机器评测以每轮断言为准。
 

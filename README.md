@@ -49,15 +49,15 @@
 
 三个应用服务都从仓库根目录构建，并分别设置：
 
-- `web`: `RAILWAY_DOCKERFILE_PATH=/frontend/Dockerfile`，`PORT=80`，`API_UPSTREAM=http://api.railway.internal:4100`
-- `api`: `RAILWAY_DOCKERFILE_PATH=/server/Dockerfile`，`PORT=4100`，`DATABASE_URL=${{Postgres.DATABASE_URL}}`，`HARNESS_BASE_URL=http://harness-sidecar.railway.internal:4110`
-- `harness-sidecar`: `RAILWAY_DOCKERFILE_PATH=/harness-sidecar/Dockerfile`，`SIDECAR_PORT=4110`，`ROLE_AGENT_INTERNAL_URL=http://api.railway.internal:4100`
+- `web`: `RAILWAY_DOCKERFILE_PATH=/apps/web/Dockerfile`，`PORT=80`，`API_UPSTREAM=http://api.railway.internal:4100`
+- `api`: `RAILWAY_DOCKERFILE_PATH=/apps/api/Dockerfile`，`PORT=4100`，`DATABASE_URL=${{Postgres.DATABASE_URL}}`，`HARNESS_BASE_URL=http://harness-sidecar.railway.internal:4110`
+- `harness-sidecar`: `RAILWAY_DOCKERFILE_PATH=/apps/harness-sidecar/Dockerfile`，`SIDECAR_PORT=4110`，`ROLE_AGENT_INTERNAL_URL=http://api.railway.internal:4100`
 
 `SESSION_SECRET`、`HARNESS_SIDECAR_TOKEN`、`ROLE_AGENT_TOOL_TOKEN` 和 `DEEPSEEK_API_KEY` 只写入 Railway Secret，不提交 Git。飞书连接的变量与配置步骤见 `docs/feishu-integration.md`；完整 Railway 变量和验收步骤见 `docs/railway-deployment.md`。
 
 ## DeepSeek Harness
 
-领域 Bundle 位于 `packages/dsh-role-clarifier`，真实 Sidecar 位于 `harness-sidecar`。Bundle：
+领域 Bundle 位于 `packages/dsh-role-clarifier`，真实 Sidecar 位于 `apps/harness-sidecar`。Bundle：
 
 - 注册 read_role_state、update_role_identity_draft、save_fact_draft、save_artifact_draft、save_candidate_evidence、propose_calibration_signal、read_version_diff 七个工具。
 - 禁用 Shell、PowerShell、文件读写/搜索、Web、任务、工作流、Skill 和子 Agent 工具。
@@ -86,14 +86,19 @@ Flash/Pro 分别映射到官方 `deepseek-v4-flash` 和 `deepseek-v4-pro`。Side
 
 ## 工程结构
 
-    frontend/                      React 招聘工作台、登录、API/SSE
-    server/                        Fastify API、Agent Runner、PostgreSQL Store
+    apps/web/                      React 招聘工作台、登录、API/SSE
+    apps/api/                      Fastify API、Agent Runner、PostgreSQL Store
+    apps/harness-sidecar/          官方 JSON-RPC runtime 桥接、模型路由与 Trace
+    apps/intro-web/                项目介绍站点
     packages/contracts/            共享 Zod Schema 与 API 类型
     packages/domain/               状态机、哈希、PII、校准和失效规则
     packages/dsh-role-clarifier/   Cordis Bundle 与七个领域工具
     packages/dsh-profile/          dsh-base + dsh-headless + 领域 Bundle Profile
-    harness-sidecar/               官方 JSON-RPC runtime 桥接、模型路由与 Trace
-    scripts/prepare-harness-runtime.mjs  精确提交源码准备器
+    docs/product/                  PRD、前端方案与评测任务说明
+    docs/                          集成、部署与技术文档
+    evals/                         评测用例与样本
+    scripts/                       Harness、数据库与仓库维护脚本
+    openspec/                      需求规格与变更记录
     docker-compose.yml             PostgreSQL + API + Web 测试环境
 
 ## 安全边界

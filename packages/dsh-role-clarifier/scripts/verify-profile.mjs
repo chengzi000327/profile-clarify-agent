@@ -9,10 +9,10 @@ const profileManifest = JSON.parse(
   await readFile(resolve(repositoryRoot, 'packages/dsh-profile/package.json'), 'utf8'),
 )
 const runtimeLock = JSON.parse(
-  await readFile(resolve(repositoryRoot, 'harness-sidecar/runtime-lock.json'), 'utf8'),
+  await readFile(resolve(repositoryRoot, 'apps/harness-sidecar/runtime-lock.json'), 'utf8'),
 )
 const runtimeConfig = await readFile(
-  resolve(repositoryRoot, 'harness-sidecar/runtime/cordis.yml'),
+  resolve(repositoryRoot, 'apps/harness-sidecar/runtime/cordis.yml'),
   'utf8',
 )
 

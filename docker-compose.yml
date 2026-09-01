@@ -16,7 +16,7 @@ services:
   api:
     build:
       context: .
-      dockerfile: server/Dockerfile
+      dockerfile: apps/api/Dockerfile
     environment:
       NODE_ENV: production
       PORT: 4100
@@ -42,7 +42,7 @@ services:
   harness-sidecar:
     build:
       context: .
-      dockerfile: harness-sidecar/Dockerfile
+      dockerfile: apps/harness-sidecar/Dockerfile
     environment:
       NODE_ENV: production
       SIDECAR_PORT: 4110
@@ -63,7 +63,7 @@ services:
   web:
     build:
       context: .
-      dockerfile: frontend/Dockerfile
+      dockerfile: apps/web/Dockerfile
     ports:
       - "8080:80"
     environment:

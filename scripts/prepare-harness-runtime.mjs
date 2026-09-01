@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 
 const exec = promisify(execFile)
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const lock = JSON.parse(await readFile(resolve(root, 'harness-sidecar/runtime-lock.json'), 'utf8'))
+const lock = JSON.parse(await readFile(resolve(root, 'apps/harness-sidecar/runtime-lock.json'), 'utf8'))
 const checkout = resolve(root, '.harness/deepseek-harness')
 const agentSpecSource = resolve(root, 'packages/agent-spec')
 const agentSpecTarget = resolve(checkout, 'packages/external/agent-spec')
@@ -113,7 +113,7 @@ await writeFile(resolve(pluginTarget, 'tsconfig.json'), `${JSON.stringify({
   },
   include: ['src/**/*.ts'],
 }, null, 2)}\n`)
-await cp(resolve(root, 'harness-sidecar/runtime/cordis.yml'), resolve(pluginTarget, 'cordis.yml'))
+await cp(resolve(root, 'apps/harness-sidecar/runtime/cordis.yml'), resolve(pluginTarget, 'cordis.yml'))
 
 await run('corepack', ['pnpm', 'install', '--no-frozen-lockfile'], checkout)
 await run('corepack', ['pnpm', '--filter', '@role-clarifier/dsh-bundle', 'exec', 'tsc', '-p', 'tsconfig.json'], checkout)

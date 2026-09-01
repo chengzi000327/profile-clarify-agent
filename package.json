@@ -8,6 +8,7 @@
   },
   "scripts": {
     "build": "pnpm -r --if-present build",
+    "layout:check": "node scripts/check-project-layout.mjs",
     "predev": "pnpm --filter @role-clarifier/contracts build && pnpm --filter @role-clarifier/domain build && pnpm harness:prepare",
     "dev": "pnpm --parallel --filter @role-clarifier/api --filter @role-clarifier/web --filter @role-clarifier/harness-sidecar dev",
     "predev:api": "pnpm --filter @role-clarifier/contracts build && pnpm --filter @role-clarifier/domain build",

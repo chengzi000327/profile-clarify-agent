@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { resolve } from 'node:path'
-import postgres from '../server/node_modules/postgres/src/index.js'
+import postgres from '../apps/api/node_modules/postgres/src/index.js'
 
 const root = resolve(import.meta.dirname, '..')
 const railway = (args, input) => {

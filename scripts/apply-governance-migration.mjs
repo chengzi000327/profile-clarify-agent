@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
-import postgres from '../server/node_modules/postgres/src/index.js'
+import postgres from '../apps/api/node_modules/postgres/src/index.js'
 
 const root = resolve(import.meta.dirname, '..')
 const variables = spawnSync(
@@ -18,7 +18,7 @@ const port = process.env.DATABASE_TUNNEL_PORT
 if (!port) throw new Error('DATABASE_TUNNEL_PORT is required')
 const databaseUrl = `postgres://${encodeURIComponent(config.PGUSER)}:${encodeURIComponent(config.PGPASSWORD)}@127.0.0.1:${port}/${encodeURIComponent(config.PGDATABASE)}`
 const migration = await readFile(
-  resolve(root, 'server/drizzle/0004_database_governance_expand.sql'),
+  resolve(root, 'apps/api/drizzle/0004_database_governance_expand.sql'),
   'utf8',
 )
 

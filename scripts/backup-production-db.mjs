@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { chmod, mkdir, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
-import postgres from '../server/node_modules/postgres/src/index.js'
+import postgres from '../apps/api/node_modules/postgres/src/index.js'
 
 const root = resolve(import.meta.dirname, '..')
 const variables = spawnSync(

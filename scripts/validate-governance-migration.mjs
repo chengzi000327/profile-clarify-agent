@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 
 const root = resolve(import.meta.dirname, '..')
-const readMigration = (name) => readFile(resolve(root, 'server/drizzle', name), 'utf8')
+const readMigration = (name) => readFile(resolve(root, 'apps/api/drizzle', name), 'utf8')
 const baseSql = [
   await readMigration('0000_initial.sql'),
   await readMigration('0001_conversation_admin.sql'),
@@ -48,7 +48,7 @@ INSERT INTO trace_access_audits (id, tenant_id, actor_user_id, run_id, action, r
 `
 
 const remoteCode = `
-import postgres from '/app/server/node_modules/postgres/src/index.js';
+import postgres from '/app/apps/api/node_modules/postgres/src/index.js';
 const sql = postgres(process.env.DATABASE_URL, { max: 1, prepare: false });
 const decode = (value) => Buffer.from(value, 'base64').toString('utf8');
 const [baseSql, governanceSql, seedSql] = process.argv.slice(1).map(decode);

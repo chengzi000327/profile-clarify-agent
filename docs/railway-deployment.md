@@ -17,13 +17,13 @@ Browser -> web (public HTTPS)
 
 ### web
 
-- `RAILWAY_DOCKERFILE_PATH=/frontend/Dockerfile`
+- `RAILWAY_DOCKERFILE_PATH=/apps/web/Dockerfile`
 - `PORT=80`
 - `API_UPSTREAM=http://api.railway.internal:4100`
 
 ### api
 
-- `RAILWAY_DOCKERFILE_PATH=/server/Dockerfile`
+- `RAILWAY_DOCKERFILE_PATH=/apps/api/Dockerfile`
 - `NODE_ENV=production`
 - `HOST=::`
 - `PORT=4100`
@@ -46,7 +46,7 @@ Browser -> web (public HTTPS)
 
 ### harness-sidecar
 
-- `RAILWAY_DOCKERFILE_PATH=/harness-sidecar/Dockerfile`
+- `RAILWAY_DOCKERFILE_PATH=/apps/harness-sidecar/Dockerfile`
 - `NODE_ENV=production`
 - `HOST=::`
 - `SIDECAR_PORT=4110`

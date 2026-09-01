@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
-import { JsonRpcHarnessRuntime } from '../harness-sidecar/dist/protocol-client.js'
+import { JsonRpcHarnessRuntime } from '../apps/harness-sidecar/dist/protocol-client.js'
 import { ROLE_CLARIFIER_SYSTEM_PROMPT } from '../packages/agent-spec/dist/index.js'
 
 const root = resolve(import.meta.dirname, '..')

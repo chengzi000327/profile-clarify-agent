@@ -1,8 +1,8 @@
 packages:
-  - agent-intro-frontend
-  - frontend
-  - server
-  - harness-sidecar
+  - apps/intro-web
+  - apps/web
+  - apps/api
+  - apps/harness-sidecar
   - packages/agent-spec
   - packages/contracts
   - packages/domain
