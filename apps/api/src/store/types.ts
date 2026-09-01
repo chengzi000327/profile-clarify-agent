@@ -50,6 +50,15 @@ export interface DecisionRecord {
   created_at: string
 }
 
+export interface ArtifactLifecycleCommit {
+  role_session_id: string
+  expected_revision: number
+  next_state: RoleState
+  artifacts_to_insert: ArtifactEnvelope[]
+  artifacts_to_update: ArtifactEnvelope[]
+  decisions: DecisionRecord[]
+}
+
 export interface RoleAggregate {
   state: RoleState
   member_ids: string[]
@@ -125,6 +134,7 @@ export interface ApplicationStore {
   saveRoleState(state: RoleState, expectedRevision: number): Promise<boolean>
   insertArtifact(artifact: ArtifactEnvelope): Promise<void>
   updateArtifact(artifact: ArtifactEnvelope): Promise<void>
+  commitArtifactLifecycle(change: ArtifactLifecycleCommit): Promise<boolean>
   insertCandidates(
     roleSessionId: string,
     candidates: CandidateEvidence[],

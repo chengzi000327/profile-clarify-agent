@@ -15,6 +15,7 @@ import type {
   AdminRunFilters,
   AdminRunPage,
   ApplicationStore,
+  ArtifactLifecycleCommit,
   CalibrationSignalRecord,
   DecisionRecord,
   EventSubscriber,
@@ -25,6 +26,7 @@ import type {
   StoredUser,
   TraceAccessAuditRecord,
 } from './types.js'
+import { validateArtifactLifecycleCommit } from './artifact-lifecycle.js'
 import { createDemoAggregate, demoHcApprovals, demoUsers } from './seed.js'
 
 const clone = <T>(value: T): T => structuredClone(value)
@@ -173,6 +175,18 @@ export class MemoryStore implements ApplicationStore {
     const index = aggregate.artifacts.findIndex((item) => item.id === artifact.id)
     if (index < 0) throw new Error('Missing artifact')
     aggregate.artifacts[index] = clone(artifact)
+  }
+
+  async commitArtifactLifecycle(change: ArtifactLifecycleCommit): Promise<boolean> {
+    const current = this.roles.get(change.role_session_id)
+    if (!current || current.state.revision !== change.expected_revision) return false
+    const next = validateArtifactLifecycleCommit(clone(current), change)
+    const decisions = change.decisions.map(clone)
+    const assignedHr = next.state.hc_context?.assigned_hr_user_id
+    if (assignedHr && !next.member_ids.includes(assignedHr)) next.member_ids.push(assignedHr)
+    this.roles.set(change.role_session_id, next)
+    this.decisions.push(...decisions)
+    return true
   }
 
   async insertCandidates(

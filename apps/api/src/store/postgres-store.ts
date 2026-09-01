@@ -30,6 +30,7 @@ import type {
   AdminRunFilters,
   AdminRunPage,
   ApplicationStore,
+  ArtifactLifecycleCommit,
   CalibrationSignalRecord,
   DecisionRecord,
   EventSubscriber,
@@ -40,6 +41,7 @@ import type {
   StoredUser,
   TraceAccessAuditRecord,
 } from './types.js'
+import { validateArtifactLifecycleCommit } from './artifact-lifecycle.js'
 
 const iso = (value: Date | string): string =>
   value instanceof Date ? value.toISOString() : new Date(value).toISOString()
@@ -565,6 +567,118 @@ export class PostgresStore implements ApplicationStore {
         confirmedAt: artifact.confirmed_at ? new Date(artifact.confirmed_at) : null,
       })
       .where(eq(schema.artifacts.id, artifact.id))
+  }
+
+  async commitArtifactLifecycle(change: ArtifactLifecycleCommit): Promise<boolean> {
+    return this.db.transaction(async (tx) => {
+      const [roleRow] = await tx
+        .select()
+        .from(schema.roleSessions)
+        .where(eq(schema.roleSessions.id, change.role_session_id))
+        .for('update')
+        .limit(1)
+      if (!roleRow || roleRow.revision !== change.expected_revision) return false
+
+      const artifactRows = await tx
+        .select()
+        .from(schema.artifacts)
+        .where(eq(schema.artifacts.roleSessionId, change.role_session_id))
+      validateArtifactLifecycleCommit(
+        {
+          state: roleStateFromRow(roleRow),
+          member_ids: [],
+          artifacts: artifactRows.map(artifactFromRow),
+          candidates: [],
+          calibration_signals: [],
+          manager_tasks: [],
+        },
+        change,
+      )
+
+      for (const artifact of change.artifacts_to_update) {
+        const rows = await tx
+          .update(schema.artifacts)
+          .set({
+            status: artifact.status,
+            contentHash: artifact.content_hash,
+            content: artifact.content,
+            basedOnHash: artifact.based_on_hash,
+            confirmedBy: artifact.confirmed_by,
+            confirmedAt: artifact.confirmed_at ? new Date(artifact.confirmed_at) : null,
+          })
+          .where(
+            and(
+              eq(schema.artifacts.id, artifact.id),
+              eq(schema.artifacts.roleSessionId, change.role_session_id),
+            ),
+          )
+          .returning({ id: schema.artifacts.id })
+        if (rows.length !== 1) throw new Error('ARTIFACT_LIFECYCLE_UPDATE_MISSING')
+      }
+
+      if (change.artifacts_to_insert.length > 0) {
+        await tx.insert(schema.artifacts).values(
+          change.artifacts_to_insert.map((artifact) => ({
+            id: artifact.id,
+            roleSessionId: artifact.role_session_id,
+            type: artifact.type,
+            version: artifact.version,
+            status: artifact.status,
+            contentHash: artifact.content_hash,
+            content: artifact.content,
+            basedOnHash: artifact.based_on_hash,
+            createdBy: artifact.created_by,
+            confirmedBy: artifact.confirmed_by,
+            confirmedAt: artifact.confirmed_at ? new Date(artifact.confirmed_at) : null,
+            createdAt: new Date(artifact.created_at),
+          })),
+        )
+      }
+
+      const state = change.next_state
+      const saved = await tx
+        .update(schema.roleSessions)
+        .set({
+          title: state.title,
+          department: state.department,
+          stage: state.stage,
+          revision: state.revision,
+          businessState: roleBusinessState(state),
+          updatedAt: new Date(state.updated_at),
+        })
+        .where(
+          and(
+            eq(schema.roleSessions.id, change.role_session_id),
+            eq(schema.roleSessions.revision, change.expected_revision),
+          ),
+        )
+        .returning({ id: schema.roleSessions.id })
+      if (saved.length !== 1) throw new Error('ARTIFACT_LIFECYCLE_REVISION_CHANGED')
+
+      const assignedHr = state.hc_context?.assigned_hr_user_id
+      if (assignedHr) {
+        await tx
+          .insert(schema.roleMembers)
+          .values({ roleSessionId: state.id, userId: assignedHr })
+          .onConflictDoNothing()
+      }
+      if (change.decisions.length > 0) {
+        await tx.insert(schema.auditLogs).values(
+          change.decisions.map((record) => ({
+            id: record.id,
+            tenantId: state.tenant_id,
+            roleSessionId: record.role_session_id,
+            actorUserId: record.actor_user_id,
+            action: record.action,
+            targetType: record.target_type,
+            targetId: record.target_id,
+            metadata: { ...record.metadata, audit_kind: 'HUMAN_DECISION' },
+            createdAt: new Date(record.created_at),
+          })),
+        )
+      }
+      return true
+    })
   }
 
   async insertCandidates(

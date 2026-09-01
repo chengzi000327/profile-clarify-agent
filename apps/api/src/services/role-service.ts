@@ -709,11 +709,10 @@ export class RoleService {
     })
 
     const invalidated = invalidateDownstreamArtifacts(aggregate.artifacts, type)
-    for (const item of invalidated) {
+    const artifactsToUpdate = invalidated.filter((item) => {
       const previousItem = aggregate.artifacts.find((candidate) => candidate.id === item.id)
-      if (previousItem && previousItem.status !== item.status) await this.store.updateArtifact(item)
-    }
-    await this.store.insertArtifact(artifact)
+      return previousItem && previousItem.status !== item.status
+    })
 
     const stageByType = {
       ROLE_PROFILE: 'PROFILE_DRAFT',
@@ -747,7 +746,14 @@ export class RoleService {
       latest_artifacts: latest,
       updated_at: nowIso(),
     }
-    await this.persistState(state, aggregate.state.revision)
+    await this.commitArtifactLifecycle({
+      role_session_id: roleSessionId,
+      expected_revision: aggregate.state.revision,
+      next_state: state,
+      artifacts_to_insert: [artifact],
+      artifacts_to_update: artifactsToUpdate,
+      decisions: [],
+    })
     return artifact
   }
 
@@ -813,7 +819,6 @@ export class RoleService {
           createdBy: actor.user_id,
           basedOnHash: artifact.content_hash,
         })
-        await this.store.insertArtifact(locked)
         const state: RoleState = {
           ...aggregate.state,
           stage: 'PROFILE_DRAFT',
@@ -830,18 +835,30 @@ export class RoleService {
           },
           updated_at: nowIso(),
         }
-        await this.persistState(state, aggregate.state.revision)
-        await this.audit(actor, roleSessionId, 'CONFIRM_ARTIFACT', artifact.type, artifact.id, {
-          content_hash: submittedHash,
-          version: artifact.version,
-          effective_actor_role: effectiveRole,
-          confirmation_scope: 'JOB_DESCRIPTION',
+        await this.commitArtifactLifecycle({
+          role_session_id: roleSessionId,
+          expected_revision: aggregate.state.revision,
+          next_state: state,
+          artifacts_to_insert: [locked],
+          artifacts_to_update: [],
+          decisions: [this.makeDecision(
+            actor,
+            roleSessionId,
+            'CONFIRM_ARTIFACT',
+            artifact.type,
+            artifact.id,
+            {
+              content_hash: submittedHash,
+              version: artifact.version,
+              effective_actor_role: effectiveRole,
+              confirmation_scope: 'JOB_DESCRIPTION',
+            },
+          )],
         })
         return locked
       }
     }
     const confirmed = confirmArtifact(artifact, actor, submittedHash)
-    await this.store.updateArtifact(confirmed)
     const confirmedStage = {
       ROLE_PROFILE: 'PROFILE_CONFIRMED',
       ASSESSMENT_SCORECARD: 'ASSESSMENT_CONFIRMED',
@@ -864,11 +881,24 @@ export class RoleService {
       },
       updated_at: nowIso(),
     }
-    await this.persistState(state, aggregate.state.revision)
-    await this.audit(actor, roleSessionId, 'CONFIRM_ARTIFACT', artifact.type, artifact.id, {
-      content_hash: submittedHash,
-      version: artifact.version,
-      effective_actor_role: effectiveRole,
+    await this.commitArtifactLifecycle({
+      role_session_id: roleSessionId,
+      expected_revision: aggregate.state.revision,
+      next_state: state,
+      artifacts_to_insert: [],
+      artifacts_to_update: [confirmed],
+      decisions: [this.makeDecision(
+        actor,
+        roleSessionId,
+        'CONFIRM_ARTIFACT',
+        artifact.type,
+        artifact.id,
+        {
+          content_hash: submittedHash,
+          version: artifact.version,
+          effective_actor_role: effectiveRole,
+        },
+      )],
     })
     return confirmed
   }
@@ -1192,6 +1222,15 @@ export class RoleService {
     }
   }
 
+  private async commitArtifactLifecycle(
+    change: Parameters<ApplicationStore['commitArtifactLifecycle']>[0],
+  ): Promise<void> {
+    const saved = await this.store.commitArtifactLifecycle(change)
+    if (!saved) {
+      throw new DomainError('REVISION_CONFLICT', '岗位数据已被其他操作更新，请刷新后重试', 409)
+    }
+  }
+
   private filterState(state: RoleState, actor: ActorContext): RoleState {
     if (actor.role === 'HR' || actor.role === 'ADMIN') return structuredClone(state)
     const latest = { ...state.latest_artifacts }
@@ -1243,7 +1282,25 @@ export class RoleService {
     targetId: string,
     metadata: Record<string, unknown>,
   ): Promise<void> {
-    const record: DecisionRecord = {
+    await this.store.appendDecision(this.makeDecision(
+      actor,
+      roleSessionId,
+      action,
+      targetType,
+      targetId,
+      metadata,
+    ))
+  }
+
+  private makeDecision(
+    actor: ActorContext,
+    roleSessionId: string,
+    action: string,
+    targetType: string,
+    targetId: string,
+    metadata: Record<string, unknown>,
+  ): DecisionRecord {
+    return {
       id: randomUUID(),
       role_session_id: roleSessionId,
       actor_user_id: actor.user_id,
@@ -1253,6 +1310,5 @@ export class RoleService {
       metadata,
       created_at: nowIso(),
     }
-    await this.store.appendDecision(record)
   }
 }
