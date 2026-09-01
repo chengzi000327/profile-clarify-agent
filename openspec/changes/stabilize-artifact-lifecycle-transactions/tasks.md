@@ -19,5 +19,5 @@
 
 - [x] 4.1 Review the actual diff for transaction gaps, cross-role/tenant access, concurrency, rollback, migration and sensitive-data risks; fix all blocking findings and verify `git diff --check` is clean.
 - [x] 4.2 Run API tests plus repository `typecheck`, `test` and `build`; verify all checks pass and explicitly record any isolated PostgreSQL check that could not run.
-- [ ] 4.3 Fetch and fast-forward the latest remote branch, confirm the verified diff contains no unrelated files or migration, commit and push to GitHub, and verify the remote branch contains the recorded commit hash.
+- [x] 4.3 Fetch and fast-forward the latest remote branch, confirm the verified diff contains no unrelated files or migration, commit and push to GitHub, and verify the remote branch contains the recorded commit hash.
 - [ ] 4.4 Deploy only Railway `api` from that exact commit and verify API health, login, role list/detail, manager/admin artifact generation-confirmation, HR visibility boundaries, and compatibility with the existing `web` and `harness-sidecar`; record deployment IDs, service status, smoke results and rollback commit.
