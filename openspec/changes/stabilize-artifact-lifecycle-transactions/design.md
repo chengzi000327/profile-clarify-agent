@@ -78,6 +78,6 @@ The contract covers successful atomic commits, downstream invalidation, decision
 4. Run API tests, typecheck, full repository tests and build. Run the PostgreSQL contract against an isolated database when available.
 5. Review the final diff for permission, tenant, version, migration and rollback impact; confirm no schema migration exists.
 6. Pull/fetch the target branch again, commit and push the verified change, then deploy only Railway `api` at that exact commit.
-7. Verify API health, login, role list/detail, generation and confirmation paths for manager/admin plus HR visibility boundaries. Confirm `web` and `harness-sidecar` remain on compatible commits.
+7. Verify generation, confirmation, rollback and concurrent-write behavior with the complete automated API/store suite. In production, use read-only smoke checks for API health, manager/HR/admin login, role list/detail, HR visibility boundaries and admin Trace, then confirm `web` and `harness-sidecar` remain healthy. Do not create production artifact versions solely for deployment verification.
 
 Rollback is an API redeploy to the preceding commit. Because no schema migration or data rewrite is introduced, no database rollback is required; already committed lifecycle transactions remain valid.
