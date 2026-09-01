@@ -1,0 +1,32 @@
+schema: spec-driven
+
+context: |
+  TypeScript monorepo: React frontend, Fastify API, PostgreSQL domain storage,
+  asynchronous Agent Run/SSE, and a DeepSeek Harness Sidecar. Production runs
+  on Railway as web, api, harness-sidecar, and PostgreSQL services.
+  Prefer the smallest change that satisfies the approved requirement. Reuse
+  existing types, functions, and components; avoid speculative abstractions,
+  unrelated refactors, duplicate logic, and compatibility layers without a
+  demonstrated caller. Preserve tenant, role, HC, artifact-version, trace, and
+  secret-handling boundaries.
+
+rules:
+  proposal:
+    - Keep the proposal concise and state explicit non-goals.
+    - Identify affected services and whether Railway deployment is required.
+  design:
+    - Prefer existing architecture and direct data flow over new layers.
+    - Describe compatibility, permission, persistence, and rollback impact only when relevant.
+  tasks:
+    - Use a short ordered checklist with verification matched to change risk.
+    - Do not add unrelated cleanup or future-facing work.
+
+operations:
+  apply:
+    guidance:
+      - Pull and inspect the latest remote repository state before patching.
+      - Keep diffs minimal and code concise.
+      - Preserve user changes and never force-push or rewrite history without explicit authorization.
+  archive:
+    guidance:
+      - Record the verified commit and deployment result when deployment applies.
